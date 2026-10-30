@@ -10,8 +10,7 @@ if [[ -n "${PAPERLESS_CONSUMER_DISABLE}" ]]; then
 else
 	cd ${PAPERLESS_SRC_DIR}
 
-	# Django system checks already ran once in init-system-checks, skip repeating them
-
+	# init-system-checks validates Django before these services start.
 	if [[ -n "${USER_IS_NON_ROOT}" ]]; then
 		exec python3 manage.py document_consumer --skip-checks
 	else
