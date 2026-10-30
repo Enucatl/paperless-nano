@@ -187,6 +187,8 @@ def reject_dangerous_svg(file: UploadedFile) -> None:
     """
     from lxml import etree
 
+    from lxml import etree
+
     try:
         parser = etree.XMLParser(resolve_entities=False)
         file.seek(0)
