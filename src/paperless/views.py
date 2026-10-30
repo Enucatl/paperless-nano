@@ -470,17 +470,14 @@ class ApplicationConfigurationViewSet(ModelViewSet[ApplicationConfiguration]):
             or old_llm_embedding_model != new_llm_embedding_model
             or old_llm_context_size != new_llm_context_size
         )
-        from paperless_ai.indexing import llm_index_exists
+        if new_ai_index_enabled:
+            from paperless_ai.indexing import llm_index_exists
 
-        rebuild_needed = new_ai_index_enabled and (
-            not llm_index_exists() or embedding_config_changed
-        )
-
-        if rebuild_needed:
-            llmindex_index.apply_async(
-                kwargs={"rebuild": True},
-                headers={"trigger_source": PaperlessTask.TriggerSource.SYSTEM},
-            )
+            if not llm_index_exists() or embedding_config_changed:
+                llmindex_index.apply_async(
+                    kwargs={"rebuild": True},
+                    headers={"trigger_source": PaperlessTask.TriggerSource.SYSTEM},
+                )
 
 
 @extend_schema_view(

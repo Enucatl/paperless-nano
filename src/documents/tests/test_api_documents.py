@@ -2744,7 +2744,7 @@ class TestDocumentApi(DirectoriesMixin, ConsumeTaskMixin, APITestCase):
             },
         )
 
-    @mock.patch("documents.views.load_classifier")
+    @mock.patch("documents.classifier.load_classifier")
     @mock.patch("documents.views.match_storage_paths")
     @mock.patch("documents.views.match_document_types")
     @mock.patch("documents.views.match_tags")

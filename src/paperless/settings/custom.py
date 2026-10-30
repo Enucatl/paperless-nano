@@ -340,6 +340,8 @@ def parse_db_settings(data_dir: Path) -> dict[str, dict[str, Any]]:
 
 
 def parse_dateparser_languages(languages: str | None) -> list[str]:
+    from dateparser.languages.loader import LocaleDataLoader
+
     language_list = languages.split("+") if languages else []
     # There is an unfixed issue in zh-Hant and zh-Hans locales in the dateparser lib.
     # See: https://github.com/scrapinghub/dateparser/issues/875

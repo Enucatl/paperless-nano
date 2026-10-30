@@ -40,13 +40,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("paperless.parsing.tesseract")
 
-
-@functools.cache
-def _srgb_icc_data() -> bytes:
-    # Read on first use, importing ocrmypdf.data pulls in the whole ocrmypdf package
-    return importlib.resources.files("ocrmypdf.data").joinpath("sRGB.icc").read_bytes()
-
-
 _SUPPORTED_MIME_TYPES: Final[dict[str, str]] = {
     "application/pdf": ".pdf",
     "image/jpeg": ".jpg",
@@ -385,6 +378,9 @@ class RasterisedDocumentParser:
         import img2pdf
         import pikepdf
 
+        srgb_icc_data = (
+            importlib.resources.files("ocrmypdf.data").joinpath("sRGB.icc").read_bytes()
+        )
         plain_pdf_path = Path(self.tempdir) / "image_plain.pdf"
         try:
             convert_kwargs: dict = {
@@ -407,7 +403,7 @@ class RasterisedDocumentParser:
         pdfa_path = Path(self.tempdir) / "archive.pdf"
         try:
             with pikepdf.open(plain_pdf_path) as pdf:
-                cs = pdf.make_stream(_srgb_icc_data())
+                cs = pdf.make_stream(srgb_icc_data)
                 cs["/N"] = 3
                 output_intent = pikepdf.Dictionary(
                     Type=pikepdf.Name("/OutputIntent"),
@@ -497,13 +493,6 @@ class RasterisedDocumentParser:
         # This forces tesseract to use one core per page.
         os.environ["OMP_THREAD_LIMIT"] = "1"
 
-        import ocrmypdf
-        from ocrmypdf import EncryptedPdfError
-        from ocrmypdf import InputFileError
-        from ocrmypdf import SubprocessOutputError
-        from ocrmypdf.exceptions import DigitalSignatureError
-        from ocrmypdf.exceptions import PriorOcrFoundError
-
         if mime_type == "application/pdf":
             text_original = self.extract_text(None, document_path)
             original_has_text = is_born_digital_text(
@@ -548,6 +537,8 @@ class RasterisedDocumentParser:
                     ) from e
                 return
             # PDFs in off mode: PDF/A conversion via Ghostscript, no OCR
+            from ocrmypdf import SubprocessOutputError
+
             archive_path = Path(self.tempdir) / "archive.pdf"
             try:
                 self._convert_pdf_to_pdfa(document_path, archive_path)
@@ -572,6 +563,13 @@ class RasterisedDocumentParser:
             return
 
         # --- All other paths: run ocrmypdf ---
+        import ocrmypdf
+        from ocrmypdf import EncryptedPdfError
+        from ocrmypdf import InputFileError
+        from ocrmypdf import SubprocessOutputError
+        from ocrmypdf.exceptions import DigitalSignatureError
+        from ocrmypdf.exceptions import PriorOcrFoundError
+
         archive_path = Path(self.tempdir) / "archive.pdf"
         sidecar_file = Path(self.tempdir) / "sidecar.txt"
 
