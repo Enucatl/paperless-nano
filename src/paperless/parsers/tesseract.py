@@ -40,6 +40,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("paperless.parsing.tesseract")
 
+
+@functools.cache
+def _srgb_icc_data() -> bytes:
+    """Load the color profile on first use without importing OCR at startup."""
+    return importlib.resources.files("ocrmypdf.data").joinpath("sRGB.icc").read_bytes()
+
+
 _SUPPORTED_MIME_TYPES: Final[dict[str, str]] = {
     "application/pdf": ".pdf",
     "image/jpeg": ".jpg",
@@ -378,9 +385,6 @@ class RasterisedDocumentParser:
         import img2pdf
         import pikepdf
 
-        srgb_icc_data = (
-            importlib.resources.files("ocrmypdf.data").joinpath("sRGB.icc").read_bytes()
-        )
         plain_pdf_path = Path(self.tempdir) / "image_plain.pdf"
         try:
             convert_kwargs: dict = {
@@ -403,7 +407,7 @@ class RasterisedDocumentParser:
         pdfa_path = Path(self.tempdir) / "archive.pdf"
         try:
             with pikepdf.open(plain_pdf_path) as pdf:
-                cs = pdf.make_stream(srgb_icc_data)
+                cs = pdf.make_stream(_srgb_icc_data())
                 cs["/N"] = 3
                 output_intent = pikepdf.Dictionary(
                     Type=pikepdf.Name("/OutputIntent"),

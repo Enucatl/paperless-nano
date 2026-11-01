@@ -618,10 +618,6 @@ class MailDocumentParser:
             Path to the rendered HTML file inside the temporary directory.
         """
 
-        from turbohtml.clean import Linkify
-        from turbohtml.clean import linkify
-        from turbohtml.migration.bleach import clean
-
         def clean_html(text: str) -> str:
             """Attempt to clean, escape, and linkify the given HTML string."""
             from turbohtml.clean import Linkify

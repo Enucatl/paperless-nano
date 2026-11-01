@@ -353,8 +353,6 @@ def parse_dateparser_languages(languages: str | None) -> list[str]:
             )
             language_list.append("zh")
 
-    from dateparser.languages.loader import LocaleDataLoader
-
     return list(LocaleDataLoader().get_locale_map(locales=language_list))
 
 

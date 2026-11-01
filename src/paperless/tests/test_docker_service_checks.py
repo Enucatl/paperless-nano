@@ -84,6 +84,7 @@ s6-svc() { exec s6-svc "$@"; }
             "svc-scheduler",
             [
                 "/usr/local/bin/celery",
+                "--skip-checks",
                 "--app",
                 "paperless",
                 "beat",
