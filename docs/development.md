@@ -51,6 +51,31 @@ as the Python linting and formatting tool `ruff`, will format failing
 files, so all you need to do is `git add` those files again
 and retry your commit.
 
+### Check CI lint before pushing with Docker
+
+The Docker runner uses the same pinned hooks in `.pre-commit-config.yaml` as
+CI, including Ruff, Prettier, spelling, shell, Dockerfile, and configuration
+checks. It needs Git and Docker on the host; hook dependencies stay inside the lint image.
+
+```bash
+./scripts/lint.sh
+```
+
+This checks the current checkout directly. The first run builds a cached lint
+image; changes to the hook configuration rebuild it.
+
+To block pushes when these checks fail, install the hook once per checkout:
+
+```bash
+ln -s "$(pwd)/.githooks/pre-push" "$(git rev-parse --git-path hooks/pre-push)"
+```
+
+The command refuses to overwrite an existing hook and preserves other hooks.
+Lint failures and formatter changes block the push. Formatters can update files
+in the checkout; review and commit their fixes, then push again. Checks use the
+checked-out files, including uncommitted changes. Frontend ESLint and tests remain
+separate CI checks.
+
 ## General setup
 
 After you forked and cloned the code from GitHub you need to perform a

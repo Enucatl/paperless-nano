@@ -59,7 +59,8 @@ class TestExternalArchive(DirectoriesMixin, APITestCase):
 
     @patch("documents.tasks.bulk_update_documents.delay")
     def test_attach_preserves_original_and_updates_archive_and_text(
-        self, update,
+        self,
+        update,
     ) -> None:
         """Install valid output, then remove the previous archive after commit."""
         with self.captureOnCommitCallbacks(execute=True):
@@ -76,7 +77,8 @@ class TestExternalArchive(DirectoriesMixin, APITestCase):
 
     @patch("documents.tasks.bulk_update_documents.delay")
     def test_root_upload_updates_latest_version_like_original_download(
-        self, update,
+        self,
+        update,
     ) -> None:
         """Root IDs target the same latest version as an original download."""
         version_bytes = b"latest version original"
@@ -123,7 +125,8 @@ class TestExternalArchive(DirectoriesMixin, APITestCase):
         encrypted = BytesIO()
         with pikepdf.open(BytesIO(self.pdf)) as pdf:
             pdf.save(
-                encrypted, encryption=pikepdf.Encryption(owner="owner", user="secret"),
+                encrypted,
+                encryption=pikepdf.Encryption(owner="owner", user="secret"),
             )
         for data in (b"not a PDF", b"%PDF-invalid", encrypted.getvalue()):
             with self.subTest(data=data[:12]):

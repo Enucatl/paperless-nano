@@ -214,6 +214,7 @@ extend-select = [
   "W",    # https://docs.astral.sh/ruff/rules/#pycodestyle-e-w
 ]
 ignore = [
+  "COM812",  # Conflicts with the formatter's trailing-comma handling.
   "DJ001",
   "PLC0415",
   "RUF012",

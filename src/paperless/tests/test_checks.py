@@ -611,7 +611,9 @@ class TestV3MinimumUpgradeVersionCheck:
 
 class TestTesseractChecks:
     def test_local_ocr_disabled(
-        self, settings: Settings, mocker: MockerFixture,
+        self,
+        settings: Settings,
+        mocker: MockerFixture,
     ) -> None:
         """Do not start Tesseract when this deployment prohibits local OCR."""
         settings.LOCAL_OCR_ENABLED = False

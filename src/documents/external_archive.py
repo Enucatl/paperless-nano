@@ -116,10 +116,12 @@ def attach_external_archive(
                     document.refresh_from_db()
                     if old_path and old_path != new_path:
                         transaction.on_commit(
-                            lambda: old_path.unlink(missing_ok=True), robust=True,
+                            lambda: old_path.unlink(missing_ok=True),
+                            robust=True,
                         )
                     transaction.on_commit(
-                        lambda: clear_document_caches(document.pk), robust=True,
+                        lambda: clear_document_caches(document.pk),
+                        robust=True,
                     )
                     if document.root_document_id:
                         transaction.on_commit(

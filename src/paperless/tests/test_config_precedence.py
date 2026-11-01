@@ -8,7 +8,9 @@ from paperless.models import ApplicationConfiguration
 
 class TestBooleanConfigPrecedence(TestCase):
     @override_settings(
-        AI_ALLOWED=False, AI_ENABLED=True, LLM_EMBEDDING_BACKEND="huggingface",
+        AI_ALLOWED=False,
+        AI_ENABLED=True,
+        LLM_EMBEDDING_BACKEND="huggingface",
     )
     def test_deployment_disable_overrides_saved_ai_preference(self) -> None:
         """Disable all AI while preserving the saved opt-in."""
