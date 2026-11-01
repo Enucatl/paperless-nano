@@ -7,6 +7,21 @@ from paperless.models import ApplicationConfiguration
 
 
 class TestBooleanConfigPrecedence(TestCase):
+    @override_settings(
+        AI_ALLOWED=False, AI_ENABLED=True, LLM_EMBEDDING_BACKEND="huggingface",
+    )
+    def test_deployment_disable_overrides_saved_ai_preference(self) -> None:
+        """Disable all AI while preserving the saved opt-in."""
+        config, _ = ApplicationConfiguration.objects.get_or_create()
+        config.ai_enabled = True
+        config.save()
+
+        self.assertFalse(AIConfig().ai_enabled)
+        self.assertFalse(AIConfig().llm_index_enabled)
+        with override_settings(AI_ALLOWED=True):
+            self.assertTrue(AIConfig().ai_enabled)
+            self.assertTrue(AIConfig().llm_index_enabled)
+
     @override_settings(CONSUMER_ENABLE_BARCODES=True)
     def test_database_false_overrides_barcode_environment_setting(self) -> None:
         config, _ = ApplicationConfiguration.objects.get_or_create()

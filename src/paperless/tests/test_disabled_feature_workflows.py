@@ -28,6 +28,9 @@ _DISABLED_MODULES = (
     "tika_client",
     "gotenberg_client",
     "ocrmypdf",
+    "sklearn",
+    "numpy",
+    "scipy",
 )
 
 
@@ -86,15 +89,31 @@ def _run_document_workflow(configuration: str) -> None:
         config.mode = "off"
         config.archive_file_generation = "never"
         config.save()
+    if configuration == "deployment":
+        config = ApplicationConfiguration.objects.get()
+        config.ai_enabled = True
+        config.mode = "force"
+        config.archive_file_generation = "always"
+        config.save()
     assert not AIConfig().ai_enabled
     assert not AIConfig().llm_index_enabled
     assert OcrConfig().mode == "off"
     assert OcrConfig().archive_file_generation == "never"
+    assert not settings.CLASSIFIER_ENABLED
+    settings.MODEL_FILE.write_bytes(b"unused old model")
     _assert_disabled_modules_absent("configuration and registration")
 
     user = User.objects.create(username="operator", is_superuser=True, is_staff=True)
     client = APIClient()
     client.force_authenticate(user=user)
+    if configuration == "deployment":
+        response = client.patch(
+            f"/api/config/{config.pk}/",
+            {"llm_embedding_model": "unused-model"},
+            format="json",
+        )
+        assert response.status_code == 200, response.content
+        _assert_disabled_modules_absent("configuration update with saved AI enabled")
     tag = Tag.objects.create(name="manual")
     parent = Tag.objects.create(name="parent")
     samples = _SRC_DIR / "documents" / "tests" / "samples"
@@ -180,10 +199,16 @@ def _run_document_workflow(configuration: str) -> None:
             response.data,
         )
         _assert_disabled_modules_absent("search")
+    response = client.get(f"/api/documents/{documents[0].pk}/ai_suggestions/")
+    assert response.status_code == 400, response.content
+    response = client.post("/api/documents/chat/", {"q": "test"}, format="json")
+    assert response.status_code == 400, response.content
+    _assert_disabled_modules_absent("disabled AI endpoints")
     assert not list(settings.ARCHIVE_DIR.rglob("*.pdf"))
+    assert settings.MODEL_FILE.read_bytes() == b"unused old model"
 
 
-@pytest.mark.parametrize("configuration", ["environment", "database"])
+@pytest.mark.parametrize("configuration", ["environment", "database", "deployment"])
 def test_disabled_features_stay_unloaded_during_workflows(
     configuration: str,
     tmp_path: Path,
@@ -203,11 +228,16 @@ def test_disabled_features_stay_unloaded_during_workflows(
         PAPERLESS_SECRET_KEY="disabled-feature-workflow-test-secret",
         PAPERLESS_DBENGINE="sqlite",
         PAPERLESS_ALLOWED_HOSTS="testserver",
-        PAPERLESS_AI_ENABLED="true" if configuration == "database" else "false",
+        PAPERLESS_AI_ENABLED="true" if configuration != "environment" else "false",
+        PAPERLESS_CLASSIFIER_ENABLED="false",
+        PAPERLESS_LOCAL_OCR_ENABLED="false"
+        if configuration == "deployment"
+        else "true",
+        PAPERLESS_AI_ALLOWED="false" if configuration == "deployment" else "true",
         PAPERLESS_AI_LLM_EMBEDDING_BACKEND="huggingface",
-        PAPERLESS_OCR_MODE="auto" if configuration == "database" else "off",
+        PAPERLESS_OCR_MODE="auto" if configuration != "environment" else "off",
         PAPERLESS_ARCHIVE_FILE_GENERATION="always"
-        if configuration == "database"
+        if configuration != "environment"
         else "never",
         PAPERLESS_TIKA_ENABLED="false",
         PAPERLESS_CACHE_BACKEND="django.core.cache.backends.locmem.LocMemCache",

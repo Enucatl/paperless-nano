@@ -158,6 +158,9 @@ class ClassifierModelCorruptError(Exception):
 
 
 def load_classifier(*, raise_exception: bool = False) -> DocumentClassifier | None:
+    if not settings.CLASSIFIER_ENABLED:
+        return None
+
     if not settings.MODEL_FILE.is_file():
         logger.debug(
             "Document classification model does not exist (yet), not "

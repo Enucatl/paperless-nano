@@ -6,7 +6,7 @@ import { FormsModule, ReactiveFormsModule } from '@angular/forms'
 import { BrowserModule } from '@angular/platform-browser'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
 import { NgSelectModule } from '@ng-select/ng-select'
-import { of, throwError } from 'rxjs'
+import { firstValueFrom, of, throwError } from 'rxjs'
 import {
   ConfigCategory,
   ConfigSection,
@@ -94,6 +94,48 @@ describe('ConfigComponent', () => {
     expect(component.initialConfig).toEqual({
       output_type: OutputTypeConfig.PDF_A,
     })
+  })
+
+  it('should lock prohibited features while preserving saved preferences', async () => {
+    const config = {
+      ...component.configForm.getRawValue(),
+      mode: 'force',
+      archive_file_generation: 'always',
+      ai_enabled: true,
+      deployment_disabled_fields: [
+        'mode',
+        'archive_file_generation',
+        'ai_enabled',
+      ],
+    }
+    jest.spyOn(configService, 'getConfig').mockReturnValue(of(config as any))
+    component.ngOnInit()
+    fixture.detectChanges()
+
+    expect(await firstValueFrom(component.isDirty$)).toBe(false)
+
+    for (const key of config.deployment_disabled_fields) {
+      expect(component.configForm.get(key).disabled).toBe(true)
+      expect(component.configForm.value).not.toHaveProperty(key)
+    }
+    expect(component.configForm.get('mode').value).toBe('force')
+    expect(component.configForm.get('remote_ocr_mode').enabled).toBe(true)
+    fixture.nativeElement.querySelectorAll('[ngbNavLink]')[1].click()
+    fixture.detectChanges()
+    expect(fixture.nativeElement.textContent).toContain(
+      'Disabled by deployment configuration'
+    )
+    component.discardChanges()
+    expect(component.configForm.get('mode').disabled).toBe(true)
+    expect(component.configForm.get('mode').value).toBe('force')
+
+    const saveSpy = jest
+      .spyOn(configService, 'saveConfig')
+      .mockReturnValue(of(config as any))
+    component.configForm.patchValue({ app_title: 'New title' })
+    component.saveConfig()
+    expect(saveSpy.mock.calls[0][0]).not.toHaveProperty('ai_enabled')
+    expect(saveSpy.mock.calls[0][0]).toHaveProperty('app_title', 'New title')
   })
 
   it('should support discard changes', () => {

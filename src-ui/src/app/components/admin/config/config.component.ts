@@ -70,6 +70,7 @@ export class ConfigComponent
 
   public errors = {}
   public externallyConfiguredVariables = new Set<string>()
+  public deploymentDisabledFields = new Set<string>()
 
   get optionCategories(): string[] {
     return Object.values(ConfigCategory)
@@ -156,6 +157,17 @@ export class ConfigComponent
     this.externallyConfiguredVariables = new Set(
       config.externally_configured_variables ?? []
     )
+    this.deploymentDisabledFields = new Set(
+      config.deployment_disabled_fields ?? []
+    )
+    PaperlessConfigOptions.forEach((option) => {
+      const control = this.configForm.get(option.key)
+      if (this.deploymentDisabledFields.has(option.key)) {
+        control.disable({ emitEvent: false })
+      } else {
+        control.enable({ emitEvent: false })
+      }
+    })
     if (!this.store) {
       this.store = new BehaviorSubject(config)
 
@@ -167,7 +179,10 @@ export class ConfigComponent
         })
 
       this.isDirty$ = dirtyCheck(this.configForm, this.store.asObservable(), {
-        excludeKeys: ['externally_configured_variables'],
+        excludeKeys: [
+          'externally_configured_variables',
+          'deployment_disabled_fields',
+        ],
       })
     }
     this.configForm.patchValue(config)

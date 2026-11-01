@@ -1,7 +1,7 @@
 <pngx-page-header
     title="Application Configuration"
     i18n-title
-    info="Global app configuration options which apply to <strong>every</strong> user of this install of Paperless-ngx. Options can also be set using environment variables or the configuration file but the value here will always take precedence."
+    info="Global app configuration options which apply to <strong>every</strong> user of this install of Paperless-ngx. Options can also be set using environment variables or the configuration file and the value here takes precedence unless a feature is disabled by deployment configuration."
     i18n-info
     infoLink="configuration">
 </pngx-page-header>
@@ -30,14 +30,14 @@
                                                     <a class="btn btn-sm btn-link" title="Read the documentation about this setting" i18n-title [href]="getDocsUrl(option.config_key)" target="_blank" referrerpolicy="no-referrer">
                                                         <pngx-bs-icon name="info-circle"></pngx-bs-icon>
                                                     </a>
-                                                    @if (isExternallyConfigured(option.config_key)) {
+                                                    @if (!deploymentDisabledFields.has(option.key) && isExternallyConfigured(option.config_key)) {
                                                       @if (isSet(option.key)) {
                                                         <span class="badge rounded-pill bg-body-secondary text-dark fw-normal" title="This value overrides {{option.config_key}}, which is set outside Paperless." i18n-title>Overrides external</span>
                                                       } @else {
                                                         <span class="badge rounded-pill bg-body-secondary text-dark fw-normal" title="{{option.config_key}} is set outside Paperless. Enter a value here to override it." i18n-title>Set externally</span>
                                                       }
                                                     }
-                                                    @if (isSet(option.key)) {
+                                                    @if (!deploymentDisabledFields.has(option.key) && isSet(option.key)) {
                                                       @if (isExternallyConfigured(option.config_key)) {
                                                         <button type="button" class="btn btn-sm btn-link text-danger ms-auto pe-0" title="Use the externally configured value" i18n-title (click)="resetOption(option.key)">
                                                             <pngx-bs-icon class="me-1" name="x"></pngx-bs-icon><ng-container i18n>Reset to external</ng-container>
@@ -49,6 +49,9 @@
                                                       }
                                                     }
                                                 </div>
+                                                @if (deploymentDisabledFields.has(option.key)) {
+                                                    <p class="form-text" i18n>Disabled by deployment configuration</p>
+                                                }
                                                 <div class="mb-n3">
                                                     @switch (option.type) {
                                                         @case (ConfigOptionType.Select) { <pngx-input-select [formControlName]="option.key" [error]="errors[option.key]" [items]="option.choices" [allowNull]="true"></pngx-input-select> }

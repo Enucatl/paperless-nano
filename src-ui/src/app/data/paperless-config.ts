@@ -438,6 +438,7 @@ export const PaperlessConfigOptions: ConfigOption[] = [
 
 export interface PaperlessConfig extends ObjectWithId {
   externally_configured_variables: string[]
+  deployment_disabled_fields?: string[]
   output_type: OutputTypeConfig
   pages: number
   language: string

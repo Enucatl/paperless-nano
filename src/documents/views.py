@@ -196,6 +196,7 @@ from documents.serialisers import DocumentVersionLabelSerializer
 from documents.serialisers import DocumentVersionSerializer
 from documents.serialisers import EditPdfDocumentsSerializer
 from documents.serialisers import EmailSerializer
+from documents.serialisers import ExternalArchiveUploadSerializer
 from documents.serialisers import MergeDocumentsAsVersionsSerializer
 from documents.serialisers import MergeDocumentsSerializer
 from documents.serialisers import NotesSerializer
@@ -995,6 +996,50 @@ class DocumentViewSet(
         "page_count",
         "custom_field_",
     )
+
+    @extend_schema(
+        request=ExternalArchiveUploadSerializer,
+        responses=inline_serializer(
+            name="ExternalArchiveUploadResponse",
+            fields={
+                "id": serializers.IntegerField(),
+                "archive_checksum": serializers.CharField(),
+            },
+        ),
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="archive",
+        parser_classes=[parsers.MultiPartParser],
+        permission_classes=[IsAuthenticated],
+    )
+    def attach_archive(self, request, pk=None):
+        """Attach an externally generated archive and text to the current original."""
+        document = self.get_object()
+        if not request.user.has_perm(
+            "documents.change_document",
+        ) or not has_perms_owner_aware(
+            request.user,
+            "change_document",
+            document,
+        ):
+            raise PermissionDenied
+        document = self._get_effective_file_doc(
+            document,
+            get_root_document(document),
+            request,
+        )
+        if document.deleted_at is not None:
+            raise NotFound("Cannot attach an archive to a deleted version")
+        serializer = ExternalArchiveUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        from documents.external_archive import attach_external_archive
+
+        document = attach_external_archive(document.pk, **serializer.validated_data)
+        return Response(
+            {"id": document.pk, "archive_checksum": document.archive_checksum},
+        )
 
     def _get_selection_data_for_queryset(self, queryset):
         # Resolve once instead of once per model below. `queryset` can carry an

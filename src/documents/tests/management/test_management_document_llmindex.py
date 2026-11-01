@@ -7,9 +7,9 @@ from django.core.management import call_command
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
-_COMPACT = "documents.management.commands.document_llmindex.llm_index_compact"
+_COMPACT = "paperless_ai.indexing.llm_index_compact"
 _INDEX = "documents.management.commands.document_llmindex.llmindex_index"
-_MIGRATE = "documents.management.commands.document_llmindex.llm_index_migrate"
+_MIGRATE = "paperless_ai.indexing.llm_index_migrate"
 
 
 class TestDocumentLlmindexCommand:

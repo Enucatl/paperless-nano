@@ -134,6 +134,9 @@ def train_classifier(
     *,
     status_callback: Callable[[str], None] | None = None,
 ) -> str:
+    if not settings.CLASSIFIER_ENABLED:
+        return "Classifier disabled, not training"
+
     if (
         not Tag.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()
         and not DocumentType.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()

@@ -1,5 +1,32 @@
 # Idle memory reduction analysis
 
+For deployments using external OCR and AI services, set
+`PAPERLESS_LOCAL_OCR_ENABLED=false` and `PAPERLESS_AI_ALLOWED=false`. These
+deployment limits override saved application preferences without deleting them.
+The first disables local OCR and local archive generation while preserving
+remote OCR; the second disables Paperless AI suggestions, chat, embeddings and
+vector indexing. Implementations remain unloaded on disabled paths. Existing
+text extraction, thumbnails and ordinary document operations still run.
+
+For deployments that delegate OCR and matching to external services, use:
+
+```ini
+PAPERLESS_LOCAL_OCR_ENABLED=false
+PAPERLESS_CLASSIFIER_ENABLED=false
+PAPERLESS_TRAIN_TASK_CRON=disable
+PAPERLESS_AI_ALLOWED=false
+```
+
+The WebUI cannot override these deployment restrictions. Saved preferences are
+retained and take effect again if the deployment permits the feature.
+Restart existing processes after changing these settings to release libraries
+or models loaded earlier. These settings prevent local OCR, ML matching (including
+storage paths), and built-in AI engines from loading during ordinary document
+workflows. Manual assignments, rule-based matching, and full-text search remain
+available. Image-only documents need external OCR to obtain searchable text;
+Paperless will still generate thumbnails but will not generate archive PDFs.
+Installing engine packages in the container does not itself load them into RAM.
+
 ![Idle memory usage progression](memory-analysis.svg)
 
 I have run experiments. A reduction of at least 25% is achievable with minimal changes to the code, and no behavior changes at all.

@@ -94,6 +94,8 @@ MODEL_FILE = get_path_from_env(
     DATA_DIR / "classification_model.pickle",
 )
 
+CLASSIFIER_ENABLED = get_bool_from_env("PAPERLESS_CLASSIFIER_ENABLED", "YES")
+
 # Minimum confidence (0.0-1.0) for the ML classifier to assign a correspondent,
 # document type, or storage path. 0.0 disables the threshold.
 CLASSIFIER_MATCH_THRESHOLD: Final[float] = get_float_from_env(
@@ -936,6 +938,7 @@ OCR_PAGES = get_int_from_env("PAPERLESS_OCR_PAGES")
 # documents.  It should be a 3-letter language code consistent with ISO 639.
 OCR_LANGUAGE = os.getenv("PAPERLESS_OCR_LANGUAGE", "eng")
 
+LOCAL_OCR_ENABLED = get_bool_from_env("PAPERLESS_LOCAL_OCR_ENABLED", "true")
 # OCRmyPDF --output-type options are available.
 OCR_OUTPUT_TYPE = os.getenv("PAPERLESS_OCR_OUTPUT_TYPE", "pdfa")
 
@@ -1214,6 +1217,7 @@ REMOTE_OCR_ALLOW_INTERNAL_ENDPOINTS = get_bool_from_env(
 ################################################################################
 # AI Settings                                                                  #
 ################################################################################
+AI_ALLOWED = get_bool_from_env("PAPERLESS_AI_ALLOWED", "true")
 AI_ENABLED = get_bool_from_env("PAPERLESS_AI_ENABLED", "NO")
 LLM_EMBEDDING_BACKEND = get_choice_from_env(
     "PAPERLESS_AI_LLM_EMBEDDING_BACKEND",

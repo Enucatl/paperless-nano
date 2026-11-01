@@ -48,6 +48,21 @@ def make_ocr_config(mocker, null_app_config):
 
 
 class TestOcrConfigArchiveFileGeneration:
+    def test_deployment_disable_overrides_saved_preferences(
+        self,
+        make_ocr_config,
+        null_app_config,
+    ) -> None:
+        """Keep local processing off without changing saved preferences."""
+        null_app_config.mode = "force"
+        null_app_config.archive_file_generation = "always"
+        cfg = make_ocr_config(LOCAL_OCR_ENABLED=False)
+        assert cfg.mode == "off"
+        assert cfg.archive_file_generation == "never"
+        cfg = make_ocr_config(LOCAL_OCR_ENABLED=True)
+        assert cfg.mode == "force"
+        assert cfg.archive_file_generation == "always"
+
     def test_auto_from_settings(self, make_ocr_config) -> None:
         cfg = make_ocr_config(OCR_MODE="auto", ARCHIVE_FILE_GENERATION="auto")
         assert cfg.archive_file_generation == "auto"

@@ -888,6 +888,15 @@ for performing OCR on documents and images. Paperless uses sensible
 defaults for most settings, but all of them can be configured to your
 needs.
 
+#### [`PAPERLESS_LOCAL_OCR_ENABLED=<bool>`](#PAPERLESS_LOCAL_OCR_ENABLED) {#PAPERLESS_LOCAL_OCR_ENABLED}
+
+: Set to false to prohibit local OCR and local archive generation for this
+deployment, even when application settings request them. Saved preferences are
+retained. Remote OCR remains available. Documents without existing text need an
+external OCR service to become searchable.
+
+    Defaults to true.
+
 #### [`PAPERLESS_OCR_LANGUAGE=<lang>`](#PAPERLESS_OCR_LANGUAGE) {#PAPERLESS_OCR_LANGUAGE}
 
 : Customize the language that paperless will attempt to use when
@@ -1256,6 +1265,15 @@ should be a valid crontab(5) expression describing when to run.
 : If set to the string "disable", no emails will be fetched automatically.
 
     Defaults to every ten minutes, with an installation-specific minute offset.
+
+#### [`PAPERLESS_CLASSIFIER_ENABLED=<bool>`](#PAPERLESS_CLASSIFIER_ENABLED) {#PAPERLESS_CLASSIFIER_ENABLED}
+
+: Enables the built-in machine-learning classifier for automatic tag, document
+type, correspondent, and storage path matching. When false, existing models are
+not loaded and training is skipped. Existing model files are preserved. Manual
+assignments and rule-based matching continue to work.
+
+    Defaults to true.
 
 #### [`PAPERLESS_TRAIN_TASK_CRON=<cron expression>`](#PAPERLESS_TRAIN_TASK_CRON) {#PAPERLESS_TRAIN_TASK_CRON}
 
@@ -2128,6 +2146,15 @@ password. All of these options come from their similarly-named [Django settings]
     Defaults to True.
 
 ## AI {#ai}
+
+#### [`PAPERLESS_AI_ALLOWED=<bool>`](#PAPERLESS_AI_ALLOWED) {#PAPERLESS_AI_ALLOWED}
+
+: Set to false to prohibit Paperless AI features, including suggestions, chat,
+embeddings and vector indexing, even when enabled in application settings.
+Saved preferences are retained. This does not disable the separate built-in
+automatic document matcher.
+
+    Defaults to true.
 
 #### [`PAPERLESS_AI_ENABLED=<bool>`](#PAPERLESS_AI_ENABLED) {#PAPERLESS_AI_ENABLED}
 

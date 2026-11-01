@@ -39,6 +39,26 @@ def make_remote_ocr_config(mocker):
 
 
 class TestRemoteOCRConfig:
+    def test_external_ocr_remains_available_when_local_features_are_disabled(
+        self,
+        make_remote_ocr_config,
+        null_app_config,
+    ) -> None:
+        """Deployment limits for local OCR and built-in AI leave remote OCR intact."""
+        cfg = make_remote_ocr_config(
+            null_app_config,
+            LOCAL_OCR_ENABLED=False,
+            AI_ALLOWED=False,
+            REMOTE_OCR_ENGINE="azureai",
+            REMOTE_OCR_ENDPOINT="https://ocr.example.com",
+            REMOTE_OCR_API_KEY="external-key",
+            REMOTE_OCR_MODE=RemoteOCRMode.ALWAYS,
+        )
+        assert cfg.remote_ocr_engine == "azureai"
+        assert cfg.remote_ocr_endpoint == "https://ocr.example.com"
+        assert cfg.remote_ocr_api_key == "external-key"
+        assert cfg.remote_ocr_by_default
+
     def test_falls_back_to_settings(
         self,
         make_remote_ocr_config,

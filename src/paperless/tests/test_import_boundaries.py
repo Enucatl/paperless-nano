@@ -70,6 +70,21 @@ sys.stdout.buffer.write(payload)
         pytest.param(
             "import django\n"
             "django.setup()\n"
+            "from django.conf import settings\n"
+            "from django.test import override_settings\n"
+            "from documents.classifier import load_classifier\n"
+            "from documents.tasks import train_classifier\n"
+            "settings.MODEL_FILE.write_bytes(b'unused old model')\n"
+            "with override_settings(CLASSIFIER_ENABLED=False):\n"
+            "    assert load_classifier(raise_exception=True) is None\n"
+            "    assert train_classifier() == 'Classifier disabled, not training'\n"
+            "assert settings.MODEL_FILE.read_bytes() == b'unused old model'\n",
+            ("sklearn", "numpy", "scipy"),
+            id="disabled-classifier-preserves-model-without-loading-or-training",
+        ),
+        pytest.param(
+            "import django\n"
+            "django.setup()\n"
             "import documents.barcodes, documents.converters, documents.double_sided\n"
             "import paperless.validators\n",
             ("pikepdf", "img2pdf", "lxml"),

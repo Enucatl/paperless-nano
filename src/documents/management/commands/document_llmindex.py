@@ -1,9 +1,9 @@
 from typing import Any
 
+from django.conf import settings
+
 from documents.management.commands.base import PaperlessCommand
 from documents.tasks import llmindex_index
-from paperless_ai.indexing import llm_index_compact
-from paperless_ai.indexing import llm_index_migrate
 
 
 class Command(PaperlessCommand):
@@ -20,10 +20,16 @@ class Command(PaperlessCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        if not settings.AI_ALLOWED:
+            return
         if options["command"] == "compact":
+            from paperless_ai.indexing import llm_index_compact
+
             llm_index_compact()
             return
         if options["command"] == "migrate":
+            from paperless_ai.indexing import llm_index_migrate
+
             llm_index_migrate()
             return
         llmindex_index(

@@ -47,6 +47,7 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
             {
                 "id": 1,
                 "externally_configured_variables": [],
+                "deployment_disabled_fields": [],
                 "output_type": None,
                 "pages": None,
                 "language": None,
@@ -119,6 +120,63 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
         self.assertNotContains(response, "secret-value")
         self.assertNotContains(response, "future-value")
         self.assertNotContains(response, "UNRELATED_SETTING")
+
+    @override_settings(LOCAL_OCR_ENABLED=False, AI_ALLOWED=False)
+    def test_deployment_restrictions_reject_enabling_preferences(self) -> None:
+        """API clients cannot enable prohibited features or change restrictions."""
+        response = self.client.get(self.ENDPOINT, format="json")
+        self.assertCountEqual(
+            response.data[0]["deployment_disabled_fields"],
+            ["mode", "archive_file_generation", "ai_enabled"],
+        )
+        response = self.client.patch(
+            f"{self.ENDPOINT}1/",
+            {
+                "mode": "force",
+                "archive_file_generation": "always",
+                "ai_enabled": True,
+                "deployment_disabled_fields": [],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertCountEqual(
+            response.data,
+            ["mode", "archive_file_generation", "ai_enabled"],
+        )
+        response = self.client.patch(
+            f"{self.ENDPOINT}1/",
+            {"mode": "off", "archive_file_generation": "never", "ai_enabled": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    @override_settings(LOCAL_OCR_ENABLED=False, AI_ALLOWED=False)
+    def test_deployment_restrictions_preserve_existing_preferences(self) -> None:
+        """Round trips and unrelated edits preserve dormant enabled preferences."""
+        config = ApplicationConfiguration.objects.get(pk=1)
+        config.mode = "force"
+        config.archive_file_generation = "always"
+        config.ai_enabled = True
+        config.save()
+        response = self.client.patch(
+            f"{self.ENDPOINT}1/",
+            {
+                "mode": "force",
+                "archive_file_generation": "always",
+                "ai_enabled": True,
+                "app_title": "Updated title",
+                "remote_ocr_mode": "workflow_only",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        config.refresh_from_db()
+        self.assertEqual(config.app_title, "Updated title")
+        self.assertEqual(config.mode, "force")
+        self.assertEqual(config.archive_file_generation, "always")
+        self.assertTrue(config.ai_enabled)
+        self.assertEqual(config.remote_ocr_mode, "workflow_only")
 
     def test_api_get_ui_settings_with_config(self) -> None:
         """

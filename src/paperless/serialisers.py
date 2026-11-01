@@ -214,6 +214,7 @@ class ApplicationConfigurationSerializer(
     serializers.ModelSerializer[ApplicationConfiguration],
 ):
     externally_configured_variables = serializers.SerializerMethodField()
+    deployment_disabled_fields = serializers.SerializerMethodField()
     user_args = serializers.JSONField(binary=True, allow_null=True)
     barcode_tag_mapping = serializers.JSONField(binary=True, allow_null=True)
     llm_embedding_api_key = ObfuscatedPasswordField(
@@ -243,6 +244,34 @@ class ApplicationConfigurationSerializer(
         instance: ApplicationConfiguration,
     ) -> list[str]:
         return sorted(name for name in os.environ if name.startswith("PAPERLESS_"))
+
+    def get_deployment_disabled_fields(self, instance) -> list[str]:
+        """Expose deployment restrictions without changing saved preferences."""
+        fields = []
+        if not settings.LOCAL_OCR_ENABLED:
+            fields.extend(["mode", "archive_file_generation"])
+        if not settings.AI_ALLOWED:
+            fields.append("ai_enabled")
+        return fields
+
+    def validate(self, attrs):
+        """Reject changes that enable deployment-prohibited features."""
+        disabled_values = {
+            "mode": "off",
+            "archive_file_generation": "never",
+            "ai_enabled": False,
+        }
+        errors = {}
+        for field in self.get_deployment_disabled_fields(self.instance):
+            if (
+                field in attrs
+                and attrs[field] not in (None, disabled_values[field])
+                and attrs[field] != getattr(self.instance, field, None)
+            ):
+                errors[field] = "Disabled by deployment configuration."
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
     @staticmethod
     def _require_json_object(field: str, value: object) -> None:

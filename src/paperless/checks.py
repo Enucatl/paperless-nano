@@ -350,6 +350,8 @@ def get_tesseract_langs():
 
 @register()
 def check_default_language_available(app_configs: Any, **kwargs: Any) -> list[Error]:
+    if not settings.LOCAL_OCR_ENABLED:
+        return []
     errs = []
 
     if not settings.OCR_LANGUAGE:

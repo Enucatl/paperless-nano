@@ -3698,3 +3698,11 @@ class StoragePathTestSerializer(SerializerWithPerms):
             document_field.queryset = Document.objects.filter(
                 id__in=permitted_document_ids(user),
             )
+
+
+class ExternalArchiveUploadSerializer(serializers.Serializer):
+    """Validate external OCR results against the source checksum."""
+
+    archive = serializers.FileField()
+    source_checksum = serializers.RegexField(r"^[0-9a-f]{64}$")
+    content = serializers.CharField(allow_blank=True, trim_whitespace=False)

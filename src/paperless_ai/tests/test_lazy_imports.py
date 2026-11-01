@@ -8,6 +8,35 @@ _SRC_DIR = Path(__file__).parent.parent.parent
 
 
 class TestLazyAiImports:
+    def test_prohibited_ai_management_commands_do_not_load_implementations(
+        self,
+    ) -> None:
+        """Keep startup migrations and manual commands inside the deployment limit."""
+        code = dedent(
+            """\
+            import os, django, sys
+            os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'paperless.settings')
+            django.setup()
+            from django.core.management import call_command
+            from django.test import override_settings
+            with override_settings(AI_ALLOWED=False):
+                for command in ('migrate', 'compact', 'update', 'rebuild'):
+                    call_command('document_llmindex', command, skip_checks=True)
+            forbidden = ('paperless_ai.indexing', 'paperless_ai.client',
+                         'paperless_ai.embedding', 'llama_index', 'torch')
+            leaked = [name for name in sys.modules if any(
+                name == prefix or name.startswith(prefix + '.') for prefix in forbidden)]
+            assert not leaked, leaked
+            """,
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=_SRC_DIR,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def test_skipped_ai_workflows_do_not_load_implementations(
         self,
         tmp_path: Path,

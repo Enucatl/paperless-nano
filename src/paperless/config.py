@@ -79,6 +79,9 @@ class OcrConfig(OutputTypeConfig):
             app_config.archive_file_generation
             or ArchiveFileGenerationChoices(settings.ARCHIVE_FILE_GENERATION)
         )
+        if not settings.LOCAL_OCR_ENABLED:
+            self.mode = ModeChoices.OFF
+            self.archive_file_generation = ArchiveFileGenerationChoices.NEVER
         self.image_dpi = app_config.image_dpi or settings.OCR_IMAGE_DPI
         self.clean = app_config.unpaper_clean or CleanChoices(settings.OCR_CLEAN)
         self.deskew = (
@@ -267,7 +270,7 @@ class AIConfig(BaseConfig):
     def __post_init__(self) -> None:
         app_config = self._get_config_instance()
 
-        self.ai_enabled = (
+        self.ai_enabled = settings.AI_ALLOWED and (
             app_config.ai_enabled
             if app_config.ai_enabled is not None
             else settings.AI_ENABLED

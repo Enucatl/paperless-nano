@@ -465,3 +465,28 @@ Initial API version.
   provide aggregate views, and `POST /api/tasks/run/` lets privileged users dispatch supported tasks.
   API v9 continues to serve the unpaginated list with the legacy field names until support for v9 is
   dropped.
+
+### Attach an external OCR archive
+
+`POST /api/documents/{id}/archive/` accepts multipart form data:
+
+- `archive`: a readable, unencrypted PDF containing at least one page.
+- `content`: the extracted text (required; an empty string is allowed).
+- `source_checksum`: the lowercase SHA-256 checksum of the original downloaded
+  for OCR, matching both the document checksum and its current original bytes.
+
+Root IDs select the latest version, matching the original-download endpoint;
+`?version=` selects a specific version. The response `id` identifies the version
+whose archive was updated.
+
+The caller needs global and object-level document change permission. The original
+file is preserved. The new archive checksum, filename, and text are committed
+together, and the previous archive is removed only after commit. Search indexing
+and document update workflows are queued using the normal document update task.
+The response contains `id` and `archive_checksum`. A stale source returns `409`;
+invalid fields or PDF data return `400`.
+
+This endpoint accepts externally generated PDF/A files but does not certify
+PDF/A compliance. Local OCR may be disabled: uploading an external archive does
+not invoke OCR or archive conversion. Integrations must use this API instead of
+writing directly into the media directory.
