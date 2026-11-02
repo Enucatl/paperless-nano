@@ -62,7 +62,8 @@ checks. It needs Git and Docker on the host; hook dependencies stay inside the l
 ```
 
 This checks the current checkout directly. The first run builds a cached lint
-image; changes to the hook configuration rebuild it.
+image; changes to the hook configuration rebuild it. The container runs as a
+non-root user with your host UID and GID, so fixes keep your file ownership.
 
 To block pushes when these checks fail, install the hook once per checkout:
 
