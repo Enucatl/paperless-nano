@@ -4,7 +4,6 @@ Celery carries the job UUID. The database is the job journal; DATA_DIR/jobs is
 private shared storage, independent of either process's scratch directory.
 """
 
-import dataclasses
 import datetime
 import logging
 import os
@@ -28,13 +27,15 @@ from documents.models import Document
 from documents.models import DocumentBarcode
 from documents.models import DocumentJob
 from documents.models import PaperlessTask
+from documents.parser_operations import configured_parser
+from documents.parser_operations import effective_configuration as _configuration
+from documents.parser_operations import run_parser
+from documents.parser_operations import validate_parser_job
 from documents.permissions import permitted_document_ids
 from documents.utils import compute_checksum
 from documents.versioning import latest_version
-from paperless.config import BarcodeConfig
-from paperless.config import OcrConfig
 from paperless.config import RemoteOCRConfig
-from paperless.parsers import ParserContext
+from paperless.parsers.contract import resolve_reference
 from paperless.parsers.registry import get_parser_registry
 
 logger = logging.getLogger("paperless.jobs")
@@ -226,41 +227,6 @@ def submit_reprocess(
     return job
 
 
-def _configuration(parser: object = None, *, mailrule_id: int | None = None) -> dict:
-    """Record effective built-in settings without persisting remote credentials."""
-    remote = dataclasses.asdict(RemoteOCRConfig())
-    remote.pop("remote_ocr_api_key")
-    ocr = getattr(parser, "settings", None)
-    if not isinstance(ocr, OcrConfig):
-        ocr = OcrConfig()
-    configuration = {
-        "ocr": dataclasses.asdict(ocr),
-        "barcodes": dataclasses.asdict(BarcodeConfig()),
-        "remote": remote,
-        "execution": {
-            name: getattr(settings, name)
-            for name in (
-                "THREADS_PER_WORKER",
-                "THUMBNAIL_FONT_NAME",
-                "TIKA_ENDPOINT",
-                "TIKA_GOTENBERG_ENDPOINT",
-                "REMOTE_OCR_ALLOW_INTERNAL_ENDPOINTS",
-                "EMAIL_PARSE_DEFAULT_LAYOUT",
-                "OCR_OUTPUT_TYPE",
-            )
-        },
-    }
-    if mailrule_id:
-        from paperless_mail.models import MailRule
-
-        configuration["mail_layout"] = (
-            MailRule.objects.filter(pk=mailrule_id)
-            .values_list("pdf_layout", flat=True)
-            .first()
-        )
-    return configuration
-
-
 def _file_result(directory: Path, source: Path, name: str) -> dict:
     """Retain a parser output after its temporary context has exited."""
     destination = directory / name
@@ -285,20 +251,25 @@ def _validate_file(directory: Path, reference: dict, mime_type: str) -> Path:
     if mime_type == "application/pdf":
         import pikepdf
 
-        with pikepdf.open(path) as pdf:
-            if not pdf.pages:
-                raise RejectedResult("Parser returned an empty PDF")
+        try:
+            with pikepdf.open(path) as pdf:
+                if not pdf.pages:
+                    raise RejectedResult("Parser returned an empty PDF")
+        except pikepdf.PdfError as error:
+            raise RejectedResult("Parser returned an invalid PDF") from error
     else:
         from PIL import Image
 
-        with Image.open(path) as image:
-            image.verify()
+        try:
+            with Image.open(path) as image:
+                image.verify()
+        except (OSError, ValueError) as error:
+            raise RejectedResult("Parser returned an invalid thumbnail") from error
     return path
 
 
 def _prepare(job: DocumentJob) -> None:
     """Run the current parser and persist validated, serializable output."""
-    from documents.consumer import should_produce_archive
     from documents.tasks import _read_barcodes_for_reprocess
 
     document = _check_target(job)
@@ -307,7 +278,9 @@ def _prepare(job: DocumentJob) -> None:
     job.attempts += 1
     job.status = DocumentJob.Status.RUNNING
     job.updated = timezone.now()
-    job.configuration = _configuration()
+    configuration = _configuration()
+    if "parser_request" not in job.result:
+        job.configuration = configuration
     job.result["progress"] = "parsing"
     job.error = ""
     job.save()
@@ -322,36 +295,37 @@ def _prepare(job: DocumentJob) -> None:
     )
     if parser_class is None:
         raise RejectedResult(f"No parser for {document.mime_type}")
-    job.provider = {
-        "class": f"{parser_class.__module__}.{parser_class.__qualname__}",
-        "name": parser_class.name,
-        "version": parser_class.version,
-    }
-    job.save(update_fields=["provider"])
-    with parser_class() as parser:
-        parser.configure(ParserContext())
-        produce_archive = should_produce_archive(parser, document.mime_type, source)
-        job.configuration = _configuration(parser)
-        job.configuration["produce_archive"] = produce_archive
-        job.save(update_fields=["configuration"])
-        parser.parse(source, document.mime_type, produce_archive=produce_archive)
-        text = parser.get_text()
-        if not isinstance(text, str):
-            raise RejectedResult("Parser text must be a string")
+    with configured_parser(parser_class, configuration) as parser:
+        parsed = run_parser(
+            parser,
+            source,
+            document.mime_type,
+            job.input["filename"],
+            configuration,
+            directory,
+            job_id=str(job.pk),
+            allow_remote=job.input["remote_ocr"]
+            or RemoteOCRConfig().remote_ocr_by_default,
+        )
+        job.refresh_from_db()
         result = {
-            "content": text,
+            "content": parsed["text"],
+            "page_count": parsed["page_count"],
+            "parser_request": job.result["parser_request"],
+            "parser_result": parsed,
             "thumbnail": _file_result(
                 directory,
-                Path(parser.get_thumbnail(source, document.mime_type)),
+                resolve_reference(directory, parsed["thumbnail"]),
                 "thumbnail.webp",
             ),
             "archive": None,
         }
-        archive = parser.get_archive_path()
-        if archive:
-            result["archive"] = _file_result(directory, Path(archive), "archive.pdf")
-        elif produce_archive:
-            raise RejectedResult("Parser omitted the required PDF rendition")
+        if parsed["archive"]:
+            result["archive"] = _file_result(
+                directory,
+                resolve_reference(directory, parsed["archive"]),
+                "archive.pdf",
+            )
         # Barcode reading uses the durable input too, without changing the ORM row.
         document.filename = str(source)
         result["barcodes"] = _read_barcodes_for_reprocess(document)
@@ -373,6 +347,7 @@ def _prepare(job: DocumentJob) -> None:
 
 def _apply(job: DocumentJob) -> None:
     """Publish a new archive generation and atomically commit result ownership."""
+    validate_parser_job(job, registry=get_parser_registry())
     directory = job_directory(job.pk)
     _validate_file(directory, job.result["thumbnail"], "image/webp")
     archive = job.result["archive"]

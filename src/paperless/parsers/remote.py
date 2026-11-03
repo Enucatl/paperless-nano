@@ -18,6 +18,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import Self
 
@@ -206,7 +207,18 @@ class RemoteDocumentParser:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def __init__(self, logging_group: object = None) -> None:
+    def __init__(
+        self,
+        logging_group: object = None,
+        *,
+        configuration: dict | None = None,
+    ) -> None:
+        self.configuration = configuration
+        self.execution = (
+            SimpleNamespace(**configuration["execution"])
+            if configuration is not None
+            else settings
+        )
         settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
         self._tempdir = Path(
             tempfile.mkdtemp(prefix="paperless-", dir=settings.SCRATCH_DIR),
@@ -259,7 +271,15 @@ class RemoteDocumentParser:
             Whether an archive copy is wanted. For PDFs, False skips the
             remote engine and uses locally-extracted text instead.
         """
-        config = RemoteEngineConfig.from_app_config()
+        config = (
+            RemoteEngineConfig(
+                engine=self.configuration["remote"]["remote_ocr_engine"],
+                api_key=self.configuration["remote"]["remote_ocr_api_key"],
+                endpoint=self.configuration["remote"]["remote_ocr_endpoint"],
+            )
+            if self.configuration is not None
+            else RemoteEngineConfig.from_app_config()
+        )
 
         if not config.engine_is_valid():
             logger.warning(
@@ -440,7 +460,7 @@ class RemoteDocumentParser:
 
         from paperless.network import validate_outbound_http_url
 
-        allow_internal = settings.REMOTE_OCR_ALLOW_INTERNAL_ENDPOINTS
+        allow_internal = self.execution.REMOTE_OCR_ALLOW_INTERNAL_ENDPOINTS
 
         try:
             validate_outbound_http_url(config.endpoint, allow_internal=allow_internal)

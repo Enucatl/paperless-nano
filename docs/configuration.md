@@ -888,6 +888,17 @@ for performing OCR on documents and images. Paperless uses sensible
 defaults for most settings, but all of them can be configured to your
 needs.
 
+Parser plugins may implement the explicit request/result interface described in
+[Replaceable OCR providers](document-operations.md#replaceable-ocr-providers-25).
+They use the existing `paperless_ngx.parsers` entrypoint registry and scoring;
+there is no separate provider setting. Existing parser plugins remain supported.
+Replacement providers declare text, searchable PDF, PDF/A and thumbnail
+capabilities independently. A missing required PDF rendition fails the job before
+publication. Text-only providers work with `never`, or with `auto` for a
+born-digital PDF; formats that require a PDF for display still require one.
+Missing thumbnail capability uses a local, capability-filtered parser fallback.
+Provider failures do not silently select another OCR engine.
+
 #### [`PAPERLESS_LOCAL_OCR_ENABLED=<bool>`](#PAPERLESS_LOCAL_OCR_ENABLED) {#PAPERLESS_LOCAL_OCR_ENABLED}
 
 : Set to false to prohibit local OCR and local archive generation for this
@@ -1160,6 +1171,12 @@ they use underscores instead of dashes.
 
     Specify arguments as a JSON dictionary. Keep note of lower case
     booleans and double quoted parameter names and strings. Examples:
+
+    `jobs` is bounded by `PAPERLESS_THREADS_PER_WORKER`, including when supplied
+    here. Lower positive values remain supported. Tesseract's existing
+    `OMP_THREAD_LIMIT=1` bounds its own OpenMP threads. Document concurrency
+    remains controlled by `PAPERLESS_TASK_WORKERS`; these controls are separate
+    from the parser contract and do not impose a memory cap.
 
     ``` json
     {"deskew": true, "optimize": 3, "unpaper_args": "--pre-rotate 90"}

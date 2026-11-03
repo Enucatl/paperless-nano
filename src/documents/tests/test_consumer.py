@@ -42,6 +42,7 @@ from paperless_testing.permissions import grant_object
 from paperless_testing.samples import MULTI_PAGE_DIGITAL_PDF
 from paperless_testing.samples import MULTI_PAGE_IMAGES_PDF
 from paperless_testing.samples import SIMPLE_DIGITAL_PDF
+from paperless_testing.samples import THUMBNAIL_WEBP
 
 
 class _BaseNewStyleParser:
@@ -82,8 +83,8 @@ class _BaseNewStyleParser:
         self._tmpdir = Path(
             tempfile.mkdtemp(prefix="paperless-test-", dir=settings.SCRATCH_DIR),
         )
-        _, thumb = tempfile.mkstemp(suffix=".webp", dir=self._tmpdir)
-        self._thumb = Path(thumb)
+        self._thumb = self._tmpdir / "thumbnail.webp"
+        shutil.copy(THUMBNAIL_WEBP, self._thumb)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -132,7 +133,7 @@ class CopyParser(_BaseNewStyleParser):
         self._text = "The text"
         if produce_archive and self._tmpdir:
             self._archive = self._tmpdir / "archive.pdf"
-            shutil.copy(document_path, self._archive)
+            shutil.copy(MULTI_PAGE_IMAGES_PDF, self._archive)
 
 
 class FaultyParser(_BaseNewStyleParser):
@@ -1223,11 +1224,12 @@ class TestConsumer(
                 ConsumerError,
             ):
                 consumer.run()
-            mock_mail_parser_parse.assert_called_once_with(
-                consumer.working_copy,
-                "message/rfc822",
-                produce_archive=True,
-            )
+            mock_mail_parser_parse.assert_called_once()
+            args, kwargs = mock_mail_parser_parse.call_args
+            self.assertTrue(args[0].is_relative_to(consumer.working_copy.parent))
+            self.assertNotEqual(args[0], consumer.working_copy)
+            self.assertEqual(args[1], "message/rfc822")
+            self.assertEqual(kwargs, {"produce_archive": True})
 
     @mock.patch("documents.consumer.generate_unique_filename")
     def test_consume_refuses_to_write_outside_originals_dir(

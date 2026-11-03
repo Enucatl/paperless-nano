@@ -28,6 +28,10 @@ Third-party parsers must advertise themselves under the
 The loaded class must expose the following attributes at the class level
 (not just on instances) for the registry to accept it:
 name, version, author, url, supported_mime_types (callable), score (callable).
+It may implement the existing ParserProtocol or the explicit process(request,
+root) interface in paperless.parsers.contract. Both use the same selection rules.
+It may implement either ParserProtocol or the explicit ParserProvider contract;
+both use the same selection and remote-permission rules.
 """
 
 from __future__ import annotations
@@ -336,6 +340,7 @@ class ParserRegistry:
         path: Path | None = None,
         *,
         allow_remote: bool = True,
+        required_capabilities: tuple[str, ...] = (),
     ) -> type[ParserProtocol] | None:
         """Return the best parser class for the given file, or None.
 
@@ -366,6 +371,10 @@ class ParserRegistry:
             are excluded from consideration, so a document is never sent to
             a remote service. Parsers that do not declare the attribute
             are treated as local and are always considered.
+        required_capabilities:
+            Optional output capabilities required for a fallback. Legacy
+            parsers promise text and thumbnails; their PDF/A support is not
+            inferred from the old searchable-archive property.
 
         Returns
         -------
@@ -386,6 +395,18 @@ class ParserRegistry:
                 "uses_remote_service",
                 False,
             ):
+                continue
+
+            capabilities = getattr(parser_class, "capabilities", None)
+            if capabilities is None:
+                capabilities = {
+                    "text": callable(getattr(parser_class, "get_text", None)),
+                    "thumbnail": callable(getattr(parser_class, "get_thumbnail", None)),
+                    "metadata": callable(
+                        getattr(parser_class, "extract_metadata", None)
+                    ),
+                }
+            if any(not capabilities.get(name, False) for name in required_capabilities):
                 continue
 
             score = parser_class.score(mime_type, filename, path)

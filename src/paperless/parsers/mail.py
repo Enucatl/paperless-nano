@@ -19,6 +19,7 @@ import shutil
 import tempfile
 from html import escape
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import Self
 
@@ -157,7 +158,18 @@ class MailDocumentParser:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def __init__(self, logging_group: object = None) -> None:
+    def __init__(
+        self,
+        logging_group: object = None,
+        *,
+        configuration: dict | None = None,
+    ) -> None:
+        self.configuration = configuration
+        self.execution = (
+            SimpleNamespace(**configuration["execution"])
+            if configuration is not None
+            else settings
+        )
         settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
         self._tempdir = Path(
             tempfile.mkdtemp(prefix="paperless-", dir=settings.SCRATCH_DIR),
@@ -262,7 +274,13 @@ class MailDocumentParser:
         self._date = mail.date
 
         logger.debug("Creating a PDF from the email")
-        if self._mailrule_id:
+        if self.configuration is not None:
+            layout = self.configuration.get("mail_layout")
+            self._archive_path = self.generate_pdf(
+                mail,
+                MailRule.PdfLayout(layout) if layout is not None else None,
+            )
+        elif self._mailrule_id:
             rule = MailRule.objects.get(pk=self._mailrule_id)
             self._archive_path = self.generate_pdf(
                 mail,
@@ -443,17 +461,21 @@ class MailDocumentParser:
         """Convert the OCR output type setting to a Gotenberg PdfAFormat."""
         from gotenberg_client.options import PdfAFormat
 
-        if settings.OCR_OUTPUT_TYPE in {
+        if self.execution.OCR_OUTPUT_TYPE in {
             OutputTypeChoices.PDF_A,
             OutputTypeChoices.PDF_A2,
         }:
             return PdfAFormat.A2b
-        elif settings.OCR_OUTPUT_TYPE == OutputTypeChoices.PDF_A1:  # pragma: no cover
+        elif (
+            self.execution.OCR_OUTPUT_TYPE == OutputTypeChoices.PDF_A1
+        ):  # pragma: no cover
             logger.warning(
                 "Gotenberg does not support PDF/A-1a, choosing PDF/A-2b instead",
             )
             return PdfAFormat.A2b
-        elif settings.OCR_OUTPUT_TYPE == OutputTypeChoices.PDF_A3:  # pragma: no cover
+        elif (
+            self.execution.OCR_OUTPUT_TYPE == OutputTypeChoices.PDF_A3
+        ):  # pragma: no cover
             return PdfAFormat.A3b
         return None
 
@@ -516,7 +538,7 @@ class MailDocumentParser:
         try:
             from tika_client import TikaClient
 
-            with TikaClient(tika_url=settings.TIKA_ENDPOINT) as client:
+            with TikaClient(tika_url=self.execution.TIKA_ENDPOINT) as client:
                 parsed = client.tika.as_text.from_buffer(html, "text/html")
 
                 if parsed.content is not None:
@@ -525,7 +547,7 @@ class MailDocumentParser:
         except Exception as err:
             raise ParseError(
                 f"Could not parse content with tika server at "
-                f"{settings.TIKA_ENDPOINT}: {err}",
+                f"{self.execution.TIKA_ENDPOINT}: {err}",
             ) from err
 
     def generate_pdf(
@@ -556,7 +578,7 @@ class MailDocumentParser:
         mail_pdf_file = self.generate_pdf_from_mail(mail_message)
 
         if pdf_layout is None:
-            pdf_layout = MailRule.PdfLayout(settings.EMAIL_PARSE_DEFAULT_LAYOUT)
+            pdf_layout = MailRule.PdfLayout(self.execution.EMAIL_PARSE_DEFAULT_LAYOUT)
 
         # If no HTML content, create the PDF from the message.
         # Otherwise, create 2 PDFs and merge them with Gotenberg.
@@ -574,8 +596,8 @@ class MailDocumentParser:
 
             with (
                 GotenbergClient(
-                    host=settings.TIKA_GOTENBERG_ENDPOINT,
-                    timeout=settings.CELERY_TASK_TIME_LIMIT,
+                    host=self.execution.TIKA_GOTENBERG_ENDPOINT,
+                    timeout=self.execution.CELERY_TASK_TIME_LIMIT,
                 ) as client,
                 client.merge.merge() as route,
             ):
@@ -709,8 +731,8 @@ class MailDocumentParser:
 
         with (
             GotenbergClient(
-                host=settings.TIKA_GOTENBERG_ENDPOINT,
-                timeout=settings.CELERY_TASK_TIME_LIMIT,
+                host=self.execution.TIKA_GOTENBERG_ENDPOINT,
+                timeout=self.execution.CELERY_TASK_TIME_LIMIT,
             ) as client,
             client.chromium.html_to_pdf() as route,
         ):
@@ -794,8 +816,8 @@ class MailDocumentParser:
 
         with (
             GotenbergClient(
-                host=settings.TIKA_GOTENBERG_ENDPOINT,
-                timeout=settings.CELERY_TASK_TIME_LIMIT,
+                host=self.execution.TIKA_GOTENBERG_ENDPOINT,
+                timeout=self.execution.CELERY_TASK_TIME_LIMIT,
             ) as client,
             client.chromium.html_to_pdf() as route,
         ):

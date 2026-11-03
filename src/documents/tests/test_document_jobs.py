@@ -90,7 +90,10 @@ def test_staged_input_survives_loss_of_original(
         jobs.run_reprocess(job.pk)
 
     parser.parse.assert_called_once()
-    assert parser.parse.call_args.args[0] == staged
+    parser_input = parser.parse.call_args.args[0]
+    assert parser_input.is_relative_to(jobs.job_directory(job.pk))
+    assert parser_input != staged
+    assert parser_input.read_bytes() == original_bytes
     job.refresh_from_db()
     sample_doc.refresh_from_db()
     assert job.status == DocumentJob.Status.SUCCEEDED
@@ -526,7 +529,10 @@ def test_media_contention_rolls_back_application_and_reuses_prepared_result(
     def occupy_media_after_manifest(instance: DocumentJob, *args, **kwargs) -> None:
         """Represent another writer taking media between planning and applying."""
         save(instance, *args, **kwargs)
-        if kwargs.get("update_fields") == ["result"]:
+        if (
+            kwargs.get("update_fields") == ["result"]
+            and "archive_filename" in instance.result
+        ):
             competing_lock.acquire(timeout=0)
 
     hook = mocker.patch.object(DocumentJob, "save", occupy_media_after_manifest)

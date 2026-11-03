@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import Self
 
@@ -165,7 +166,18 @@ class TikaDocumentParser:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def __init__(self, logging_group: object = None) -> None:
+    def __init__(
+        self,
+        logging_group: object = None,
+        *,
+        configuration: dict | None = None,
+    ) -> None:
+        self.configuration = configuration
+        self.execution = (
+            SimpleNamespace(**configuration["execution"])
+            if configuration is not None
+            else settings
+        )
         settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
         self._tempdir = Path(
             tempfile.mkdtemp(prefix="paperless-", dir=settings.SCRATCH_DIR),
@@ -181,18 +193,22 @@ class TikaDocumentParser:
         from gotenberg_client import GotenbergClient
         from tika_client import TikaClient
 
-        self._tika_client = self._exit_stack.enter_context(
-            TikaClient(
-                tika_url=settings.TIKA_ENDPOINT,
-                timeout=settings.CELERY_TASK_TIME_LIMIT,
-            ),
-        )
-        self._gotenberg_client = self._exit_stack.enter_context(
-            GotenbergClient(
-                host=settings.TIKA_GOTENBERG_ENDPOINT,
-                timeout=settings.CELERY_TASK_TIME_LIMIT,
-            ),
-        )
+        try:
+            self._tika_client = self._exit_stack.enter_context(
+                TikaClient(
+                    tika_url=self.execution.TIKA_ENDPOINT,
+                    timeout=self.execution.CELERY_TASK_TIME_LIMIT,
+                ),
+            )
+            self._gotenberg_client = self._exit_stack.enter_context(
+                GotenbergClient(
+                    host=self.execution.TIKA_GOTENBERG_ENDPOINT,
+                    timeout=self.execution.CELERY_TASK_TIME_LIMIT,
+                ),
+            )
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
         return self
 
     def __exit__(
@@ -265,7 +281,7 @@ class TikaDocumentParser:
         except Exception as err:
             raise ParseError(
                 f"Could not parse {document_path} with tika server at "
-                f"{settings.TIKA_ENDPOINT}: {err}",
+                f"{self.execution.TIKA_ENDPOINT}: {err}",
             ) from err
 
         self._text = (parsed.content or "").strip()
@@ -434,7 +450,11 @@ class TikaDocumentParser:
             # Set the output format of the resulting PDF.
             # OutputTypeConfig reads the database-stored ApplicationConfiguration
             # first, then falls back to the PAPERLESS_OCR_OUTPUT_TYPE env var.
-            output_type = OutputTypeConfig().output_type
+            output_type = (
+                self.configuration["ocr"]["output_type"]
+                if self.configuration is not None
+                else OutputTypeConfig().output_type
+            )
             if output_type in {
                 OutputTypeChoices.PDF_A,
                 OutputTypeChoices.PDF_A2,

@@ -143,9 +143,12 @@ def stage_consumption(
         return job
 
 
-def validate_application(job_id: str | UUID) -> None:
+def validate_application(job_id: str | UUID, *, registry: object = None) -> None:
     """Recheck the original actor, version revision, and deadline before storing."""
     job = DocumentJob.objects.get(pk=job_id)
+    from documents.parser_operations import validate_parser_job
+
+    validate_parser_job(job, registry=registry)
     if (
         job.status == DocumentJob.Status.RUNNING
         and job.timeout
@@ -179,21 +182,6 @@ def record_progress(job_id: str, phase: str) -> None:
     job = DocumentJob.objects.get(pk=job_id)
     job.result["progress"] = phase
     job.save(update_fields=["result"])
-
-
-def record_provider(job_id: str, parser: object, *, produce_archive: bool) -> None:
-    """Record the selected existing implementation and its effective settings."""
-    job = DocumentJob.objects.get(pk=job_id)
-    job.provider = {
-        "class": f"{type(parser).__module__}.{type(parser).__qualname__}",
-        "name": parser.name,
-        "version": parser.version,
-    }
-    job.configuration.update(
-        _configuration(parser, mailrule_id=job.input["mailrule_id"])
-    )
-    job.configuration["produce_archive"] = produce_archive
-    job.save(update_fields=["provider", "configuration"])
 
 
 def stage_outputs(

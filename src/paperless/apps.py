@@ -11,7 +11,13 @@ class PaperlessConfig(AppConfig):
     verbose_name = _("Paperless")
 
     def ready(self) -> None:
+        from importlib import import_module
+
         from django.contrib.auth.signals import user_login_failed
+
+        # Framework startup owns integrations; importing parser contracts does not.
+        import_module("paperless.celery")
+        import_module("paperless.checks")
 
         user_login_failed.connect(handle_failed_login)
 

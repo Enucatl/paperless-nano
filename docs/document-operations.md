@@ -846,3 +846,152 @@ uncommitted workflow and memory-report changes were preserved separately.
 The full suite, PostgreSQL/MariaDB, deployment and RAM checks were not performed.
 The #23 recovery limitation remains: ambiguous external effects retain their
 inputs and require explicit operator reconciliation.
+
+## Replaceable OCR providers (#25)
+
+The existing `paperless.parsers` boundary now accepts version 1 JSON-compatible
+requests and results through `paperless.parsers.contract`. Providers implement
+`process(request, root)` and expose a stable `identity`, separate `text`,
+`searchable_pdf`, `pdfa` and `thumbnail` capability flags, and the registry's
+existing identity, MIME and score attributes. The request contains a content
+revision, MIME type, filename, effective configuration, remote permission,
+required outputs, and private input/output references. Each reference contains a
+relative path, SHA-256 digest and byte count. Results return text, page count,
+optional ISO date, provider identity, archive kind and rendition references.
+Providers receive no ORM documents, users, HTTP requests or Celery objects.
+
+`documents.parser_operations` owns effective configuration, required renditions,
+validation and the explicit thumbnail fallback. `LegacyParserProvider` adapts
+existing built-in and third-party parsers, including context cleanup. Built-ins
+receive resolved OCR settings, endpoints, timeouts, concurrency and mail layout
+before execution. Old plugins keep their no-argument construction and existing
+methods; `ParserContext.configuration` additionally exposes the snapshot. Plugins
+with extra configuration must incorporate it in their provider identity. Remote
+credentials are supplied only during execution and are omitted from durable
+requests and configuration records.
+
+Ingestion and durable reprocessing call this same operation. Thumbnail
+regeneration requests only a thumbnail and does not run OCR. Metadata inspection
+continues to use `extract_metadata`, filtering out providers that do not supply
+metadata. Parser registry scoring and external-plugin precedence remain intact;
+there is no competing discovery system or provider setting. Remote processing
+still requires the document/workflow choice or the configured default, and the
+operation checks permission again before execution. Thumbnail fallback selects
+only a capable local parser and records its identity. An OCR failure never
+silently reroutes document content to another service.
+
+### Archive capability and replacement policy
+
+For explicit providers, `always` requires the configured PDF or PDF/A output;
+`auto` requires it for images and scanned/textless PDFs. `never` permits text-only
+results for formats the viewer can display directly. Email, Office and other
+formats that need a display PDF still require that rendition under `never`.
+A provider cannot substitute a searchable PDF when PDF/A is required. A missing,
+unadvertised or unrequested archive is rejected before permanent publication.
+There is no automatic archive-engine fallback. Existing legacy parser behavior
+is preserved: incapable parsers skip optional archives, required display PDFs
+win over `never`, and remote searchable PDFs are not relabeled as PDF/A. Existing
+Mail output-type and OCR user-argument overrides retain their effective behavior.
+
+`paperless.parsers.providers.PlainTextProvider` is a concrete replacement that
+reads plain text without importing Django and produces no renditions. An
+installed plugin can select it using the existing entrypoint mechanism:
+
+```toml
+[project.entry-points."paperless_ngx.parsers"]
+plain_text = "paperless.parsers.providers:PlainTextProvider"
+```
+
+With `PAPERLESS_ARCHIVE_FILE_GENERATION=never`, this provider supplies text and
+the core explicitly selects the existing local text thumbnail implementation.
+The same contract supports a PDF text-only provider under `never`, or under
+`auto` for a born-digital PDF; integration tests exercise that replacement in
+both ingestion and reprocessing. Providers must honor the request's remote
+permission and execution limits. They are trusted installed code, not sandboxed
+extensions; the contract does not prevent arbitrary filesystem access by a
+malicious plugin.
+
+### File ownership, failures and execution
+
+The core copies processing input into a unique attempt directory under the
+private job directory, keeping the admitted input intact even if a provider
+modifies its own copy. It records the request before execution and validates
+results against a separate snapshot. It rejects changed input, changed provider
+identity, malformed text/page/date values, escaped paths, symlinks, input aliases,
+missing required outputs and invalid PDF/WebP files. Output bytes and directories
+are synced before recording successful results. PDF validation establishes a
+readable, nonempty PDF; full standards certification of PDF/A remains the
+provider's responsibility.
+
+The core retains database writes, permissions, document/version revision checks,
+workflows, publication locks and collision handling. Configuration and selected
+provider identity are checked again before applying prepared work. Reprocessing
+without a new archive retains the existing archive. The original and admitted
+input are never replaced by provider output. Successful durable completion owns
+cleanup; failed jobs retain evidence and recovery inputs. Thumbnail regeneration
+also rejects stale results and retains its private copy if the original vanishes.
+
+Execution policy remains outside the contract. Celery's existing worker count
+bounds simultaneous documents; `THREADS_PER_WORKER` bounds OCRmyPDF jobs even
+when user arguments request more, and the existing OpenMP limit bounds
+Tesseract threads. Worker time limits and service request timeouts remain in
+place. A provider may raise `TimeoutError`; reprocessing retains its existing
+three-attempt policy, while interrupted or failed ingestion retains the #23
+attention/reconciliation rules. A retry rejects a changed configuration or
+provider instead of silently selecting another implementation. No custom process
+supervisor, new queue or memory cap is introduced. Jobs prepared before this contract retain their
+existing completion path. The recovery command's acknowledgment semantics are
+unchanged; this work never blindly replays ingestion or uncertain effects.
+
+To allow a provider to import the contract without Django, `paperless` public
+framework exports resolve on access; normal Django startup explicitly initializes
+Celery and checks. Startup, check registration and lean-worker compatibility are
+covered by tests. This is required for the standalone contract and makes no
+idle-memory claim. #26 search separation and #27 measured residency work remain
+later tasks; the reported 300 MB baseline and provisional active/peak goals have
+not been remeasured or enforced.
+
+### OCR provider verification (2026-11-03)
+
+The broad run selected **2,411 cases**: **2,409 passed**, one preexisting
+classifier-cache test was skipped, and one new thumbnail test failed because it
+assumed the attempt input basename was `input.pdf`. The implementation preserves
+the source basename. Updating that assertion and rerunning all five thumbnail
+safety cases passed. Thus **2,410 selected cases passed across the broad and
+focused runs**, with one existing skip. Earlier focused parser/framework (385)
+and operation/consumer (136) selections overlap and are not added to this count.
+
+All tests ran in disposable `docker run --rm --userns=host` containers as an
+unprivileged user, with source mounted read-only and copied into temporary
+container/volume storage. The environment used Python 3.14.2, Django 5.2.17,
+SQLite, Ghostscript 10.05.1 and frozen uv testing/lint dependencies. The broad
+command used `pytest -o addopts='' -n 4 --dist=loadscope --randomly-seed=1
+--tb=short`. It excluded the live-service parser files `test_mail_parser_live.py`
+and `test_tika_liva.py`. The exact selections were:
+
+- `src/documents/tests/`: `test_document_jobs.py`, `test_ingestion_jobs.py`, `test_job_callbacks.py`, `test_document_jobs_command.py`, `test_tasks.py`, `test_bulk_edit.py`, `test_api_bulk_edit.py`, `test_scheduler_api.py`, `test_api_documents.py`, `test_api_permissions.py`, `test_api_document_versions.py`, `test_version_conditionals.py`, `test_file_handling.py`, `test_document_updates.py`, `test_workflows.py`, `test_consumer.py`, `test_consumer_archive.py`, `test_management.py`, `test_management_exporter.py`, `test_management_importer.py`, `test_task_signals.py`, `test_worker_outcomes.py`, `test_double_sided.py`, `test_barcodes.py`, `test_consumer_api.py`, `test_api_post_document_nfc.py`, `test_management_consumer.py`, `test_matchables.py`, `test_management_retagger.py`, `test_document_maintenance_updates.py`, `test_bulk_document_updates.py`, `test_storage_path_updates.py`, `test_merge_documents_as_versions.py`, `test_admin.py`, `test_api_custom_fields.py`, `test_ingestion_followups.py`, `test_api_workflows.py`, `test_classification.py`, `test_classifier_activation.py`, `test_classifier.py`, `test_permission_filtering_security.py`, `test_parser_operations.py`, `test_thumbnail_operations.py`, `test_management_thumbnails.py`, `test_parsers.py`.
+- `src/paperless_mail/tests/`: `test_mail.py`, `test_mail_nfc.py`, `test_preprocessor.py`, `test_api.py`, `test_process_mail_accounts_overlap.py`.
+- `src/paperless_ai/tests/`: `test_classification_provider.py`, `test_ai_classifier.py`, `test_matching.py`, `test_lazy_imports.py`, `test_ai_indexing.py`.
+- `src/paperless/tests/`: `test_worker_trace.py`, `test_worker_serialization.py`, `test_disabled_feature_workflows.py`, `test_import_boundaries.py`, `test_celery.py`, `test_checks.py`, `test_checks_v3.py`, `test_docker_service_checks.py`, `test_registry.py`, `test_ocr_config.py`, `test_remote_ocr_config.py`, `test_parser_utils.py`, `test_config_precedence.py`, `test_asgi.py`.
+- `src/paperless_worker/tests/` (entire directory, subject to the exclusions above).
+- `src/paperless/tests/parsers/` (entire directory, subject to the exclusions above).
+
+Coverage includes real OCR, replacement providers, effective settings and engine
+concurrency, remote permission and credential redaction, archive/display policy,
+local thumbnail fallback, malformed output, timeouts and bounded retries,
+changed provider/configuration/document rejection, retained inputs, cleanup and
+publication crash points, workflows, permissions, versions, classification, and
+normal/lean-worker startup. A standalone `python -S` import of the contract and
+text provider also succeeded without Django or installed site packages.
+
+`makemigrations --check --dry-run --skip-checks` found no missing migrations.
+Changed-file hooks passed, including Ruff, Prettier and codespell. The temporary
+verification image and volume were removed after verification. Verification
+preserved the #24 baseline and unrelated workflow/memory-report changes. No
+GitHub issue was modified during verification, and nothing was pushed or published.
+
+The full suite, PostgreSQL/MariaDB, live remote services, deployment and RAM
+measurements were not checked. Existing PDF form-copy, missing-static-directory
+and asynchronous streaming warnings remain. Full PDF/A standards certification
+and sandboxing installed providers are outside this boundary; uncertain ingestion
+effects still require the #23 explicit reconciliation procedure.

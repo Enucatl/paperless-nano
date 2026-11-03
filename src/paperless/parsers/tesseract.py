@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Final
@@ -113,12 +114,26 @@ class RasterisedDocumentParser:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def __init__(self, logging_group: object | None = None) -> None:
+    def __init__(
+        self,
+        logging_group: object | None = None,
+        *,
+        configuration: dict | None = None,
+    ) -> None:
         settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
         self.tempdir = Path(
             tempfile.mkdtemp(prefix="paperless-", dir=settings.SCRATCH_DIR),
         )
-        self.settings = OcrConfig()
+        self.settings = (
+            SimpleNamespace(**configuration["ocr"])
+            if configuration is not None
+            else OcrConfig()
+        )
+        self.execution = (
+            SimpleNamespace(**configuration["execution"])
+            if configuration is not None
+            else settings
+        )
         self.archive_path: Path | None = None
         self.text: str | None = None
         self.date: datetime.datetime | None = None
@@ -271,7 +286,7 @@ class RasterisedDocumentParser:
             # need to use threads, since this will be run in daemonized
             # processes via the task library.
             "use_threads": True,
-            "jobs": settings.THREADS_PER_WORKER,
+            "jobs": self.execution.THREADS_PER_WORKER,
             "language": self.settings.language,
             "output_type": self.settings.output_type,
             "progress_bar": False,
@@ -357,6 +372,12 @@ class RasterisedDocumentParser:
                     f"There is an issue with PAPERLESS_OCR_USER_ARGS, so "
                     f"they will not be used. Error: {e}",
                 )
+
+        # User OCR arguments cannot bypass the worker's engine concurrency bound.
+        ocrmypdf_args["jobs"] = max(
+            1,
+            min(int(ocrmypdf_args["jobs"]), self.execution.THREADS_PER_WORKER),
+        )
 
         if (
             self.settings.max_image_pixel is not None

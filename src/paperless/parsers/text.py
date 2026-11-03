@@ -12,6 +12,7 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from typing import Self
 
@@ -135,7 +136,17 @@ class TextDocumentParser:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def __init__(self, logging_group: object = None) -> None:
+    def __init__(
+        self,
+        logging_group: object = None,
+        *,
+        configuration: dict | None = None,
+    ) -> None:
+        self.execution = (
+            SimpleNamespace(**configuration["execution"])
+            if configuration is not None
+            else settings
+        )
         settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
         self._tempdir = Path(
             tempfile.mkdtemp(prefix="paperless-", dir=settings.SCRATCH_DIR),
@@ -251,7 +262,7 @@ class TextDocumentParser:
         img = Image.new("RGB", (500, 700), color="white")
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype(
-            font=settings.THUMBNAIL_FONT_NAME,
+            font=self.execution.THUMBNAIL_FONT_NAME,
             size=20,
             layout_engine=ImageFont.Layout.BASIC,
         )

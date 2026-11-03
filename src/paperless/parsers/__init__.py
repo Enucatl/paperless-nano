@@ -5,10 +5,11 @@ This module defines ParserProtocol — the structural contract that every
 document parser must satisfy, whether it is a built-in parser shipped with
 Paperless-ngx or a third-party parser installed via a Python entrypoint.
 
-Phase 1/2 scope: only the Protocol is defined here. The transitional
-DocumentParser ABC (Phase 3) and concrete built-in parsers (Phase 3+) will
-be added in later phases, so there are intentionally no imports of parser
-implementations here.
+Existing plugins retain this protocol. Providers may instead implement the
+explicit request/result boundary in ``paperless.parsers.contract`` and expose
+the same class-level registry metadata, MIME types and scoring. The core adapts
+existing plugins through ``LegacyParserProvider``. No implementation is imported
+by this interface module.
 
 Usage example (third-party parser)::
 
@@ -94,23 +95,14 @@ class ParserContext:
         or ``None`` when the document did not arrive via a mail rule.
         Used by ``MailDocumentParser`` to select the PDF layout.
 
-    Notes
-    -----
-    Future fields (not yet implemented):
-
-    * ``output_type`` — PDF/A variant for archive generation
-      (replaces ``settings.OCR_OUTPUT_TYPE`` reads inside parsers).
-    * ``ocr_mode`` — skip-text, redo, force, etc.
-      (replaces ``settings.OCR_MODE`` reads inside parsers).
-    * ``ocr_language`` — Tesseract language string.
-      (replaces ``settings.OCR_LANGUAGE`` reads inside parsers).
-
-    When those fields are added the consumer will read from Django
-    settings once and populate them here, decoupling parsers from
-    ``settings.*`` entirely.
+    configuration : dict | None
+        Effective OCR, remote, execution and mail-layout values resolved by
+        the core. Older plugins may ignore this optional extension. New
+        providers use the versioned request in ``paperless.parsers.contract``.
     """
 
     mailrule_id: int | None = None
+    configuration: dict | None = None
 
 
 @runtime_checkable

@@ -40,6 +40,9 @@ from documents.models import DocumentType
 from documents.models import StoragePath
 from documents.models import Tag
 from documents.models import WorkflowTrigger
+from documents.parser_operations import configured_parser
+from documents.parser_operations import effective_configuration
+from documents.parser_operations import run_parser
 from documents.parsers import ParseError
 from documents.permissions import PermissionsSpec
 from documents.permissions import set_permissions_for_objects
@@ -63,10 +66,12 @@ from paperless.config import BarcodeConfig
 from paperless.config import OcrConfig
 from paperless.config import RemoteOCRConfig
 from paperless.models import ArchiveFileGenerationChoices
-from paperless.parsers import ParserContext
-from paperless.parsers import ParserProtocol
+from paperless.parsers.contract import resolve_reference
 from paperless.parsers.registry import get_parser_registry
 from paperless.parsers.utils import pdf_born_digital_text
+
+if TYPE_CHECKING:
+    from paperless.parsers import ParserProtocol
 
 LOGGING_NAME: Final[str] = "paperless.consumer"
 
@@ -129,6 +134,8 @@ def should_produce_archive(
     mime_type: str,
     document_path: Path,
     log: logging.Logger | None = None,
+    *,
+    configuration: dict | None = None,
 ) -> bool:
     """Return True if a PDF/A archive should be produced for this document.
 
@@ -149,7 +156,11 @@ def should_produce_archive(
         _log.debug("Archive: no - parser cannot produce archives")
         return False
 
-    generation = OcrConfig().archive_file_generation
+    generation = (
+        configuration["ocr"]["archive_file_generation"]
+        if configuration
+        else OcrConfig().archive_file_generation
+    )
 
     if generation == ArchiveFileGenerationChoices.ALWAYS:
         _log.debug("Archive: yes - ARCHIVE_FILE_GENERATION=always")
@@ -498,11 +509,14 @@ class ConsumerPlugin(
             self.run_pre_consume_script()
 
             # This doesn't parse the document yet, but gives us a parser.
-            with parser_class() as document_parser:
-                document_parser.configure(
-                    ParserContext(mailrule_id=self.input_doc.mailrule_id),
-                )
-
+            configuration = effective_configuration(
+                mailrule_id=self.input_doc.mailrule_id
+            )
+            with configured_parser(
+                parser_class,
+                configuration,
+                mailrule_id=self.input_doc.mailrule_id,
+            ) as document_parser:
                 self.log.debug(
                     f"Parser: {document_parser.name} v{document_parser.version}",
                 )
@@ -531,40 +545,35 @@ class ConsumerPlugin(
                     )
                     self.log.debug(f"Parsing {self.filename}...")
 
-                    produce_archive = should_produce_archive(
-                        document_parser,
-                        mime_type,
-                        self.working_copy,
-                        self.log,
-                    )
                     if self.input_doc.job_id:
-                        from documents.ingestion_jobs import record_provider
+                        from documents.jobs import job_directory
 
-                        record_provider(
-                            self.input_doc.job_id,
-                            document_parser,
-                            produce_archive=produce_archive,
-                        )
-                    document_parser.parse(
+                        directory = job_directory(self.input_doc.job_id)
+                    else:
+                        directory = Path(tmpdir)
+                    parsed = run_parser(
+                        document_parser,
                         self.working_copy,
                         mime_type,
-                        produce_archive=produce_archive,
+                        self.filename,
+                        configuration,
+                        directory,
+                        job_id=self.input_doc.job_id,
+                        allow_remote=allow_remote,
                     )
-
-                    self.log.debug(f"Generating thumbnail for {self.filename}...")
                     self._send_progress(
                         70,
                         100,
                         ProgressStatusOptions.WORKING,
                         ConsumerStatusShortMessage.GENERATING_THUMBNAIL,
                     )
-                    thumbnail = document_parser.get_thumbnail(
-                        self.working_copy,
-                        mime_type,
+                    thumbnail = resolve_reference(directory, parsed["thumbnail"])
+                    text = parsed["text"]
+                    date = (
+                        datetime.datetime.fromisoformat(parsed["date"])
+                        if parsed["date"]
+                        else None
                     )
-
-                    text = document_parser.get_text()
-                    date = document_parser.get_date()
                     if date is None:
                         self._send_progress(
                             90,
@@ -574,11 +583,12 @@ class ConsumerPlugin(
                         )
                         with get_date_parser() as date_parser:
                             date = next(date_parser.parse(self.filename, text), None)
-                    archive_path = document_parser.get_archive_path()
-                    page_count = document_parser.get_page_count(
-                        self.working_copy,
-                        mime_type,
+                    archive_path = (
+                        resolve_reference(directory, parsed["archive"])
+                        if parsed["archive"]
+                        else None
                     )
+                    page_count = parsed["page_count"]
 
                 except ParseError as e:
                     self._fail(
@@ -628,7 +638,9 @@ class ConsumerPlugin(
                         if self.input_doc.job_id:
                             from documents.ingestion_jobs import validate_application
 
-                            validate_application(self.input_doc.job_id)
+                            validate_application(
+                                self.input_doc.job_id, registry=get_parser_registry()
+                            )
                         # store the document.
                         if self.input_doc.root_document_id:
                             # If this is a new version of an existing document, we need
