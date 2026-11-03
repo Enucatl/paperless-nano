@@ -39,7 +39,6 @@ from documents.permissions import set_permissions_for_objects
 from documents.plugins.helpers import DocumentsStatusManager
 from documents.tasks import bulk_update_documents
 from documents.tasks import consume_file
-from documents.tasks import remove_document_from_index
 from documents.updates import modify_document_custom_fields
 from documents.versioning import get_latest_version_for_root
 from documents.versioning import get_root_document
@@ -794,6 +793,7 @@ def merge_as_versions(
     # One batch rather than a task each
     from documents.search import SearchIndexLockError
     from documents.search import get_backend
+    from documents.search_jobs import defer_index_write
 
     try:
         with get_backend().batch_update() as batch:
@@ -805,7 +805,7 @@ def merge_as_versions(
             f"scheduling deferred index removal",
         )
         for source_id in source_ids:
-            remove_document_from_index.apply_async(args=[source_id], countdown=60)
+            defer_index_write(source_id, remove=True)
 
     bulk_update_documents.apply_async(
         kwargs={"document_ids": [root_document_id]},

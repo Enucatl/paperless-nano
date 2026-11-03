@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import tantivy
+from django.conf import settings as django_settings
 
 from documents.search import _schema
 from documents.search._schema import SCHEMA_VERSION
@@ -592,6 +593,8 @@ class TestNeedsRebuildOnFingerprint:
             - It returns False
         """
         settings.SEARCH_LANGUAGE = "en"
-        _write_sentinels(paperless_dirs.index_dir)
+        _write_sentinels(
+            paperless_dirs.index_dir, language=django_settings.SEARCH_LANGUAGE
+        )
 
         assert needs_rebuild(paperless_dirs.index_dir) is False

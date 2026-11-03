@@ -43,7 +43,7 @@ class TestSearchQueryErrorStillBecomesA400:
         THEN:
             - The response is a 400 whose body names the field
         """
-        import documents.search._backend as backend_mod
+        import documents.search._engine as backend_mod
 
         def raise_search_query_error(*args: object, **kwargs: object) -> object:
             raise SearchQueryError("bad value for field 'added'")
@@ -80,7 +80,7 @@ class TestLibraryDefectsPropagate:
             - The exception propagates unconverted, rather than being
               relabeled a 400
         """
-        import documents.search._backend as backend_mod
+        import documents.search._engine as backend_mod
 
         def raise_zero_division(*args: object, **kwargs: object) -> object:
             raise ZeroDivisionError("synthetic bug, unrelated to search grammar")
@@ -151,7 +151,7 @@ class TestSelectionPathsAgreeWithSearch:
         THEN:
             - The response is a 400 whose body names the field
         """
-        import documents.search._backend as backend_mod
+        import documents.search._engine as backend_mod
 
         def raise_search_query_error(*args: object, **kwargs: object) -> object:
             raise SearchQueryError("bad value for field 'added'")
@@ -193,7 +193,7 @@ class TestSelectionPathsAgreeWithSearch:
             - The exception propagates unconverted, rather than being
               relabeled a 400
         """
-        import documents.search._backend as backend_mod
+        import documents.search._engine as backend_mod
 
         def raise_zero_division(*args: object, **kwargs: object) -> object:
             raise ZeroDivisionError("synthetic bug, unrelated to search grammar")
@@ -231,7 +231,7 @@ class TestSelectionPathsAgreeWithSearch:
         THEN:
             - The response is a 400 whose body names the field
         """
-        import documents.search._backend as backend_mod
+        import documents.search._engine as backend_mod
 
         def raise_search_query_error(*args: object, **kwargs: object) -> object:
             raise SearchQueryError("bad value for field 'added'")

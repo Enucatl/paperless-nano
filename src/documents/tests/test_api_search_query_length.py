@@ -21,7 +21,7 @@ from unittest import mock
 import pytest
 from rest_framework import status
 
-import documents.search._backend
+import documents.search._engine
 from documents.views import _MAX_QUERY_LENGTH
 
 if TYPE_CHECKING:
@@ -52,8 +52,8 @@ class TestGetSearchEndpointEnforcesTheCap:
         query = "a" * (_MAX_QUERY_LENGTH + 1)
 
         with mock.patch(
-            "documents.search._backend.parse_user_query",
-            wraps=documents.search._backend.parse_user_query,
+            "documents.search._engine.parse_user_query",
+            wraps=documents.search._engine.parse_user_query,
         ) as parse_spy:
             response = admin_client.get("/api/documents/", {"query": query})
 
@@ -128,8 +128,8 @@ class TestPostSelectionPathsEnforceTheCap:
         query = "a" * (_MAX_QUERY_LENGTH + 1)
 
         with mock.patch(
-            "documents.search._backend.parse_user_query",
-            wraps=documents.search._backend.parse_user_query,
+            "documents.search._engine.parse_user_query",
+            wraps=documents.search._engine.parse_user_query,
         ) as parse_spy:
             response = admin_client.post(
                 "/api/documents/bulk_edit/",
@@ -202,8 +202,8 @@ class TestPostSelectionPathsEnforceTheCap:
         query = "a" * (_MAX_QUERY_LENGTH + 1)
 
         with mock.patch(
-            "documents.search._backend.parse_user_query",
-            wraps=documents.search._backend.parse_user_query,
+            "documents.search._engine.parse_user_query",
+            wraps=documents.search._engine.parse_user_query,
         ) as parse_spy:
             response = admin_client.post(
                 "/api/documents/bulk_download/",

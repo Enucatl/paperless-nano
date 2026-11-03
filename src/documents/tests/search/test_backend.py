@@ -15,9 +15,9 @@ from documents.models import Document
 from documents.models import Note
 from documents.search._backend import SearchMode
 from documents.search._backend import TantivyBackend
-from documents.search._backend import WriteBatch
 from documents.search._backend import get_backend
 from documents.search._backend import reset_backend
+from documents.search._engine import WriteBatch
 from documents.search._schema import REBUILD_MARKER
 from documents.search._schema import needs_rebuild
 from documents.signals.handlers import add_to_index
@@ -99,7 +99,7 @@ class TestWriteBatch:
                 b.add_or_update(doc)
 
         # Writer disposed despite the commit failure.
-        assert batch._raw_writer is None
+        assert batch._batch._raw_writer is None
 
         # Drop the patch so a real writer can be created; a fresh batch must
         # succeed (would raise LockBusy if the previous writer had leaked).
@@ -1190,7 +1190,7 @@ class TestSingleton:
         b2 = get_backend()
 
         assert b1 is not b2
-        assert b2._path == tmp_path / "b"
+        assert b2.engine._path == tmp_path / "b"
 
     @pytest.mark.usefixtures("paperless_dirs")
     def test_reset_forces_new_instance(self) -> None:

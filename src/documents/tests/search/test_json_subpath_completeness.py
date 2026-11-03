@@ -70,7 +70,7 @@ class TestJsonSubpathsAreWrittenAtIndexTime:
         DocumentBarcodeFactory(document=doc, value="a barcode")
         backend.add_or_update(doc)
 
-        index = backend._index
+        index = backend.engine._index
         searcher = index.searcher()
         hits = searcher.search(
             tantivy.Query.term_query(index.schema, "id", doc.pk),

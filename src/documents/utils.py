@@ -52,7 +52,7 @@ class QuerySetStream(Generic[_M]):
     prefetches one batch at a time rather than for the whole queryset).
 
     Subclass to layer additional per-batch work on top (see
-    ``documents.search._backend._DocumentViewerStream``) by overriding
+    ``documents.search._persistence._DocumentViewerStream``) by overriding
     ``__iter__`` -- ``__len__`` and the constructor are inherited for free.
     """
 

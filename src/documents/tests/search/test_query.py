@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 import pytest
 import tantivy
 import time_machine
+from django.conf import settings as django_settings
 
-from documents.search._backend import build_permission_filter
+from documents.search._engine import build_permission_filter
 from documents.search._errors import InvalidDateQuery
 from documents.search._errors import InvalidNumberQuery
 from documents.search._errors import MultipleSearchQueryErrors
@@ -17,6 +18,7 @@ from documents.search._query import parse_simple_text_highlight_query
 from documents.search._query import parse_user_query
 from documents.search._schema import build_schema
 from documents.search._tokenizer import register_tokenizers
+from documents.search._types import SearchVisibility
 
 if TYPE_CHECKING:
     from django.contrib.auth.base_user import AbstractBaseUser
@@ -57,7 +59,16 @@ class TestParseUserQuery:
         THEN:
             - It returns a tantivy.Query, the object type callers depend on
         """
-        assert isinstance(parse_user_query(query_index, "invoice", UTC), tantivy.Query)
+        assert isinstance(
+            parse_user_query(
+                query_index,
+                "invoice",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            ),
+            tantivy.Query,
+        )
 
     @pytest.mark.parametrize(
         "raw_query",
@@ -88,7 +99,16 @@ class TestParseUserQuery:
               query
         """
         settings.ADVANCED_FUZZY_SEARCH_THRESHOLD = 0.5
-        assert isinstance(parse_user_query(query_index, raw_query, UTC), tantivy.Query)
+        assert isinstance(
+            parse_user_query(
+                query_index,
+                raw_query,
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            ),
+            tantivy.Query,
+        )
 
     def test_date_keyword_resolves_without_raising(
         self,
@@ -106,7 +126,13 @@ class TestParseUserQuery:
               tantivy.Query
         """
         with time_machine.travel(datetime(2026, 3, 28, 12, 0, tzinfo=UTC), tick=False):
-            q = parse_user_query(query_index, "created:today", UTC)
+            q = parse_user_query(
+                query_index,
+                "created:today",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         assert isinstance(q, tantivy.Query)
 
     @pytest.mark.parametrize(
@@ -135,7 +161,16 @@ class TestParseUserQuery:
         THEN:
             - It returns a tantivy.Query rather than raising
         """
-        assert isinstance(parse_user_query(query_index, raw_query, UTC), tantivy.Query)
+        assert isinstance(
+            parse_user_query(
+                query_index,
+                raw_query,
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            ),
+            tantivy.Query,
+        )
 
     def test_invalid_date_propagates_not_swallowed(
         self,
@@ -154,7 +189,13 @@ class TestParseUserQuery:
               400
         """
         with pytest.raises(InvalidDateQuery) as exc_info:
-            parse_user_query(query_index, "created:202023", UTC)
+            parse_user_query(
+                query_index,
+                "created:202023",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         assert exc_info.value.field == "created"
         assert exc_info.value.value == "202023"
 
@@ -171,7 +212,13 @@ class TestParseUserQuery:
             - It raises InvalidNumberQuery naming the field and value
         """
         with pytest.raises(InvalidNumberQuery) as exc_info:
-            parse_user_query(query_index, "asn:notanumber", UTC)
+            parse_user_query(
+                query_index,
+                "asn:notanumber",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         assert exc_info.value.field == "asn"
         assert exc_info.value.value == "notanumber"
 
@@ -195,6 +242,8 @@ class TestParseUserQuery:
                 query_index,
                 "created:notadate AND asn:notanumber",
                 UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
             )
         assert len(exc_info.value.errors) == 2
         kinds = {type(e) for e in exc_info.value.errors}
@@ -331,7 +380,7 @@ class TestPermissionFilter:
         """
         self._add_doc(perm_index, doc_id=1, owner_id=None)
         user = django_user_model(pk=99)
-        perm = build_permission_filter(perm_index.schema, user)
+        perm = build_permission_filter(perm_index.schema, SearchVisibility(user.pk, ()))
         assert perm_index.searcher().search(perm, limit=10).count == 1
 
     def test_perm_owned_by_user_is_visible(
@@ -350,7 +399,7 @@ class TestPermissionFilter:
         """
         self._add_doc(perm_index, doc_id=2, owner_id=42)
         user = django_user_model(pk=42)
-        perm = build_permission_filter(perm_index.schema, user)
+        perm = build_permission_filter(perm_index.schema, SearchVisibility(user.pk, ()))
         assert perm_index.searcher().search(perm, limit=10).count == 1
 
     def test_perm_owned_by_other_not_visible(
@@ -369,7 +418,7 @@ class TestPermissionFilter:
         """
         self._add_doc(perm_index, doc_id=3, owner_id=42)
         user = django_user_model(pk=99)
-        perm = build_permission_filter(perm_index.schema, user)
+        perm = build_permission_filter(perm_index.schema, SearchVisibility(user.pk, ()))
         assert perm_index.searcher().search(perm, limit=10).count == 0
 
     def test_perm_shared_viewer_is_visible(
@@ -388,7 +437,7 @@ class TestPermissionFilter:
         """
         self._add_doc(perm_index, doc_id=4, owner_id=42, viewer_ids=(99,))
         user = django_user_model(pk=99)
-        perm = build_permission_filter(perm_index.schema, user)
+        perm = build_permission_filter(perm_index.schema, SearchVisibility(user.pk, ()))
         assert perm_index.searcher().search(perm, limit=10).count == 1
 
     def test_perm_only_owned_docs_hidden_from_others(
@@ -408,7 +457,7 @@ class TestPermissionFilter:
         self._add_doc(perm_index, doc_id=5, owner_id=10)  # owned by 10
         self._add_doc(perm_index, doc_id=6, owner_id=None)  # unowned
         user = django_user_model(pk=20)
-        perm = build_permission_filter(perm_index.schema, user)
+        perm = build_permission_filter(perm_index.schema, SearchVisibility(user.pk, ()))
         assert perm_index.searcher().search(perm, limit=10).count == 1  # only unowned
 
 
@@ -492,7 +541,13 @@ class TestEmitErrorContract:
               library's own test suite's job)
         """
         with pytest.raises(SearchQueryError) as exc_info:
-            parse_user_query(query_index, "notes.user:*", UTC)
+            parse_user_query(
+                query_index,
+                "notes.user:*",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         assert str(exc_info.value) == (
             "Existence searches (field:*) are not supported for field 'notes.user'."
         )
@@ -519,4 +574,10 @@ class TestEmitErrorContract:
         """
         settings.ADVANCED_FUZZY_SEARCH_THRESHOLD = 0.5
         with pytest.raises(SearchQueryError):
-            parse_user_query(query_index, "invoice NOT title:[a to b]", UTC)
+            parse_user_query(
+                query_index,
+                "invoice NOT title:[a to b]",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )

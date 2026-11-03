@@ -22,6 +22,7 @@ from datetime import UTC
 from typing import TYPE_CHECKING
 
 import pytest
+from django.conf import settings as django_settings
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
@@ -73,7 +74,13 @@ class TestJsonExistsIsUserError:
         """
         with caplog.at_level(logging.WARNING, logger="paperless.search"):
             with pytest.raises(SearchQueryError) as excinfo:
-                parse_user_query(query_index, query, UTC)
+                parse_user_query(
+                    query_index,
+                    query,
+                    UTC,
+                    language=django_settings.SEARCH_LANGUAGE,
+                    fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+                )
         assert query.split(":", maxsplit=1)[0] in str(excinfo.value)
         assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
 

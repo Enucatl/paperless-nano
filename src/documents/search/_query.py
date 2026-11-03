@@ -10,7 +10,6 @@ from typing import Final
 import regex
 import tantivy
 import whoosh_compat as wc
-from django.conf import settings
 from whoosh_compat.emitters.tantivy_ import emit as tantivy_emit
 from whoosh_compat.errors import Cause
 from whoosh_compat.errors import Diagnostic
@@ -529,6 +528,9 @@ def parse_user_query(
     index: tantivy.Index,
     raw_query: str,
     tz: tzinfo,
+    *,
+    language: str | None,
+    fuzzy_threshold: float | None,
 ) -> tantivy.Query:
     """
     Parse user query through whoosh-compat, then widen its leaves and emit,
@@ -559,7 +561,7 @@ def parse_user_query(
        mismatch is logged and re-raised, and an INTERNAL defect is
        re-raised.
     """
-    registry = get_field_registry(settings.SEARCH_LANGUAGE)
+    registry = get_field_registry(language)
     result = wc.parse(
         raw_query,
         registry=registry,
@@ -570,13 +572,9 @@ def parse_user_query(
     if result.diagnostics:
         raise _diagnostics_to_error(result.diagnostics)
 
-    fuzzy_on = settings.ADVANCED_FUZZY_SEARCH_THRESHOLD is not None
+    fuzzy_on = fuzzy_threshold is not None
     cjk = _has_cjk(raw_query)
-    emit_registry = (
-        _get_emit_field_registry(settings.SEARCH_LANGUAGE)
-        if cjk or fuzzy_on
-        else registry
-    )
+    emit_registry = _get_emit_field_registry(language) if cjk or fuzzy_on else registry
     negated = _negated_leaf_ids(result.ast) if fuzzy_on else frozenset()
 
     def emit_widened(*, fuzzy: bool) -> tantivy.Query:

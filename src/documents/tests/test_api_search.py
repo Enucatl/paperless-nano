@@ -946,7 +946,7 @@ class TestDocumentSearchApi(DirectoriesMixin, APITestCase):
         results = response.data["results"]
         self.assertEqual({r["id"] for r in results}, {1, 2})
 
-    @mock.patch("documents.search._backend.parse_user_query")
+    @mock.patch("documents.search._engine.parse_user_query")
     def test_search_parser_bug_surfaces_as_500_not_400(self, m) -> None:
         """
         GIVEN:

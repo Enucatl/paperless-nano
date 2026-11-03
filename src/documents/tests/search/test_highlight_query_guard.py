@@ -152,7 +152,7 @@ class TestHighlightGuardDiscriminatesOnValueError:
               sibling notes_text guard, never mistaking a real library
               defect for a harmless syntax error
         """
-        import documents.search._backend as backend_mod
+        import documents.search._engine as backend_mod
 
         def raise_runtime_error(*args: object, **kwargs: object) -> object:
             raise RuntimeError("synthetic bug, unrelated to query syntax")

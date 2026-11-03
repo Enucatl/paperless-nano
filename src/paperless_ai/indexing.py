@@ -39,7 +39,7 @@ RAG_CHUNK_OVERLAP = 200
 
 # update_llm_index(): row count per .iterator() batch when streaming
 # documents for a rebuild/update via QuerySetStream, matching
-# _DocumentViewerStream's chunk size in documents/search/_backend.py.
+# _DocumentViewerStream's chunk size in documents/search/_persistence.py.
 _INDEX_STREAM_CHUNK_SIZE = 1000
 
 

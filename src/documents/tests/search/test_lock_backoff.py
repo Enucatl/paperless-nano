@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 import filelock
 import pytest
 
-from documents.search._backend import _LOCK_BACKOFF_CAP
-from documents.search._backend import _LOCK_RETRY_ATTEMPTS
-from documents.search._backend import _LOCK_TIMEOUT_SECONDS
 from documents.search._backend import SearchIndexLockError
 from documents.search._backend import TantivyBackend
+from documents.search_jobs import _LOCK_BACKOFF_CAP
+from documents.search_jobs import _LOCK_RETRY_ATTEMPTS
+from documents.search_jobs import _LOCK_TIMEOUT_SECONDS
 from documents.tasks import index_document
 from documents.tasks import remove_document_from_index
 from paperless_testing.factories import DocumentFactory
@@ -71,11 +71,11 @@ class TestWriteBatchLockRetry:
         sleep_values: list[float] = []
 
         mocker.patch(
-            "documents.search._backend.filelock.FileLock.acquire",
+            "documents.search._engine.filelock.FileLock.acquire",
             side_effect=flaky_acquire,
         )
         mock_sleep = mocker.patch(
-            "documents.search._backend.time.sleep",
+            "documents.search_jobs.time.sleep",
             side_effect=lambda s: sleep_values.append(s),
         )
 
@@ -99,10 +99,10 @@ class TestWriteBatchLockRetry:
     ) -> None:
         """All acquire attempts raise Timeout — WriteBatch must raise SearchIndexLockError."""
         mocker.patch(
-            "documents.search._backend.filelock.FileLock.acquire",
+            "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
-        mocker.patch("documents.search._backend.time.sleep")
+        mocker.patch("documents.search_jobs.time.sleep")
 
         with pytest.raises(SearchIndexLockError):
             with disk_backend.batch_update(lock_timeout=_LOCK_TIMEOUT_SECONDS):
@@ -115,12 +115,12 @@ class TestWriteBatchLockRetry:
     ) -> None:
         """Sleep values must always lie in [0, _LOCK_BACKOFF_CAP] across many samples."""
         mocker.patch(
-            "documents.search._backend.filelock.FileLock.acquire",
+            "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
         sleep_values: list[float] = []
         mocker.patch(
-            "documents.search._backend.time.sleep",
+            "documents.search_jobs.time.sleep",
             side_effect=lambda s: sleep_values.append(s),
         )
         for _ in range(50):
@@ -148,10 +148,10 @@ class TestAddOrUpdateDeferredScheduling:
         doc = DocumentFactory()
 
         mocker.patch(
-            "documents.search._backend.filelock.FileLock.acquire",
+            "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
-        mocker.patch("documents.search._backend.time.sleep")
+        mocker.patch("documents.search_jobs.time.sleep")
         mock_apply = mocker.patch("documents.tasks.index_document.apply_async")
 
         # Must NOT raise
@@ -168,10 +168,10 @@ class TestAddOrUpdateDeferredScheduling:
         doc_id = 503
 
         mocker.patch(
-            "documents.search._backend.filelock.FileLock.acquire",
+            "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
-        mocker.patch("documents.search._backend.time.sleep")
+        mocker.patch("documents.search_jobs.time.sleep")
         mock_apply = mocker.patch(
             "documents.tasks.remove_document_from_index.apply_async",
         )

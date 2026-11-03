@@ -156,7 +156,9 @@ class TestUpgradeFromReleasedV1Index:
               write against it raised tantivy's own schema-mismatch
               ValueError
         """
-        open_or_rebuild_index(released_v1_index)
+        open_or_rebuild_index(
+            released_v1_index, language=django_settings.SEARCH_LANGUAGE
+        )
 
         tantivy.Index(build_schema(), path=str(released_v1_index))
 
@@ -175,7 +177,9 @@ class TestUpgradeFromReleasedV1Index:
               actually wrote, otherwise every startup wipes and reindexes
               the whole corpus
         """
-        open_or_rebuild_index(released_v1_index)
+        open_or_rebuild_index(
+            released_v1_index, language=django_settings.SEARCH_LANGUAGE
+        )
 
         assert needs_rebuild(released_v1_index) is False
 
@@ -221,7 +225,9 @@ class TestCorruptedIndex:
               hard-failing indefinitely, since the sentinel already
               matched and reported the index as up to date
         """
-        open_or_rebuild_index(current_index_missing_meta_json)
+        open_or_rebuild_index(
+            current_index_missing_meta_json, language=django_settings.SEARCH_LANGUAGE
+        )
 
         assert (current_index_missing_meta_json / "meta.json").exists()
         tantivy.Index.open(str(current_index_missing_meta_json))

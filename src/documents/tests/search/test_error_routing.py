@@ -11,6 +11,7 @@ from datetime import UTC
 from typing import TYPE_CHECKING
 
 import pytest
+from django.conf import settings as django_settings
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
@@ -293,7 +294,13 @@ class TestRealQueriesRouteCorrectly:
             - It raises SearchQueryError naming "title"
         """
         with pytest.raises(SearchQueryError) as excinfo:
-            parse_user_query(query_index, "title:[a to b]", UTC)
+            parse_user_query(
+                query_index,
+                "title:[a to b]",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         assert "title" in str(excinfo.value)
 
     def test_wildcard_on_a_numeric_field_is_a_400_naming_the_field(
@@ -310,7 +317,13 @@ class TestRealQueriesRouteCorrectly:
             - It raises SearchQueryError naming "asn"
         """
         with pytest.raises(SearchQueryError) as excinfo:
-            parse_user_query(query_index, "asn:12*", UTC)
+            parse_user_query(
+                query_index,
+                "asn:12*",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         assert "asn" in str(excinfo.value)
 
     def test_single_char_bracket_range_is_a_400_naming_field_and_value(
@@ -327,7 +340,13 @@ class TestRealQueriesRouteCorrectly:
               "200[1-9]"
         """
         with pytest.raises(SearchQueryError) as excinfo:
-            parse_user_query(query_index, "title:200[1-9]", UTC)
+            parse_user_query(
+                query_index,
+                "title:200[1-9]",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )
         message = str(excinfo.value)
         assert "title" in message
         assert "200[1-9]" in message
@@ -355,4 +374,10 @@ class TestRealQueriesRouteCorrectly:
 
         monkeypatch.setattr(query_mod, "tantivy_emit", raise_internal)
         with pytest.raises(QueryError):
-            parse_user_query(query_index, "invoice", UTC)
+            parse_user_query(
+                query_index,
+                "invoice",
+                UTC,
+                language=django_settings.SEARCH_LANGUAGE,
+                fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+            )

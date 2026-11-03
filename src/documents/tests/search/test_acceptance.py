@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import time_machine
+from django.conf import settings as django_settings
 
 from documents.models import CustomField
 from documents.models import CustomFieldInstance
@@ -123,8 +124,14 @@ class TestFieldBoosts:
             title="nothing",
             content="urgent matter here",
         )
-        query = parse_user_query(backend._index, "urgent", UTC)
-        searcher = backend._index.searcher()
+        query = parse_user_query(
+            backend.engine._index,
+            "urgent",
+            UTC,
+            language=django_settings.SEARCH_LANGUAGE,
+            fuzzy_threshold=django_settings.ADVANCED_FUZZY_SEARCH_THRESHOLD,
+        )
+        searcher = backend.engine._index.searcher()
         results = searcher.search(query, limit=10)
         ranked_ids = [
             searcher.doc(addr).to_dict()["id"][0] for _score, addr in results.hits

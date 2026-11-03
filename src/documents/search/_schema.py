@@ -277,7 +277,7 @@ def needs_rebuild(index_dir: Path) -> bool:
     if (index_dir / REBUILD_MARKER).exists():
         logger.warning("Previous search index rebuild did not finish - rebuilding.")
         return True
-    return _settings_mismatch(index_dir)
+    return _settings_mismatch(index_dir, language=settings.SEARCH_LANGUAGE)
 
 
 @contextmanager
@@ -295,7 +295,7 @@ def rebuild_in_progress(index_dir: Path) -> Iterator[None]:
     marker.unlink(missing_ok=True)
 
 
-def _settings_mismatch(index_dir: Path) -> bool:
+def _settings_mismatch(index_dir: Path, *, language: str | None) -> bool:
     """
     Check the stamped settings against the current configuration.
 
@@ -316,7 +316,7 @@ def _settings_mismatch(index_dir: Path) -> bool:
         if data.get("schema_version") != SCHEMA_VERSION:
             logger.info("Search index schema version mismatch - rebuilding.")
             return True
-        if "language" not in data or data["language"] != settings.SEARCH_LANGUAGE:
+        if "language" not in data or data["language"] != language:
             logger.info("Search index language changed - rebuilding.")
             return True
         if data.get("schema_fingerprint") != schema_fingerprint():
@@ -344,21 +344,21 @@ def wipe_index(index_dir: Path) -> None:
             child.unlink()
 
 
-def _write_sentinels(index_dir: Path) -> None:
+def _write_sentinels(index_dir: Path, *, language: str | None) -> None:
     """Write .index_settings.json so the next index open can skip rebuilding."""
     settings_file = index_dir / ".index_settings.json"
     settings_file.write_text(
         json.dumps(
             {
                 "schema_version": SCHEMA_VERSION,
-                "language": settings.SEARCH_LANGUAGE,
+                "language": language,
                 "schema_fingerprint": schema_fingerprint(),
             },
         ),
     )
 
 
-def open_or_rebuild_index(index_dir: Path | None = None) -> tantivy.Index:
+def open_or_rebuild_index(index_dir: Path, *, language: str | None) -> tantivy.Index:
     """
     Open the Tantivy index, creating or rebuilding as needed.
 
@@ -367,19 +367,18 @@ def open_or_rebuild_index(index_dir: Path | None = None) -> tantivy.Index:
     index with the current schema and configuration.
 
     Args:
-        index_dir: Path to index directory (defaults to settings.INDEX_DIR)
+        index_dir: Path to index directory
+        language: Effective index language
 
     Returns:
         Opened Tantivy index (caller must register custom tokenizers)
     """
-    if index_dir is None:
-        index_dir = cast("Path", settings.INDEX_DIR)
     if not index_dir.exists():
         return tantivy.Index(build_schema())
-    if _settings_mismatch(index_dir):
+    if _settings_mismatch(index_dir, language=language):
         wipe_index(index_dir)
         idx = tantivy.Index(build_schema(), path=str(index_dir))
-        _write_sentinels(index_dir)
+        _write_sentinels(index_dir, language=language)
         return idx
     try:
         return tantivy.Index.open(str(index_dir))
@@ -389,5 +388,5 @@ def open_or_rebuild_index(index_dir: Path | None = None) -> tantivy.Index:
         )
         wipe_index(index_dir)
         idx = tantivy.Index(build_schema(), path=str(index_dir))
-        _write_sentinels(index_dir)
+        _write_sentinels(index_dir, language=language)
         return idx

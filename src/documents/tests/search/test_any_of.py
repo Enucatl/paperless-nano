@@ -38,6 +38,6 @@ class TestAnyOf:
         """
         index_document(title="x", content="x")
 
-        results = backend._index.searcher().search(_any_of([]), limit=10)
+        results = backend.engine._index.searcher().search(_any_of([]), limit=10)
 
         assert len(results.hits) == 0

@@ -995,3 +995,84 @@ measurements were not checked. Existing PDF form-copy, missing-static-directory
 and asynchronous streaming warnings remain. Full PDF/A standards certification
 and sandboxing installed providers are outside this boundary; uncertain ingestion
 effects still require the #23 explicit reconciliation procedure.
+
+## Search records and execution (#26)
+
+The public `documents.search` API remains the application-facing adapter.
+`search._backend` coordinates persistence and engine calls;
+`search._persistence` resolves roots, prefetches index relations and effective
+version content, and fetches direct user/group grants in chunks. Group grants
+stay group IDs so removing a user from a group takes effect on the next query.
+The adapter fetches current memberships for each permission-filtered operation.
+
+`search._records.document_to_record` maps that state to plain field/value lists.
+It preserves normalized text, effective version content and barcodes, structured
+notes/custom fields, autocomplete terms, date-range handling, and permissions.
+`search._engine.TantivyEngine` accepts those records and explicit visibility IDs;
+it neither reads ORM state nor dispatches tasks. Query language, fuzzy threshold
+and the active request timezone are explicit inputs, resolved per request rather
+than cached in the singleton. Index opening and rebuild sentinels receive the
+configured index language explicitly. The existing Tantivy schema and query
+syntax are unchanged.
+
+The engine attempts one writer-lock acquisition and reports failure.
+`documents.search_jobs` owns the existing four lock attempts, capped exponential
+jitter, and the 60-second deferred Celery dispatch. Deferred task names and
+bounded Celery autoretry remain unchanged. Batch operations propagate exhausted
+lock errors; the single-document adapter and merge-removal caller retain their
+existing deferred behavior. A deferred update reads current database state,
+rather than queuing a captured record. A missing row is skipped; deletion paths
+continue to remove index IDs explicitly, including rows already deleted.
+
+The batch adapter acquires the writer **before** reading records. Durable
+reprocessing and ingestion completion therefore retain their existing fresh-read
+ordering, and update completion still indexes final workflow state. Rebuilds
+stream records and permission grants in chunks and preserve progress callbacks,
+interrupted-rebuild markers and fresh writer handles across processes. Writer
+initialization failures also release the file lock. The engine retains atomic
+batch commit/rollback and releases the writer after commit failures.
+
+This is an ownership extraction, not a search-engine replacement or a residency
+change. API responses, query semantics, permission policies, database choices,
+workflow ordering and document job recovery semantics are unchanged. No RAM
+saving is inferred from this source change. #27 still requires a measured
+comparison on a representative deployment and workload.
+
+### Search boundary verification (2026-11-03)
+
+The focused selection passed **632 cases**: all `src/documents/tests/search/`
+and `src/documents/tests/test_api_search*.py`, including the six new boundary
+tests. The broader selection ran **1,448 cases**: **1,443 passed** initially;
+three admin tests still accessed the moved private engine attributes, and two
+unchanged file-handling tests failed around their hard-coded document ID 1.
+After updating the admin helper, all **85 cases** in `test_admin.py` and
+`test_file_handling.py` passed together. Thus **2,080 selected cases passed across
+these broad and focused runs**; the 85-case rerun overlaps the broader selection
+and is not added to that total. Repeating the identical 1,448-case broad
+selection against the exact pre-change commit `dd6b80b14` produced **1,446 passed
+and the same two file-handling failures**, confirming preexisting order-dependent
+filename assumptions. Those unrelated tests were not changed.
+
+All runs used disposable `docker run --rm --userns=host` containers as an
+unprivileged user, with read-only source copied into temporary Docker storage.
+Dependencies and test artifacts stayed inside that storage. The environment was
+Python 3.14.2, Django 5.2.17, SQLite, Ghostscript 10.05.1, frozen uv testing/lint
+dependencies, and `pytest -o addopts='' -n 4 --dist=loadscope --randomly-seed=1
+--tb=short`. The broad selection was:
+
+- `src/documents/tests/`: `test_document_jobs.py`, `test_ingestion_jobs.py`, `test_job_callbacks.py`, `test_document_jobs_command.py`, `test_tasks.py`, `test_bulk_edit.py`, `test_api_bulk_edit.py`, `test_scheduler_api.py`, `test_api_documents.py`, `test_api_permissions.py`, `test_api_document_versions.py`, `test_version_conditionals.py`, `test_file_handling.py`, `test_document_updates.py`, `test_workflows.py`, `test_consumer.py`, `test_consumer_archive.py`, `test_management.py`, `test_management_exporter.py`, `test_management_importer.py`, `test_task_signals.py`, `test_worker_outcomes.py`, `test_consumer_api.py`, `test_document_maintenance_updates.py`, `test_bulk_document_updates.py`, `test_storage_path_updates.py`, `test_merge_documents_as_versions.py`, `test_admin.py`, `test_ingestion_followups.py`, `test_api_workflows.py`, `test_permission_filtering_security.py`, `test_classification.py`, `test_classifier_activation.py`, `test_parser_operations.py`, `test_thumbnail_operations.py`.
+- `src/paperless/tests/`: `test_import_boundaries.py`, `test_worker_trace.py`, `test_worker_serialization.py`, `test_disabled_feature_workflows.py`, `test_celery.py`, `test_checks.py`, `test_checks_v3.py`, `test_docker_service_checks.py`.
+- `src/paperless_worker/tests/` (entire directory).
+- `src/paperless_ai/tests/`: `test_ai_classifier.py`, `test_ai_indexing.py`, `test_lazy_imports.py`, `test_classification_provider.py`.
+
+Coverage includes query syntax/errors/highlights, Unicode/CJK, fuzzy and date
+queries, permission revocation, final workflow state, root/version records,
+chunked permission loading, plain records without database access, explicit
+query settings, lock retries/deferred tasks, writer failure cleanup, rebuilds,
+durable job recovery and normal/lean-worker compatibility.
+
+`makemigrations --check --dry-run --skip-checks` found no missing migrations.
+Changed-file hooks passed, including Ruff, Prettier and codespell. No production
+runtime, full suite, PostgreSQL/MariaDB, live remote services, RAM measurements or
+long-idle deployment workload was checked. No push, deployment or image publication
+was performed. The preexisting workflow and memory-report changes remain excluded.
