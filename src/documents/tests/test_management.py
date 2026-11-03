@@ -18,7 +18,10 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 from documents.file_handling import generate_filename
+from documents.jobs import RejectedResult
+from documents.jobs import job_directory
 from documents.models import Document
+from documents.models import DocumentJob
 from documents.tasks import update_document_content_maybe_archive_file
 from paperless_testing.assertions import FileSystemAssertsMixin
 from paperless_testing.dirs import DirectoriesMixin
@@ -69,7 +72,12 @@ class TestArchiver(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         doc.save()
         shutil.copy(sample_file, doc.source_path)
 
-        update_document_content_maybe_archive_file(doc.pk)
+        with self.assertRaisesMessage(RejectedResult, "No parser for sdgfh"):
+            update_document_content_maybe_archive_file(doc.pk)
+
+        job = DocumentJob.objects.get()
+        self.assertEqual(job.status, DocumentJob.Status.REJECTED)
+        self.assertIsFile(job_directory(job.pk) / job.input["staged_name"])
 
         doc = Document.objects.get(id=doc.id)
 

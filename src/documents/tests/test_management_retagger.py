@@ -425,26 +425,29 @@ class TestRetaggerStoragePath(DirectoriesMixin):
 @pytest.mark.management
 @pytest.mark.django_db
 class TestRetaggerIdRange(DirectoriesMixin):
-    @pytest.mark.usefixtures("documents")
     @pytest.mark.parametrize(
-        ("id_range_args", "expected_count"),
+        ("include_last_document", "expected_count"),
         [
-            pytest.param(["1", "2"], 1, id="narrow_range_limits_scope"),
-            pytest.param(["1", "9999"], 2, id="wide_range_tags_all_matches"),
+            pytest.param(False, 1, id="narrow_range_limits_scope"),
+            pytest.param(True, 2, id="wide_range_tags_all_matches"),
         ],
     )
     def test_id_range_limits_scope(
         self,
         tags: TagTuple,
-        id_range_args: list[str],
+        documents: DocumentTuple,
         expected_count: int,
+        *,
+        include_last_document: bool,
     ) -> None:
-        DocumentFactory(content="NOT the first document")
+        last_document = DocumentFactory(content="NOT the first document")
+        upper_bound = last_document if include_last_document else documents[1]
         call_command(
             "document_retagger",
             "--tags",
             "--id-range",
-            *id_range_args,
+            str(documents[0].pk),
+            str(upper_bound.pk),
             skip_checks=True,
         )
         tag_first, *_ = tags

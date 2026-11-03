@@ -2,6 +2,8 @@ import datetime as dt
 import os
 import shutil
 from pathlib import Path
+from unittest import mock
+from uuid import uuid4
 
 import pytest
 from django.test import TestCase
@@ -12,12 +14,16 @@ from pikepdf import Pdf
 from documents import tasks
 from documents.consumer import ConsumerError
 from documents.data_models import ConsumableDocument
+from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import DocumentSource
 from documents.double_sided import STAGING_FILE_NAME
 from documents.double_sided import TIMEOUT_MINUTES
+from documents.double_sided import CollatePlugin
+from documents.plugins.base import StopConsumeTaskError
 from documents.tests.utils import SampleDirMixin
 from paperless_testing.assertions import FileSystemAssertsMixin
 from paperless_testing.dirs import DirectoriesMixin
+from paperless_testing.fakes.progress import FakeProgressManager
 
 
 @pytest.mark.usefixtures("fake_progress_manager")
@@ -35,7 +41,10 @@ class TestDoubleSided(
         super().setUp()
         self.double_sided_dir = self.dirs.consumption_dir / "double-sided"
         self.double_sided_dir.mkdir()
-        self.staging_file = self.dirs.scratch_dir / STAGING_FILE_NAME
+        self.staging_file = (
+            self.dirs.data_dir / "jobs" / "collation" / STAGING_FILE_NAME
+        )
+        self.staging_file.parent.mkdir(parents=True)
 
     def _sample(self, name: str) -> Path:
         return self.SIMPLE_PDF if name == "simple.pdf" else self.SAMPLE_DIR / name
@@ -130,9 +139,12 @@ class TestDoubleSided(
             datetime=dt.datetime.now()
             - dt.timedelta(minutes=TIMEOUT_MINUTES, seconds=1),
         )
+        expired_content = self.staging_file.read_bytes()
         msg = self.consume_file("double-sided-odd.pdf")
         self.assertIsFile(self.staging_file)
         self.assertIn("Received odd numbered pages", msg["reason"])
+        [expired] = self.staging_file.parent.glob("expired-*.pdf")
+        self.assertEqual(expired.read_bytes(), expired_content)
 
     def test_less_odd_pages_then_even_fails(self) -> None:
         """
@@ -142,7 +154,7 @@ class TestDoubleSided(
             - A file is copied into the double-sided consume directory
               that has more pages than the staging file
         THEN:
-            - Both files get removed
+            - Both files remain available for recovery
             - A ConsumerError exception is thrown
         """
         self.create_staging_file("simple.pdf")
@@ -151,7 +163,54 @@ class TestDoubleSided(
             self.consume_file,
             "double-sided-even.pdf",
         )
-        self.assertIsNotFile(self.staging_file)
+        self.assertIsFile(self.staging_file)
+        self.assertIsFile(self.double_sided_dir / "foo.pdf")
+
+    def test_staged_input_preserves_collation_path_and_durable_half(self) -> None:
+        """A worker copy retains its folder policy and survives scratch cleanup."""
+        worker_file = self.dirs.scratch_dir / "worker-copy.pdf"
+        shutil.copy(self._sample("double-sided-odd.pdf"), worker_file)
+        plugin = CollatePlugin(
+            ConsumableDocument(
+                source=DocumentSource.ConsumeFolder,
+                original_file=worker_file,
+                source_path=self.double_sided_dir / "odd.pdf",
+                job_id=str(uuid4()),
+            ),
+            DocumentMetadataOverrides(),
+            FakeProgressManager(),
+            self.dirs.scratch_dir,
+            "task-id",
+        )
+        self.assertTrue(plugin.able_to_run)
+        with self.assertRaises(StopConsumeTaskError):
+            plugin.run()
+        durable_half = self.dirs.data_dir / "jobs" / "collation" / STAGING_FILE_NAME
+        self.assertIsFile(durable_half)
+        shutil.rmtree(self.dirs.scratch_dir)
+        self.assertIsFile(durable_half)
+
+    def test_publication_failure_retains_both_halves(self) -> None:
+        """A failed merged-file publication must not destroy either input."""
+        self.create_staging_file()
+        with mock.patch(
+            "documents.double_sided._copy", side_effect=OSError("disk full")
+        ):
+            with self.assertRaises(OSError):
+                self.consume_file("double-sided-even.pdf")
+        self.assertIsFile(self.staging_file)
+        self.assertIsFile(self.double_sided_dir / "foo.pdf")
+
+    def test_collation_does_not_replace_an_existing_output(self) -> None:
+        """Another completed scan at the expected destination must survive."""
+        self.create_staging_file()
+        existing = self.dirs.consumption_dir / "foo-collated.pdf"
+        existing.write_bytes(b"previous scan")
+        self.consume_file("double-sided-even.pdf")
+        self.assertEqual(existing.read_bytes(), b"previous scan")
+        [new_output] = self.dirs.consumption_dir.glob("foo-collated-*.pdf")
+        with Pdf.open(new_output) as result:
+            self.assertEqual(len(result.pages), 5)
 
     @override_settings(CONSUMER_COLLATE_DOUBLE_SIDED_TIFF_SUPPORT=True)
     def test_tiff_upload_enabled(self) -> None:

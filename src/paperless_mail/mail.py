@@ -250,8 +250,36 @@ def mailbox_login(mailbox: MailBox, account: MailAccount) -> None:
         ) from e
 
 
-@shared_task
+@shared_task(bind=True)
 def apply_mail_action(
+    self,
+    result: list,
+    rule_id: int,
+    message_uid: str,
+    message_subject: str,
+    message_date: datetime.datetime,
+    uid_validity: str | None = None,
+) -> None:
+    """Apply a mail action once for its durable Celery callback identifier."""
+    from documents.job_callbacks import run_callback
+
+    run_callback(
+        self.request.id,
+        self.name,
+        (result, rule_id, message_uid, message_subject, message_date, uid_validity),
+        {},
+        lambda: _apply_mail_action(
+            result,
+            rule_id,
+            message_uid,
+            message_subject,
+            message_date,
+            uid_validity,
+        ),
+    )
+
+
+def _apply_mail_action(
     result: list,
     rule_id: int,
     message_uid: str,

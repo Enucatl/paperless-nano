@@ -327,11 +327,11 @@ def consumable_document_matches_workflow(
 
     # Document path vs trigger path
 
-    # Use the original_path if set, else us the original_file
+    # Split children retain their parent path; staging retains the admitted path.
     match_against = (
         document.original_path
         if document.original_path is not None
-        else document.original_file
+        else document.source_path or document.original_file
     )
 
     if (
@@ -342,10 +342,7 @@ def consumable_document_matches_workflow(
             trigger.filter_path,
         )
     ):
-        reason = (
-            f"Document path {document.original_file}"
-            f" does not match {trigger.filter_path}"
-        )
+        reason = f"Document path {match_against} does not match {trigger.filter_path}"
         trigger_matched = False
 
     return (trigger_matched, reason)

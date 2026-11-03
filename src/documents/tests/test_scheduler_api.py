@@ -237,3 +237,13 @@ def test_publication_keeps_signed_serializer_and_task_history(
             finally:
                 message.ack()
                 queue.close()
+
+
+def test_recovery_schedule_is_available_to_external_scheduler(
+    admin_client: APIClient,
+) -> None:
+    """Durable recovery must be discoverable without a resident Celery beat."""
+    response = admin_client.get(ENDPOINT)
+    assert response.status_code == 200
+    jobs = {entry["name"]: entry["cron"] for entry in response.data["jobs"]}
+    assert jobs["Recover document jobs"] == "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"

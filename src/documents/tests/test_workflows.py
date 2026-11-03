@@ -50,6 +50,7 @@ from documents.models import Correspondent
 from documents.models import CustomField
 from documents.models import CustomFieldInstance
 from documents.models import Document
+from documents.models import DocumentJob
 from documents.models import DocumentType
 from documents.models import MatchingModel
 from documents.models import StoragePath
@@ -4393,7 +4394,9 @@ class TestWorkflows(
                 )
                 self.assertIn(expected_str, cm.output[0])
 
-    @mock.patch("documents.workflows.webhooks.send_webhook.apply_async")
+    @mock.patch(
+        "documents.workflows.webhooks.send_webhook._orig_run", return_value=None
+    )
     @pytest.mark.usefixtures("fake_progress_manager")
     def test_workflow_webhook_action_consumption(self, mock_post) -> None:
         """
@@ -4402,13 +4405,8 @@ class TestWorkflows(
         WHEN:
             - Document is consumed
         THEN:
-            - Webhook is sent
+            - The recorded webhook runs once after ingestion commits
         """
-        mock_post.return_value = mock.Mock(
-            status_code=200,
-            json=mock.Mock(return_value={"status": "ok"}),
-        )
-
         trigger = WorkflowTrigger.objects.create(
             type=WorkflowTrigger.WorkflowTriggerType.CONSUMPTION,
         )
@@ -4436,7 +4434,7 @@ class TestWorkflows(
         )
 
         with self.assertLogs("paperless.matching", level="INFO"):
-            tasks.consume_file(
+            result = tasks.consume_file(
                 ConsumableDocument(
                     source=DocumentSource.ConsumeFolder,
                     original_file=test_file,
@@ -4444,7 +4442,19 @@ class TestWorkflows(
                 None,
             )
 
-        mock_post.assert_called_once()
+        job = DocumentJob.objects.get(kind="consume")
+        [followup] = job.result["workflow_followups"]
+        receipt = DocumentJob.objects.get(pk=followup["id"])
+        self.assertEqual(receipt.status, DocumentJob.Status.SUCCEEDED)
+        self.assertEqual(receipt.input["task"], send_webhook.name)
+        self.assertEqual(tasks.consume_file(job_id=str(job.pk)), result)
+        mock_post.assert_called_once_with(
+            url="http://paperless-ngx.com",
+            data="Test message: {doc_url}",
+            headers={},
+            files=None,
+            as_json=False,
+        )
 
     @mock.patch("documents.bulk_edit.remove_password")
     def test_password_removal_action_attempts_multiple_passwords(

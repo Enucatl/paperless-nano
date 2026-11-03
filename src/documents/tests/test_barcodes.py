@@ -1145,13 +1145,14 @@ class TestTagBarcode(DirectoriesMixin, SampleDirMixin, GetReaderPluginMixin, Tes
         dst = settings.SCRATCH_DIR / "split-by-tag-basic.pdf"
         shutil.copy(test_file, dst)
 
-        result = tasks.consume_file(
-            ConsumableDocument(
-                source=DocumentSource.ConsumeFolder,
-                original_file=dst,
-            ),
-            None,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            result = tasks.consume_file(
+                ConsumableDocument(
+                    source=DocumentSource.ConsumeFolder,
+                    original_file=dst,
+                ),
+                None,
+            )
 
         self.assertEqual(result, {"reason": "Barcode splitting complete!"})
 

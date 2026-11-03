@@ -1,14 +1,16 @@
 import datetime as dt
 import logging
-import os
-import shutil
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 from django.conf import settings
+from filelock import FileLock
 
 from documents.converters import convert_from_tiff_to_pdf
 from documents.exceptions import ConsumerError
+from documents.jobs import _copy
+from documents.jobs import _sync_directory
 from documents.plugins.base import ConsumeTaskPlugin
 from documents.plugins.base import NoCleanupPluginMixin
 from documents.plugins.base import NoSetupPluginMixin
@@ -32,7 +34,7 @@ class CollatePlugin(NoCleanupPluginMixin, NoSetupPluginMixin, ConsumeTaskPlugin)
         return (
             settings.CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED
             and settings.CONSUMER_COLLATE_DOUBLE_SIDED_SUBDIR_NAME
-            in self.input_doc.original_file.parts
+            in (self.input_doc.source_path or self.input_doc.original_file).parts
         )
 
     def run(self) -> str | None:
@@ -54,6 +56,17 @@ class CollatePlugin(NoCleanupPluginMixin, NoSetupPluginMixin, ConsumeTaskPlugin)
         in case of failure.
         """
 
+        directory = (
+            settings.DATA_DIR / "jobs" / "collation"
+            if self.input_doc.job_id
+            else settings.SCRATCH_DIR
+        )
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with FileLock(directory / "collation.lock"):
+            return self._collate(directory / STAGING_FILE_NAME)
+
+    def _collate(self, staging: Path) -> str | None:
+        """Publish a durable merged file before releasing either half scan."""
         if self.input_doc.mime_type == "application/pdf":
             pdf_file = self.input_doc.original_file
         elif (
@@ -64,13 +77,10 @@ class CollatePlugin(NoCleanupPluginMixin, NoSetupPluginMixin, ConsumeTaskPlugin)
                 self.input_doc.original_file,
                 self.base_tmp_dir,
             )
-            self.input_doc.original_file.unlink()
         else:
             raise ConsumerError(
                 "Unsupported file type for collation of double-sided scans",
             )
-
-        staging: Path = settings.SCRATCH_DIR / STAGING_FILE_NAME
 
         valid_staging_exists = False
         if staging.exists():
@@ -78,8 +88,10 @@ class CollatePlugin(NoCleanupPluginMixin, NoSetupPluginMixin, ConsumeTaskPlugin)
             # if the file is older than the timeout, we don't consider
             # it valid
             if (dt.datetime.now().timestamp() - stats.st_mtime) > TIMEOUT_SECONDS:
-                logger.warning("Outdated double sided staging file exists, deleting it")
-                staging.unlink()
+                expired = staging.with_name(f"expired-{uuid4()}.pdf")
+                staging.replace(expired)
+                _sync_directory(staging.parent)
+                logger.warning("Retained expired half scan for recovery at %s", expired)
             else:
                 valid_staging_exists = True
 
@@ -104,7 +116,9 @@ class CollatePlugin(NoCleanupPluginMixin, NoSetupPluginMixin, ConsumeTaskPlugin)
                     # Merged file has the same path, but without the
                     # double-sided subdir. Therefore, it is also in the
                     # consumption dir and will be picked up for processing
-                    old_file = self.input_doc.original_file
+                    old_file = (
+                        self.input_doc.source_path or self.input_doc.original_file
+                    )
                     new_file = Path(
                         *(
                             part
@@ -117,26 +131,28 @@ class CollatePlugin(NoCleanupPluginMixin, NoSetupPluginMixin, ConsumeTaskPlugin)
                     )
                     # If the user didn't create the subdirs yet, do it for them
                     new_file.parent.mkdir(parents=True, exist_ok=True)
-                    pdf1.save(new_file)
+                    if new_file.exists():
+                        new_file = new_file.with_stem(f"{new_file.stem}-{uuid4()}")
+                    merged = self.base_tmp_dir / "collated.pdf"
+                    pdf1.save(merged)
+                _copy(merged, new_file)
+            except Exception:
+                logger.exception("Collation failed; both half scans remain recoverable")
+                raise
+            else:
+                staging.unlink()
+                _sync_directory(staging.parent)
+                pdf_file.unlink()
+                self.input_doc.original_file.unlink(missing_ok=True)
                 logger.info("Collated documents into new file %s", new_file)
                 raise StopConsumeTaskError(
                     "Success. Even numbered pages of double sided scan collated "
                     "with odd pages",
                 )
-            finally:
-                # Delete staging and recently uploaded file no matter what.
-                # If any error occurs, the user needs to be able to restart
-                # the process from scratch; after all, the staging file
-                # with the odd numbered pages might be the culprit
-                pdf_file.unlink()
-                staging.unlink()
-
         else:
-            shutil.move(pdf_file, staging)
-            # update access to modification time so we know if the file
-            # is outdated when another file gets uploaded
-            timestamp = dt.datetime.now().timestamp()
-            os.utime(staging, (timestamp, timestamp))
+            _copy(pdf_file, staging)
+            pdf_file.unlink()
+            self.input_doc.original_file.unlink(missing_ok=True)
             logger.info(
                 "Got scan with odd numbered pages of double-sided scan, moved it to %s",
                 staging,

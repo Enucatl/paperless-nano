@@ -557,6 +557,10 @@ def cleanup_user_deletion(sender, instance: User | Group, **kwargs) -> None:
 
 
 def add_to_index(sender, document, **kwargs) -> None:
+    from documents.job_context import active_ingestion_job
+
+    if active_ingestion_job.get() is not None:
+        return
     from documents.search import get_backend
 
     # A newly consumed version is not searchable on its own, its content
@@ -758,14 +762,19 @@ def run_workflows(
                             )
                         else:
                             # Queued rather than run sync
+                            from documents.job_callbacks import queue_ingestion_followup
                             from documents.tasks import apply_ai_suggestions
 
                             # kwargs so the PaperlessTask record can note the
                             # document, see _extract_input_data
-                            apply_ai_suggestions.delay_on_commit(
-                                action_id=action.pk,
-                                document_id=document.pk,
-                            )
+                            arguments = {
+                                "action_id": action.pk,
+                                "document_id": document.pk,
+                            }
+                            if not queue_ingestion_followup(
+                                apply_ai_suggestions, kwargs=arguments
+                            ):
+                                apply_ai_suggestions.delay_on_commit(**arguments)
 
                 if not use_overrides:
                     # limit title to 128 characters
@@ -835,6 +844,29 @@ def _extract_input_data(
     types store no input data and return {}.
     """
     if task_type == PaperlessTask.TaskType.CONSUME_FILE:
+        if task_kwargs.get("job_id"):
+            from documents.models import DocumentJob
+
+            job = DocumentJob.objects.get(pk=task_kwargs["job_id"])
+            return {
+                "filename": job.input["filename"],
+                "mime_type": None,
+                **(
+                    {"source_path": job.input["original_path"]}
+                    if job.input["original_path"]
+                    else {}
+                ),
+                **(
+                    {"mailrule_id": job.input["mailrule_id"]}
+                    if job.input["mailrule_id"]
+                    else {}
+                ),
+                "overrides": {
+                    key: value
+                    for key, value in job.input["overrides"].items()
+                    if value is not None
+                },
+            }
         input_doc = task_kwargs.get("input_doc")
         overrides = task_kwargs.get("overrides")
         if input_doc is None:
@@ -900,6 +932,14 @@ def _extract_owner_id(
     """Return the owner_id from consume_file overrides, or None for all other task types."""
     if task_type != PaperlessTask.TaskType.CONSUME_FILE:
         return None
+    if task_kwargs.get("job_id"):
+        from documents.models import DocumentJob
+
+        return (
+            DocumentJob.objects.get(pk=task_kwargs["job_id"])
+            .input["overrides"]
+            .get("owner_id")
+        )
     overrides = task_kwargs.get("overrides")
     if overrides and hasattr(overrides, "owner_id"):
         return overrides.owner_id
@@ -1146,7 +1186,9 @@ def add_or_update_document_in_llm_index(sender, document, **kwargs):
     """
     Add or update a document in the LLM index when it is created or updated.
     """
-    if kwargs.get("skip_ai_index"):
+    from documents.job_context import active_ingestion_job
+
+    if kwargs.get("skip_ai_index") or active_ingestion_job.get() is not None:
         return
     ai_config = AIConfig()
     if ai_config.llm_index_enabled:

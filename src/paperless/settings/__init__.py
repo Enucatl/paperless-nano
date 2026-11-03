@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
 
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
 from dotenv import load_dotenv
@@ -739,6 +740,11 @@ CELERY_ACCEPT_CONTENT = ["application/json", "application/x-signed-pickle"]
 
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-schedule
 CELERY_BEAT_SCHEDULE = parse_beat_schedule()
+CELERY_BEAT_SCHEDULE["Recover document jobs"] = {
+    "task": "documents.tasks.recover_document_jobs",
+    "schedule": crontab(minute="*/5"),
+    "options": {"expires": 240.0, "headers": {"trigger_source": "scheduled"}},
+}
 
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-schedule-filename
 CELERY_BEAT_SCHEDULE_FILENAME = str(DATA_DIR / "celerybeat-schedule.db")

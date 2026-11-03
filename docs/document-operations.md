@@ -6,6 +6,10 @@ It records the behavior inspected before the first document-update extraction.
 The boundaries below are implementation targets, not claims that crash recovery,
 stale-result rejection, or process isolation already exist.
 
+The traces and #22 acceptance below describe the state before #23. The current
+ingestion, reprocessing, and callback recovery contract is documented under
+[Durable document jobs](#durable-document-jobs-23).
+
 ## Owners and dependencies
 
 | Concern           | Current entry points and dependencies                                                                                                               | Smallest useful ownership boundary                                                                                                                                                            |
@@ -378,3 +382,320 @@ verification in disposable `docker run --rm --userns=host` containers, with
 dependencies/artifacts inside them and temporary volumes removed. Retain the
 existing `paperless/tests/test_import_boundaries.py`, OCR import, and AI lazy-import
 checks throughout extraction.
+
+## Durable document jobs (#23)
+
+`documents.jobs` and `documents.ingestion_jobs` own concrete reprocessing and
+ingestion jobs. `documents.job_callbacks` journals their existing deletion, ASN
+restoration, and mail-action callbacks, plus ingestion's deferred AI and webhook
+actions. Django, Celery, the plugin pipeline, and the existing parsers remain in
+place. These are operation boundaries; no generic
+repository or replacement provider framework is introduced.
+
+### Shared contract and reprocessing
+
+`documents.jobs` now owns reprocessing admission, execution, publication, and
+completion. Both reprocess API routes carry the requesting actor through
+`bulk_edit.reprocess`; the archiver and legacy task calls enter the same operation.
+Celery remains the execution adapter. The existing parser implementations,
+remote-processing policy, audit entries, barcode refresh, and version selection
+remain in use. Reprocessing still does not run consumption or update workflows.
+
+`DocumentJob` is the durable journal, separate from deletable `PaperlessTask`
+telemetry. Admission copies the original into `DATA_DIR/jobs/<uuid>` before
+queueing and records JSON input identity, document revision, actor, requested
+remote policy, and timeout. The payload contains a UUID and document ID, with no
+scratch paths or ORM objects. Workers can use a different scratch directory;
+they must share the database, data directory, and media directory. Job directories
+are private to the service account (0700); ordinary document API permissions do
+not grant direct access to staging. Storage operators/backups must treat these
+files and the journal's content snapshots as document data. Deferred webhook
+inputs can also contain rendered attachment bytes and authentication headers;
+the database and its backups require the same restricted access. The document
+exporter exports completed document state, not operational jobs or staging; full recovery
+backups must include the database, data directory, and media directory together.
+
+The worker records built-in effective OCR/barcode/remote configuration (without
+the remote API key), parser execution settings, Tika endpoints, email layout,
+the archive decision, and parser class/name/version. It copies and validates
+outputs before the parser's temporary context exits. PDF
+and WebP outputs must have matching checksums, MIME types, and readable structure;
+required PDF output cannot be omitted. Configuration is checked again after
+processing. This is execution provenance for existing parsers, not the immutable,
+framework-independent provider configuration contract planned in #25. Third-party
+parser-specific settings and engine versions still need that extraction.
+
+The recorded revision includes content, file identity, modified timestamp, and
+version linkage. Immediately before publication the operation rechecks the latest
+version, the actor's current active/global/object permissions, and the revision.
+A conditional UPDATE inside the applying transaction prevents a concurrent
+queryset edit from slipping past the comparison, including on SQLite. The root
+row is locked against concurrent version admission. Media locking during
+publication is nonblocking inside the transaction, so contention rolls back
+for retry instead of inverting the ingestion lock order. Trusted
+CLI callers explicitly have no actor. A deleted actor never becomes a trusted
+caller. Changed or deleted documents reject results without replacing their files.
+
+An archive is published to a new collision-checked filename, preserving its
+storage directory/template and the prior archive until commit. Its destination
+is journaled before publication; copies use a destination-side temporary file,
+fsync, and atomic replacement. A crash after publication but before commit leaves
+the old document and archive usable. Recovery reuses the verified new generation.
+The document and job's committed state, result revision, and required follow-up
+list are saved in one database transaction. A private `content_job` marker lets
+thumbnail completion survive unrelated metadata edits while preventing an older
+job from replacing a newer job's thumbnail.
+
+Thumbnail publication, full-text and optional AI indexing, and cache invalidation
+are repeatable completion work. Full-text indexing uses the batch writer so lock
+failure cannot masquerade as a successful queued retry. Deferred AI migration
+leaves completion pending. Duplicate delivery resumes completion without parsing
+or applying the content again. Staging is deleted only after durable success;
+interrupted cleanup can be retried independently. Old archives are removed only
+when no document, including trash, references the name and the checksum still
+matches. If the live original disappeared or changed unexpectedly, cleanup retains
+the snapshot and reports the problem. New archive generations may have a collision
+suffix until a later normal filename reconciliation. Reprocessing now always
+advances the modified timestamp so content-only results invalidate metadata caches.
+
+A per-job file lock serializes execution. Lock files live outside staging and
+remain after cleanup so removing a live lock cannot create two lock owners.
+`staging`, `queued`, `running`, `prepared`, `committed`, `succeeded`, `failed`,
+`rejected`, and `attention` are durable states. Result progress records parsing,
+publication, completion, and finished work independently of Celery lifecycle
+callbacks. Reprocessing uses the existing worker timeout and at most three
+attempts; a late result cannot be applied. A returned parser error queues a
+retry (or fails the third attempt); a killed worker remains running until its
+recorded timeout permits recovery. A busy duplicate is ignored by Celery rather
+than reporting premature success. Retry retains the admitted revision and
+input and records the new execution configuration. Prepared publication and
+committed completion retry without rerunning the parser. Unsupported formats and
+execution failures now report failure to the task/CLI
+caller instead of being swallowed as apparent success. Terminal failures and
+rejections retain their staging for inspection; there is no automatic destructive
+expiry policy. The existing scheduler invokes recovery every five minutes,
+redispatching aged unfinished jobs. Running jobs are redispatched only after their
+recorded timeout; a still-live executor retains its lock. Broker errors leave
+queued work durable. Completion and cleanup errors remain visible and retryable.
+
+### Ingestion admission, publication, and completion
+
+`DurableConsumeTask` stages the existing `consume_file.apply_async` and Celery
+signature callers before publication: ordinary and version uploads, folder
+watcher/API admission, mail attachments/messages, barcode children, and PDF
+merge/split/edit operations. Direct and older task calls enter the same admission
+when executed. Messages carry the job UUID; serialized metadata, source identity,
+version revision, actor, and callback options live in the job journal. If admission
+runs inside a database transaction, dispatch waits for commit and the durable
+queued row remains available to the recovery sweep if broker publication fails.
+The adapter retains Django's commit-aware task methods. The lean worker permits
+this specific built-in task base and restores its real completion hook in the
+child; its general rejection of custom task bases and hooks remains in force.
+
+The immutable input copy is separate from the plugin's working file. The
+admitted `source_path` preserves folder/workflow identity; `original_path` keeps
+its existing meaning for barcode-split children. Uploads and user PDF operations
+record the authenticated actor separately from the resulting document owner.
+Version admission and application recheck the root revision/latest version and
+current change permission; new-document application rechecks add permission.
+Trusted watcher/mail/CLI paths retain their established actor policy.
+
+Ingestion records `running` before invoking the first plugin. It makes one
+automatic pipeline attempt because consumption/added workflows and pre-consume
+scripts can have irreversible effects. A failed or interrupted attempt retains
+its input and becomes `attention`; another delivery cannot recreate the document
+or repeat those workflows. The original workflow order and assignment policies
+remain. This is deliberately conservative recovery, not a claim of exactly-once
+external effects.
+
+Parser outputs are copied into the job directory and validated before permanent
+publication. The existing media lock, containment checks, filename limits, and
+collision handling remain. Each permanent file write and subsequent ingestion
+file relocation is recorded in `publication.json` before it happens. This fsynced
+manifest survives database rollback. Publication copies are atomic and never
+consume their recoverable staged source. Existing destinations cannot be silently
+overwritten. An interrupted transaction may leave an unreferenced permanent file;
+its manifest and staged copy remain available for explicit reconciliation.
+
+The document transaction also records the result ID, published file checksums,
+and required completion work. Full-text/AI indexing is deferred from the old
+ingestion signals to this recorded completion. A duplicate delivery after commit
+resumes completion, not the plugin pipeline. The post-consume script has durable
+pending/started/done markers: an interruption after starting becomes `attention`
+because its external outcome is unknown. Safe indexing/cache work can be repeated.
+Deferred workflow AI and webhook intents are recorded with stable callback IDs
+before the document transaction commits. Completion executes their existing
+implementations through durable callback receipts before indexing final state.
+Completed actions are skipped on redelivery. AI timeouts can retry only while the
+built-in implementation guarantees no metadata mutation has occurred; an exhausted
+retry or uncertain action requires operator reconciliation. Webhook failures are
+not blindly repeated because the remote endpoint may already have acted.
+AI application rechecks the original actor and the document's persisted fields,
+relations, and versions after obtaining suggestions; concurrent edits reject the
+result before metadata mutation.
+The metadata-update context remains only a signal-ordering scope; it is not the
+publication journal or a filesystem transaction.
+
+Cleanup follows durable success and any required callback completion. It first
+checks that the committed original/archive still match their database checksums.
+It removes the external input only if its original file identity and checksum
+still match, protecting a newer file placed at the same path. A plugin stop that
+leaves its working input untouched also leaves the external input untouched.
+Interrupted cleanup retries independently; a missing or changed committed file
+retains recovery material and reports an error.
+
+Barcode children are individually admitted before their parent removes its working
+input, with parent job IDs recorded. Collation uses a shared locked directory at
+`DATA_DIR/jobs/collation` for durable jobs. Its first half survives worker scratch
+cleanup; the merged output is fsynced before either half is released. Existing
+merged filenames are preserved through collision suffixes. Failed collation keeps
+both halves; expired first halves are renamed to `expired-<uuid>.pdf` for operator
+recovery, with no automatic destructive expiry policy.
+
+### Concrete callback ownership
+
+The existing mail chords and PDF-operation completion callbacks keep their Celery
+shape. Admission freezes callback IDs and serializes their options. Ingestion
+records delivery started/done separately from each callback's own execution
+journal. The concrete mail-action, source-deletion, and ASN-restoration tasks use
+`run_callback`: a completed duplicate returns its saved result, a busy duplicate
+is ignored, and an interrupted or failed effect requires attention. Missing
+callback completion prevents input cleanup and is surfaced after the recorded
+timeout. Repeated ingestion failure cannot redispatch its native error callback.
+
+Deletion callbacks snapshot all persisted document values, tags, custom fields,
+notes, barcodes, and versions. Before deleting they reject changed state and
+recheck the caller's current delete permission. ASN restoration is conditional
+and never overwrites a newer non-null ASN. Its error signatures are immutable so
+Celery's prepended failed-task ID cannot replace the backup argument. Mail errors
+remain visible in the durable callback and existing processed-mail records.
+
+These records make an ambiguous effect visible and retain recovery inputs; they
+do not silently retry an email, mail move/delete, script, or other non-idempotent
+effect whose outcome cannot be established.
+
+### Inspection and recovery
+
+The existing scheduler runs the recovery sweep every five minutes. It republishes
+safe queued/prepared/committed work and incomplete cleanup using stable IDs.
+Expired running reprocessing jobs can retry within their attempt limit. Interrupted
+admission, ingestion, and callbacks become `attention`; they are not repeatedly
+executed. The job lock prevents a still-live executor from being overtaken.
+
+Use the management command from the application's configured environment:
+
+```sh
+python src/manage.py document_jobs --job <uuid>
+python src/manage.py document_jobs --job <uuid> --resume
+python src/manage.py document_jobs --job <uuid> --resume --acknowledge-effects
+```
+
+Inspection reports status, error, attempts, timeout, progress, staging location,
+publication manifest, result payload, effect markers, and remaining follow-up work.
+`--resume` dispatches permitted queued/prepared/committed/succeeded recovery work;
+it refuses a live lock, failed/rejected work, uncertain callbacks, or uncommitted
+ingestion that could repeat external effects. Inspection and refused recovery do
+not remove staged inputs or published files.
+
+`--acknowledge-effects` is only for a committed ingestion in `attention`, after an
+operator has reconciled its script, workflow follow-up, and callback effects. It
+marks known uncertain workflow receipts as explicitly acknowledged and skips
+already-handled effects. Workflow intents that have not started still execute;
+safe completion then resumes. It is not permission to restart the ingestion
+pipeline. Uncommitted uncertain ingestion needs inspection
+of its input/publication evidence and reconciliation of external effects and
+orphan files before a new submission. Callback jobs themselves cannot be replayed
+through this command. Retained expired collation halves also require explicit
+operator inspection/cleanup.
+
+### Scope and limits
+
+The #23 implementation covers durable ingestion, reprocessing, their file
+publication, and their concrete completion callbacks. It preserves the database
+choices, parser/plugin implementations, API result shapes, and workflow order.
+Repeated delivery does not imply retrying ambiguous work: an explicit attention
+outcome is part of the recovery contract.
+
+| #23 requirement                                  | Concrete implementation and acceptance evidence                                                                                                                            |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Durable identity and serializable inputs/results | UUID `DocumentJob` rows, staged input copies, JSON metadata and tagged callback values; transport and scratch-loss tests.                                                  |
+| Revision, configuration, and provider identity   | Admitted document/version snapshots, effective built-in configuration, parser identity; stale-edit, changed-version, and configuration checks.                             |
+| Status, timeout, retry, and repeated delivery    | Explicit job states, per-job locks, bounded reprocess/AI retries, callback receipts, and attention for uncertain effects; duplicate, timeout, and retry tests.             |
+| Permission and stale-result checks               | Fresh actor/global/object checks and conditional writes before application; revoked/deleted-actor, concurrent-edit, and destructive-callback tests.                        |
+| Durable staging and ownership                    | Private shared job storage, copied parser outputs, durable collation halves, publication manifests, and checked source cleanup; scratch-loss and source-replacement tests. |
+| Validation before publication                    | Checksums, MIME/structural validation, required archive checks, path containment, collision handling, and atomic copies; invalid-output and file-safety tests.             |
+| Retain recoverable inputs until success          | Commit and required completion precede cleanup; missing permanent files, failed callbacks, and ambiguous effects retain staging; cleanup interruption tests.               |
+| Record required follow-up work                   | Commit records indexing/cache/script work; workflow AI/webhook intents and Celery callback IDs have durable receipts; dispatch failure and callback redelivery tests.      |
+| Exercise crash points                            | Publication before commit, commit before completion, callback dispatch/acknowledgment, effect interruption, and cleanup are covered by focused job tests.                  |
+
+Recovery does not guess that an unreferenced published file is safe to delete.
+Input/result snapshots, rejected jobs, ambiguous effects, and expired collation
+halves may therefore consume disk until reviewed. Shared-storage loss is outside
+this single-host process-crash contract. Immutable provider configuration and
+provider-specific identity remain #24/#25 work; general metadata/workflow dispatch
+outside these jobs and AI index concurrency during embedding are not converted
+into a universal durable outbox. No idle-memory reduction is claimed here.
+
+### Job verification (2026-11-03)
+
+The final expanded selection ran **1,634 tests**: **1,633 passed**. The one
+failure was a new webhook assertion expecting an empty substitution where its
+single-brace fixture was literal text. Correcting that assertion and rerunning
+the affected test passed, so all **1,634 selected cases passed across the broad
+and focused runs**. The preceding expanded run exposed an unnecessary missing
+mail-rule lookup and test assumptions about immutable callbacks, deferred webhook
+execution, and database IDs; these were corrected before the final run.
+Earlier focused runs also covered all 14 collation cases, 58 worker/callback
+cases, and 18 deferred-workflow/recovery cases. The final selection includes
+these operation and worker suites; counts from overlapping runs are not added.
+
+Tests used disposable `docker run --rm --userns=host` containers with an
+unprivileged user, Python 3.14.2, Django 5.2.17, SQLite, Ghostscript 10.05.1, and
+frozen uv testing/lint dependencies. Source was copied from a read-only mount;
+dependencies, test artifacts, and generated databases stayed in the temporary
+container/volume. The temporary verification image and volume were removed after verification.
+
+The broader command was `pytest -o addopts='' -n 4 --dist=loadscope
+--randomly-seed=1`, selecting these files under `src/documents/tests/`:
+`test_document_jobs.py`, `test_ingestion_jobs.py`, `test_job_callbacks.py`,
+`test_document_jobs_command.py`, `test_tasks.py`, `test_bulk_edit.py`,
+`test_api_bulk_edit.py`, `test_scheduler_api.py`, `test_api_documents.py`,
+`test_api_permissions.py`, `test_api_document_versions.py`,
+`test_version_conditionals.py`, `test_file_handling.py`,
+`test_document_updates.py`, `test_workflows.py`, `test_consumer.py`,
+`test_consumer_archive.py`, `test_management.py`, `test_management_exporter.py`,
+`test_management_importer.py`, `test_task_signals.py`, and
+`test_worker_outcomes.py`, `test_double_sided.py`, `test_barcodes.py`,
+`test_consumer_api.py`, `test_api_post_document_nfc.py`,
+`test_management_consumer.py`, `test_matchables.py`, `test_management_retagger.py`,
+`test_document_maintenance_updates.py`, `test_bulk_document_updates.py`,
+`test_storage_path_updates.py`, `test_merge_documents_as_versions.py`,
+`test_admin.py`, `test_api_custom_fields.py`, `test_ingestion_followups.py`, and
+`test_api_workflows.py`. It also included `src/paperless_worker/tests/`,
+`src/paperless/tests/test_worker_trace.py`,
+`src/paperless/tests/test_worker_serialization.py`,
+`src/paperless/tests/test_disabled_feature_workflows.py`,
+`src/paperless/tests/test_import_boundaries.py`,
+`src/paperless/tests/parsers/test_ocr_imports.py`,
+`src/paperless_ai/tests/test_lazy_imports.py`, and
+`src/paperless_ai/tests/test_ai_indexing.py`; and under `src/paperless_mail/tests/`,
+`test_mail.py`, `test_mail_nfc.py`, `test_preprocessor.py`, `test_api.py`, and
+`test_process_mail_accounts_overlap.py`. Live-mail service tests were excluded.
+
+The job cases cover staged input survival, serialization, stale edits, changed
+versions, deleted/revoked actors, timeout and retry limits, publication/commit
+interruptions, completion and cleanup failures, invalid output, lost broker
+publication, media-lock contention, index ordering, and concurrent/legacy delivery.
+Ingestion cases exercise publication before commit, commit before completion,
+duplicate creation prevention, ambiguous pipeline/script/callback outcomes,
+changed cleanup targets, native callback/errback redelivery, retained collation
+halves, and explicit recovery-command refusal/acknowledgment.
+Existing suites cover real OCR, archive policy, remote policy, version handling,
+permissions, workflows, import/export, and task tracking.
+
+`makemigrations --check --dry-run --skip-checks` found no missing migrations in
+the final tree. Changed-file hooks passed, including Ruff, Prettier, and
+codespell. The final assertion and verification-documentation edits also passed
+the changed-file hooks.
+The full suite, PostgreSQL/MariaDB, deployment, and RAM checks were not performed.
+Existing PDF form-copy and missing-static-directory warnings remain.

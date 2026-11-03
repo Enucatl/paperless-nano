@@ -163,6 +163,8 @@ class ConsumableDocument:
     root_document_id: int | None = None
     original_path: Path | None = None
     mailrule_id: int | None = None
+    source_path: Path | None = None
+    job_id: str | None = None
     mime_type: str | None = dataclasses.field(init=False, default=None)
     defer_mime_type: dataclasses.InitVar[bool] = dataclasses.field(
         default=False,

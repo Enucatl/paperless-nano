@@ -237,6 +237,7 @@ def test_client_cannot_supply_task_metadata(
 
 def test_admission_uses_folder_context_and_precedes_publication(
     token_client: APIClient,
+    admin_user: User,
     consume_root: Path,
     mocker: MockerFixture,
 ) -> None:
@@ -268,7 +269,7 @@ def test_admission_uses_folder_context_and_precedes_publication(
         Tag.objects.filter(pk__in=overrides.tag_ids).values_list("name", flat=True),
     ) == {"Invoices", "2026"}
     assert overrides.owner_id is None
-    assert overrides.actor_id is None
+    assert overrides.actor_id == admin_user.pk
     task = PaperlessTask.objects.get(task_id=payload["request_id"])
     assert task.task_type == PaperlessTask.TaskType.CONSUME_FILE
     assert task.trigger_source == PaperlessTask.TriggerSource.FOLDER_CONSUME
@@ -380,6 +381,7 @@ def test_worker_detects_api_mime_before_plugins_and_preserves_receipt(
 
     import magic
 
+    from documents.jobs import job_directory
     from documents.plugins.base import StopConsumeTaskError
     from documents.tasks import consume_file
 
@@ -417,7 +419,10 @@ def test_worker_detects_api_mime_before_plugins_and_preserves_receipt(
         throw=True,
     )
     assert result.result == {"reason": "MIME boundary checked"}
-    detect.assert_called_once_with(source, mime=True)
+    detect.assert_called_once_with(
+        job_directory(payload["request_id"]) / "work" / source.name,
+        mime=True,
+    )
     assert source.exists()
 
 

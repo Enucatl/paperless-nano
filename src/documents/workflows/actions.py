@@ -276,20 +276,26 @@ def execute_webhook_action(
                         document.mime_type,
                     ),
                 }
-        send_webhook.apply_async(
-            kwargs={
-                "url": action.webhook.url,
-                "data": data,
-                "headers": headers,
-                "files": files,
-                "as_json": action.webhook.as_json,
-            },
-        )
+        from documents.job_callbacks import queue_ingestion_followup
+
+        arguments = {
+            "url": action.webhook.url,
+            "data": data,
+            "headers": headers,
+            "files": files,
+            "as_json": action.webhook.as_json,
+        }
+        if not queue_ingestion_followup(send_webhook, kwargs=arguments):
+            send_webhook.apply_async(kwargs=arguments)
         logger.debug(
             f"Webhook to {action.webhook.url} queued",
             extra={"group": logging_group},
         )
     except Exception as e:
+        from documents.job_context import active_ingestion_job
+
+        if active_ingestion_job.get() is not None:
+            raise
         logger.exception(
             f"Error occurred sending webhook: {e}",
             extra={"group": logging_group},

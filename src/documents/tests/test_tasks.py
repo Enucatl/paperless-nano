@@ -10,6 +10,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from documents import tasks
+from documents.jobs import RejectedResult
 from documents.models import Correspondent
 from documents.models import Document
 from documents.models import DocumentType
@@ -290,7 +291,7 @@ class TestUpdateContent(DirectoriesMixin, TestCase):
         )
         return root, version
 
-    @mock.patch("documents.tasks.clear_document_caches")
+    @mock.patch("documents.jobs.clear_document_caches")
     @mock.patch("documents.search.get_backend")
     def test_update_content_version_clears_caches_for_root(
         self,
@@ -316,7 +317,8 @@ class TestUpdateContent(DirectoriesMixin, TestCase):
             "my document",
         )
         self.assertEqual(Document.objects.get(pk=root.pk).content, "root content")
-        mock_get_backend.return_value.add_or_update.assert_called_once()
+        writer = mock_get_backend.return_value.batch_update.return_value.__enter__.return_value
+        writer.add_or_update.assert_called_once()
         mock_clear_caches.assert_has_calls(
             [mock.call(version.pk), mock.call(root.pk)],
         )
@@ -354,20 +356,24 @@ class TestUpdateContentRemoteOCR(DirectoriesMixin, TestCase):
     def setUp(self) -> None:
         super().setUp()
 
-        patcher = mock.patch("documents.tasks.get_parser_registry")
+        patcher = mock.patch("documents.jobs.get_parser_registry")
         self.mock_registry = patcher.start()
         self.mock_registry.return_value.get_parser_for_file.return_value = None
         self.addCleanup(patcher.stop)
 
+        source = self.dirs.scratch_dir / "sample.pdf"
+        shutil.copy(SIMPLE_DIGITAL_PDF, source)
         self.doc = Document.objects.create(
             title="test",
             content="my document",
             checksum="wow",
             mime_type="application/pdf",
+            filename=source,
         )
 
     def _allow_remote(self, **kwargs) -> bool:
-        tasks.update_document_content_maybe_archive_file(self.doc.pk, **kwargs)
+        with self.assertRaises(RejectedResult):
+            tasks.update_document_content_maybe_archive_file(self.doc.pk, **kwargs)
         _, call_kwargs = self.mock_registry.return_value.get_parser_for_file.call_args
         return call_kwargs["allow_remote"]
 

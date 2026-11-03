@@ -2986,8 +2986,9 @@ class DocumentOperationPermissionMixin(PassUserMixin, DocumentSelectionMixin):
         "edit_pdf",
         "remove_password",
         "merge_as_versions",
+        "reprocess",
     }
-    # merge_as_versions doesn't queue any consume tasks
+    # merge_as_versions doesn't queue background tasks.
     METHOD_NAMES_REQUIRING_TRIGGER_SOURCE = METHOD_NAMES_REQUIRING_USER - {
         "merge_as_versions",
     }
@@ -3543,6 +3544,7 @@ class PostDocumentView(GenericAPIView[Any]):
             created=created,
             asn=archive_serial_number,
             owner_id=request.user.id,
+            actor_id=request.user.id,
             custom_fields=custom_fields,
         )
 

@@ -21,6 +21,7 @@ from documents.models import CustomField
 from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import DocumentType
+from documents.models import PaperlessTask
 from documents.models import StoragePath
 from documents.models import Tag
 from documents.pdf_ops import PageSpec
@@ -1112,7 +1113,7 @@ class TestPDFActions(DirectoriesMixin, TestCase):
         pages = [[1, 2], [3]]
         self.doc2.archive_serial_number = 200
         self.doc2.save()
-        errback = bulk_edit.restore_archive_serial_numbers_task.s(
+        errback = bulk_edit.restore_archive_serial_numbers_task.si(
             {self.doc2.id: 200},
         )
         mock_chord.return_value.on_error.return_value = mock_chord.return_value
@@ -1471,7 +1472,7 @@ class TestPDFActions(DirectoriesMixin, TestCase):
         operations = [{"page": 1}, {"page": 2}]
         self.doc2.archive_serial_number = 250
         self.doc2.save()
-        errback = bulk_edit.restore_archive_serial_numbers_task.s(
+        errback = bulk_edit.restore_archive_serial_numbers_task.si(
             {self.doc2.id: 250},
         )
         mock_chord.return_value.on_error.return_value = mock_chord.return_value
@@ -1624,7 +1625,7 @@ class TestPDFActions(DirectoriesMixin, TestCase):
         mock_group.assert_not_called()
         mock_consume_file.assert_not_called()
 
-    @mock.patch("documents.bulk_edit.update_document_content_maybe_archive_file.delay")
+    @mock.patch("documents.jobs.submit_reprocess")
     @mock.patch("documents.tasks.consume_file.apply_async")
     @mock.patch("documents.bulk_edit.tempfile.mkdtemp")
     @mock.patch("documents.pdf_ops.decrypt_pdf")
@@ -1664,7 +1665,7 @@ class TestPDFActions(DirectoriesMixin, TestCase):
         self.assertEqual(task_kwargs["input_doc"].root_document_id, doc.id)
         self.assertIsNotNone(task_kwargs["overrides"])
 
-    @mock.patch("documents.bulk_edit.update_document_content_maybe_archive_file.delay")
+    @mock.patch("documents.jobs.submit_reprocess")
     @mock.patch("documents.tasks.consume_file.apply_async")
     @mock.patch("documents.bulk_edit.tempfile.mkdtemp")
     @mock.patch("documents.pdf_ops.decrypt_pdf")
@@ -1854,7 +1855,11 @@ class TestPDFActions(DirectoriesMixin, TestCase):
         mock_group.assert_not_called()
         mock_chord.assert_called_once()
         mock_chord.return_value.delay.assert_called_once()
-        mock_delete.si.assert_called_once_with([doc.id])
+        mock_delete.si.assert_called_once_with(
+            [doc.id],
+            expected_revisions=mock.ANY,
+            actor_id=None,
+        )
 
     @mock.patch(
         "documents.pdf_ops.decrypt_pdf",
@@ -1879,15 +1884,12 @@ class TestBulkEditReprocess:
     @pytest.fixture
     def mock_task(self, mocker: MockerFixture) -> mock.MagicMock:
         return mocker.patch(
-            "documents.bulk_edit.update_document_content_maybe_archive_file",
+            "documents.jobs.submit_reprocess",
         )
 
     @staticmethod
     def _queued_ids(mock_task: mock.MagicMock) -> list[int]:
-        return [
-            call.kwargs["kwargs"]["document_id"]
-            for call in mock_task.apply_async.call_args_list
-        ]
+        return [call.args[0] for call in mock_task.call_args_list]
 
     def test_reprocess_defaults_to_local(self, mock_task: mock.MagicMock) -> None:
         """
@@ -1902,11 +1904,12 @@ class TestBulkEditReprocess:
 
         assert bulk_edit.reprocess([doc.id]) == "OK"
 
-        mock_task.apply_async.assert_called_once()
-        assert mock_task.apply_async.call_args.kwargs["kwargs"] == {
-            "document_id": doc.id,
-            "remote_ocr": False,
-        }
+        mock_task.assert_called_once_with(
+            doc.id,
+            actor_id=None,
+            remote_ocr=False,
+            trigger_source=PaperlessTask.TriggerSource.MANUAL,
+        )
 
     def test_reprocess_passes_remote_ocr(self, mock_task: mock.MagicMock) -> None:
         """
@@ -1921,9 +1924,30 @@ class TestBulkEditReprocess:
 
         bulk_edit.reprocess([doc.id for doc in docs], remote_ocr=True)
 
-        assert mock_task.apply_async.call_count == 2
-        for call in mock_task.apply_async.call_args_list:
-            assert call.kwargs["kwargs"]["remote_ocr"]
+        assert mock_task.call_count == 2
+        for call in mock_task.call_args_list:
+            assert call.kwargs["remote_ocr"]
+
+    def test_reprocess_preserves_actor_and_trigger_source(
+        self,
+        mock_task: mock.MagicMock,
+    ) -> None:
+        """Keep the initiating user available for permission checks on application."""
+        user = User.objects.create_user(username="reprocess-user")
+        document = DocumentFactory(owner=user)
+
+        bulk_edit.reprocess(
+            [document.pk],
+            user=user,
+            trigger_source=PaperlessTask.TriggerSource.API_UPLOAD,
+        )
+
+        mock_task.assert_called_once_with(
+            document.pk,
+            actor_id=user.pk,
+            remote_ocr=False,
+            trigger_source=PaperlessTask.TriggerSource.API_UPLOAD,
+        )
 
     def test_reprocess_root_uses_latest_version(
         self,

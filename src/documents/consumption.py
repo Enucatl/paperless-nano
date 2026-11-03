@@ -43,6 +43,7 @@ def _consume_file(
     subdirs_as_tags: bool,
     task_id: str | None = None,
     submission_key: str | None = None,
+    actor_id: int | None = None,
 ) -> bool:
     """
     Queue a file for consumption.
@@ -53,6 +54,7 @@ def _consume_file(
         subdirs_as_tags: Whether to create tags from subdirectory names.
         task_id: Stable task ID for an API submission.
         submission_key: Opaque file identity for deduplicating API retries.
+        actor_id: Authenticated API caller, or None for the trusted watcher.
 
     Returns:
         True if the file was successfully handed to Celery, False otherwise.
@@ -85,7 +87,7 @@ def _consume_file(
                 original_file=filepath,
                 defer_mime_type=task_id is not None,
             ),
-            "overrides": DocumentMetadataOverrides(tag_ids=tag_ids),
+            "overrides": DocumentMetadataOverrides(tag_ids=tag_ids, actor_id=actor_id),
         }
         options = {}
         if task_id is not None:

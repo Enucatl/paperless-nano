@@ -833,7 +833,7 @@ class TestLlmIndexLocking:
 
         doc = MagicMock(spec=Document)
         doc.id = 1
-        indexing.llm_index_add_or_update_document(doc)
+        assert indexing.llm_index_add_or_update_document(doc) is True
 
         mock_store.upsert_document.assert_called_once()
 
@@ -865,7 +865,7 @@ class TestLlmIndexLocking:
 
         doc = MagicMock(spec=Document)
         doc.id = 1
-        indexing.llm_index_add_or_update_document(doc)
+        assert indexing.llm_index_add_or_update_document(doc) is False
 
         mock_store.upsert_document.assert_not_called()
 
@@ -903,7 +903,7 @@ class TestLlmIndexLocking:
 
         doc = MagicMock(spec=Document)
         doc.id = 1
-        indexing.llm_index_add_or_update_document(doc)
+        assert indexing.llm_index_add_or_update_document(doc) is False
 
         mock_store.upsert_document.assert_not_called()
 

@@ -10,12 +10,11 @@ from tempfile import mkstemp
 import magic
 from celery import Task
 from celery import shared_task
+from celery.exceptions import Ignore
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from django.db import transaction
 from django.utils import timezone
-from filelock import FileLock
 
 from documents.caching import clear_document_caches
 from documents.data_models import ConsumableDocument
@@ -25,13 +24,11 @@ from documents.data_models import ConsumeFileSuccessResult
 from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import StoredBarcode
 from documents.exceptions import SearchIndexLockError
-from documents.file_handling import create_source_path_directory
-from documents.file_handling import generate_unique_filename
+from documents.ingestion_jobs import DurableConsumeTask
 from documents.matching import prefilter_documents_by_workflowtrigger
 from documents.models import Correspondent
 from documents.models import CustomFieldInstance
 from documents.models import Document
-from documents.models import DocumentBarcode
 from documents.models import DocumentType
 from documents.models import PaperlessTask
 from documents.models import ShareLink
@@ -48,15 +45,11 @@ from documents.signals.handlers import cleanup_document_deletion
 from documents.signals.handlers import run_workflows
 from documents.signals.handlers import send_websocket_document_updated
 from documents.utils import IterWrapper
-from documents.utils import compute_checksum
 from documents.utils import identity
 from documents.workflows.utils import get_workflows_for_trigger
 from paperless.config import AIConfig
 from paperless.config import BarcodeConfig
-from paperless.config import RemoteOCRConfig
 from paperless.logging import consume_task_id
-from paperless.parsers import ParserContext
-from paperless.parsers.registry import get_parser_registry
 from paperless_ai.exceptions import LLMTimeoutError
 
 if settings.AUDIT_LOG_ENABLED:
@@ -167,11 +160,52 @@ def train_classifier(
         return "Training data unchanged"
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=DurableConsumeTask)
 def consume_file(
     self: Task,
+    input_doc: ConsumableDocument | None = None,
+    overrides: DocumentMetadataOverrides | None = None,
+    *,
+    job_id: str | None = None,
+):
+    """Execute durable ingestion; legacy direct calls enter the same admission."""
+    from documents.ingestion_jobs import run_consumption
+    from documents.ingestion_jobs import stage_consumption
+
+    if job_id is None:
+        job_id = str(stage_consumption(input_doc, overrides, job_id=self.request.id).pk)
+    from documents.ingestion_jobs import NeedsAttention
+    from documents.ingestion_jobs import has_callbacks
+    from documents.models import DocumentJob
+
+    try:
+        return run_consumption(job_id, task_id=self.request.id)
+    except Ignore:
+        raise
+    except Exception as error:
+        job = DocumentJob.objects.get(pk=job_id)
+        # An uncertain replay must not dispatch the native errback a second time.
+        if isinstance(error, NeedsAttention) or job.result.get("delivery"):
+            PaperlessTask.objects.filter(task_id=self.request.id or job_id).update(
+                status=PaperlessTask.Status.FAILURE,
+                result_data={
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
+                },
+            )
+            logger.error("Ingestion job %s needs attention: %s", job_id, error)
+            raise Ignore from error
+        if has_callbacks(job):
+            job.result["delivery"] = "failure-started"
+            job.save(update_fields=["result"])
+        raise
+
+
+def _consume_file_pipeline(
     input_doc: ConsumableDocument,
     overrides: DocumentMetadataOverrides | None = None,
+    *,
+    task_id: str | None = None,
 ) -> (
     ConsumeFileSuccessResult
     | ConsumeFileStoppedResult
@@ -186,11 +220,11 @@ def consume_file(
     from documents.consumer import WorkflowTriggerPlugin
     from documents.double_sided import CollatePlugin
 
-    token = consume_task_id.set((self.request.id or "")[:8])
+    token = consume_task_id.set((task_id or "")[:8])
     try:
         if input_doc.mime_type is None:
             input_doc.mime_type = magic.from_file(input_doc.original_file, mime=True)
-            receipt = PaperlessTask.objects.filter(task_id=self.request.id).first()
+            receipt = PaperlessTask.objects.filter(task_id=task_id).first()
             if receipt is not None:
                 receipt.input_data["mime_type"] = input_doc.mime_type
                 receipt.save(update_fields=["input_data"])
@@ -219,7 +253,7 @@ def consume_file(
         with (
             ProgressManager(
                 overrides.filename or input_doc.original_file.name,
-                self.request.id,
+                task_id,
             ) as status_mgr,
             TemporaryDirectory(dir=settings.SCRATCH_DIR) as tmp_dir,
         ):
@@ -233,13 +267,17 @@ def consume_file(
                     overrides,
                     status_mgr,
                     tmp_dir,
-                    self.request.id,
+                    task_id,
                 )
 
                 if not plugin.able_to_run:
                     logger.debug(f"Skipping plugin {plugin_name}")
                     continue
 
+                if input_doc.job_id:
+                    from documents.ingestion_jobs import record_progress
+
+                    record_progress(input_doc.job_id, plugin_class.__name__)
                 try:
                     logger.debug(f"Executing plugin {plugin_name}")
                     plugin.setup()
@@ -346,151 +384,34 @@ def _read_barcodes_for_reprocess(document: Document) -> list[StoredBarcode] | No
         return None
 
 
-@shared_task
+@shared_task(bind=True)
 def update_document_content_maybe_archive_file(
-    document_id,
+    self: Task,
+    document_id: int,
     *,
     remote_ocr: bool = False,
+    job_id: str | None = None,
 ) -> None:
-    """
-    Re-creates OCR content and thumbnail for a document, and archive file if
-    it exists.
+    """Execute a durable job, admitting legacy CLI/task calls at this boundary."""
+    from documents.jobs import run_reprocess
+    from documents.jobs import stage_reprocess
 
-    Remote OCR is used only when the engine is configured to handle everything
-    or if explicitly asked for via ``remote_ocr``.
-    """
-    from documents.consumer import should_produce_archive
-
-    document = Document.objects.get(id=document_id)
-
-    mime_type = document.mime_type
-
-    parser_class = get_parser_registry().get_parser_for_file(
-        mime_type,
-        document.original_filename or "",
-        document.source_path,
-        allow_remote=remote_ocr or RemoteOCRConfig().remote_ocr_by_default,
-    )
-
-    if not parser_class:
-        logger.error(
-            f"No parser found for mime type {mime_type}, cannot "
-            f"archive document {document} (ID: {document_id})",
+    if job_id is None:
+        job_id = str(
+            stage_reprocess(
+                document_id, remote_ocr=remote_ocr, job_id=self.request.id
+            ).pk
         )
-        return
+    if run_reprocess(job_id) is False:
+        raise Ignore
 
-    with parser_class() as parser:
-        parser.configure(ParserContext())
 
-        try:
-            produce_archive = should_produce_archive(
-                parser,
-                mime_type,
-                document.source_path,
-            )
-            parser.parse(
-                document.source_path,
-                mime_type,
-                produce_archive=produce_archive,
-            )
+@shared_task
+def recover_document_jobs() -> None:
+    """Redispatch durable jobs whose execution or completion was interrupted."""
+    from documents.jobs import recover_document_jobs as recover
 
-            barcodes = _read_barcodes_for_reprocess(document)
-
-            thumbnail = parser.get_thumbnail(document.source_path, mime_type)
-
-            with transaction.atomic():
-                oldDocument = Document.objects.get(pk=document.pk)
-                if parser.get_archive_path():
-                    checksum = compute_checksum(parser.get_archive_path())
-                    # I'm going to save first so that in case the file move
-                    # fails, the database is rolled back.
-                    # We also don't use save() since that triggers the filehandling
-                    # logic, and we don't want that yet (file not yet in place)
-                    document.archive_filename = generate_unique_filename(
-                        document,
-                        archive_filename=True,
-                    )
-                    Document.objects.filter(pk=document.pk).update(
-                        archive_checksum=checksum,
-                        content=parser.get_text(),
-                        archive_filename=document.archive_filename,
-                    )
-                    newDocument = Document.objects.get(pk=document.pk)
-                    if settings.AUDIT_LOG_ENABLED:
-                        LogEntry.objects.log_create(
-                            instance=oldDocument,
-                            changes={
-                                "content": [oldDocument.content, newDocument.content],
-                                "archive_checksum": [
-                                    oldDocument.archive_checksum,
-                                    newDocument.archive_checksum,
-                                ],
-                                "archive_filename": [
-                                    oldDocument.archive_filename,
-                                    newDocument.archive_filename,
-                                ],
-                            },
-                            additional_data={
-                                "reason": "Update document content",
-                            },
-                            action=LogEntry.Action.UPDATE,
-                        )
-                else:
-                    Document.objects.filter(pk=document.pk).update(
-                        content=parser.get_text(),
-                    )
-
-                    if settings.AUDIT_LOG_ENABLED:
-                        LogEntry.objects.log_create(
-                            instance=oldDocument,
-                            changes={
-                                "content": [oldDocument.content, parser.get_text()],
-                            },
-                            additional_data={
-                                "reason": "Update document content",
-                            },
-                            action=LogEntry.Action.UPDATE,
-                        )
-
-                if barcodes is not None:
-                    document.barcodes.all().delete()
-                    DocumentBarcode.objects.bulk_create(
-                        DocumentBarcode(document=document, **barcode)
-                        for barcode in barcodes
-                    )
-                    # metadata_etag includes modified
-                    Document.objects.filter(pk=document.pk).update(
-                        modified=timezone.now(),
-                    )
-
-                with FileLock(settings.MEDIA_LOCK):
-                    if parser.get_archive_path():
-                        create_source_path_directory(document.archive_path)
-                        shutil.move(parser.get_archive_path(), document.archive_path)
-                    shutil.move(thumbnail, document.thumbnail_path)
-
-            document.refresh_from_db()
-            logger.info(
-                f"Updating index for document {document_id} ({document.archive_checksum})",
-            )
-            from documents.search import get_backend
-
-            get_backend().add_or_update(document)
-
-            ai_config = AIConfig()
-            if ai_config.llm_index_enabled:
-                from paperless_ai.indexing import llm_index_add_or_update_document
-
-                llm_index_add_or_update_document(document)
-
-            clear_document_caches(document.pk)
-            if document.root_document_id is not None:
-                clear_document_caches(document.root_document_id)
-
-        except Exception:
-            logger.exception(
-                f"Error while parsing document {document} (ID: {document_id})",
-            )
+    recover()
 
 
 @shared_task
@@ -773,6 +694,10 @@ def apply_ai_suggestions(self, action_id: int, document_id: int) -> None:
 
     # Do not run update workflows again for their own AI result.
     clear_document_caches(document.pk)
+    from documents.job_context import active_ingestion_job
+
+    if active_ingestion_job.get() is not None:
+        return
     index_document.delay(document.pk)
 
     ai_config = AIConfig()

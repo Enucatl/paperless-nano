@@ -511,10 +511,13 @@ def update_llm_index(
     return msg
 
 
-def llm_index_add_or_update_document(document: Document):
+def llm_index_add_or_update_document(document: Document) -> bool:
     """
     Add or atomically replace a document's chunks in the index. Only root
     documents are indexed, so a version is indexed as its root document.
+
+    Returns:
+        Whether the write completed; False means index migration blocked it.
     """
     if document.root_document_id is not None:
         document = document.root_document
@@ -535,7 +538,7 @@ def llm_index_add_or_update_document(document: Document):
                 "rebuild' to resolve.",
                 document.id,
             )
-            return
+            return False
         if migration_result is MigrationCheckResult.DEFERRED:
             logger.info(
                 "Skipping incremental LLM index update for document %s: "
@@ -543,8 +546,9 @@ def llm_index_add_or_update_document(document: Document):
                 "will retry on the next write.",
                 document.id,
             )
-            return
+            return False
         store.upsert_document(str(document.id), new_nodes)
+    return True
 
 
 def llm_index_migrate() -> None:

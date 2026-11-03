@@ -535,6 +535,14 @@ class ConsumerPlugin(
                         self.working_copy,
                         self.log,
                     )
+                    if self.input_doc.job_id:
+                        from documents.ingestion_jobs import record_provider
+
+                        record_provider(
+                            self.input_doc.job_id,
+                            document_parser,
+                            produce_archive=produce_archive,
+                        )
                     document_parser.parse(
                         self.working_copy,
                         mime_type,
@@ -585,6 +593,18 @@ class ConsumerPlugin(
                         exception=e,
                     )
 
+                publication_original = self.unmodified_original or self.working_copy
+                if self.input_doc.job_id:
+                    from documents.ingestion_jobs import stage_outputs
+
+                    publication_original, thumbnail, archive_path = stage_outputs(
+                        self.input_doc.job_id,
+                        original=publication_original,
+                        thumbnail=Path(thumbnail),
+                        archive=Path(archive_path) if archive_path else None,
+                        text=text,
+                    )
+
                 # Prepare the document classifier.
 
                 # TODO: I don't really like to do this here, but this way we avoid
@@ -603,6 +623,10 @@ class ConsumerPlugin(
                 # in the system. This will be a transaction and reasonably fast.
                 try:
                     with transaction.atomic():
+                        if self.input_doc.job_id:
+                            from documents.ingestion_jobs import validate_application
+
+                            validate_application(self.input_doc.job_id)
                         # store the document.
                         if self.input_doc.root_document_id:
                             # If this is a new version of an existing document, we need
@@ -685,9 +709,7 @@ class ConsumerPlugin(
                             document=document,
                             logging_group=self.logging_group,
                             classifier=classifier,
-                            original_file=self.unmodified_original
-                            if self.unmodified_original
-                            else self.working_copy,
+                            original_file=publication_original,
                         )
 
                         # After everything is in the database, copy the files into
@@ -713,9 +735,7 @@ class ConsumerPlugin(
                             create_source_path_directory(document.source_path)
 
                             self._write(
-                                self.unmodified_original
-                                if self.unmodified_original is not None
-                                else self.working_copy,
+                                publication_original,
                                 document.source_path,
                             )
 
@@ -765,15 +785,22 @@ class ConsumerPlugin(
                             with document_update(
                                 document.root_document,
                                 sender=self.__class__,
-                                skip_ai_index=True,  # consumption already enqueues the LLM update
+                                skip_ai_index=True,  # consumption owns AI completion
+                                index=not bool(self.input_doc.job_id),
                             ):
                                 pass
 
+                        if self.input_doc.job_id:
+                            from documents.ingestion_jobs import commit_consumption
+
+                            commit_consumption(self.input_doc.job_id, document)
+
                         # Delete the file only if it was successfully consumed
-                        self.log.debug(
-                            f"Deleting original file {self.input_doc.original_file}",
-                        )
-                        self.input_doc.original_file.unlink()
+                        if not self.input_doc.job_id:
+                            self.log.debug(
+                                f"Deleting original file {self.input_doc.original_file}",
+                            )
+                            self.input_doc.original_file.unlink()
                         self.log.debug(f"Deleting working copy {self.working_copy}")
                         self.working_copy.unlink()
                         if self.unmodified_original is not None:  # pragma: no cover
@@ -788,7 +815,7 @@ class ConsumerPlugin(
                             / f"._{Path(self.input_doc.original_file).name}"
                         )
 
-                        if Path(shadow_file).is_file():
+                        if not self.input_doc.job_id and Path(shadow_file).is_file():
                             self.log.debug(f"Deleting shadow file {shadow_file}")
                             Path(shadow_file).unlink()
 
@@ -801,7 +828,15 @@ class ConsumerPlugin(
                         exception=e,
                     )
 
-        self.run_post_consume_script(document)
+        if self.input_doc.job_id:
+            from documents.ingestion_jobs import run_post_consume
+
+            run_post_consume(
+                self.input_doc.job_id,
+                lambda: self.run_post_consume_script(document),
+            )
+        else:
+            self.run_post_consume_script(document)
 
         self.log.info(f"Document {document} consumption finished")
 
@@ -1013,11 +1048,16 @@ class ConsumerPlugin(
             )
 
     def _write(self, source, target) -> None:
-        with (
-            Path(source).open("rb") as read_file,
-            Path(target).open("wb") as write_file,
-        ):
-            shutil.copyfileobj(read_file, write_file)
+        if self.input_doc.job_id:
+            from documents.ingestion_jobs import publish_file
+
+            publish_file(self.input_doc.job_id, Path(source), Path(target))
+        else:
+            with (
+                Path(source).open("rb") as read_file,
+                Path(target).open("wb") as write_file,
+            ):
+                shutil.copyfileobj(read_file, write_file)
 
         # Attempt to copy file's original stats, but it's ok if we can't
         try:

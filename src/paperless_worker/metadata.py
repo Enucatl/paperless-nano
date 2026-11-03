@@ -29,7 +29,17 @@ def describe_task(task: Any, app: Any) -> dict[str, Any]:
     from celery.app.task import Task
     from celery.contrib.django.task import DjangoTask
 
-    if type(task).__bases__ != (app.Task,) or app.Task.__bases__ != (DjangoTask,):
+    durable_consumer = False
+    if task.name == "documents.tasks.consume_file":
+        from documents.ingestion_jobs import DurableConsumeTask
+        from documents.tasks import consume_file
+
+        durable_consumer = task is consume_file._get_current_object() and type(
+            task
+        ).__bases__ == (DurableConsumeTask,)
+    if (not durable_consumer and type(task).__bases__ != (app.Task,)) or (
+        app.Task.__bases__ != (DjangoTask,)
+    ):
         raise ValueError(f"Lean worker does not support custom task base: {task.name}")
     for attribute in ("Strategy", "Request"):
         if getattr(task, attribute) != getattr(Task, attribute):
@@ -45,7 +55,12 @@ def describe_task(task: Any, app: Any) -> dict[str, Any]:
         "after_return",
         "before_start",
     ):
-        if getattr(type(task), method) is not getattr(DjangoTask, method):
+        expected_base = (
+            DurableConsumeTask
+            if durable_consumer and method == "after_return"
+            else DjangoTask
+        )
+        if getattr(type(task), method) is not getattr(expected_base, method):
             raise ValueError(
                 f"Lean worker does not support task hook {method}: {task.name}",
             )

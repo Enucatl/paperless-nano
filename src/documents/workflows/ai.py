@@ -1,10 +1,13 @@
 import logging
+from contextlib import nullcontext
 from datetime import date
 from datetime import datetime
 from typing import TypeVar
 
 from django.contrib.auth.models import User
+from django.db import transaction
 
+from documents.job_context import active_ingestion_job
 from documents.models import Correspondent
 from documents.models import Document
 from documents.models import DocumentType
@@ -152,6 +155,12 @@ def apply_ai_suggestions_to_document(
     # Workflows run without a user, so we use the document owner
     owner = document.owner
 
+    ingestion_id = active_ingestion_job.get()
+    if ingestion_id is not None:
+        from documents.job_callbacks import deletion_revision
+
+        input_revision = deletion_revision(document)
+
     try:
         suggestions = get_ai_document_classification(
             document,
@@ -169,6 +178,39 @@ def apply_ai_suggestions_to_document(
         )
         return []
 
+    with transaction.atomic() if ingestion_id is not None else nullcontext():
+        if ingestion_id is not None:
+            from documents.jobs import RejectedResult
+            from documents.jobs import _check_permission
+            from documents.models import DocumentJob
+
+            document = (
+                Document.objects.select_for_update().filter(pk=document.pk).first()
+            )
+            if document is None or deletion_revision(document) != input_revision:
+                raise RejectedResult("Document changed while obtaining AI suggestions")
+            job = DocumentJob.objects.get(pk=ingestion_id)
+            actor_id = job.input["overrides"].get("actor_id")
+            if job.input.get("root_document_id"):
+                _check_permission(document.root_document or document, actor_id)
+            elif actor_id is not None:
+                actor = User.objects.filter(pk=actor_id, is_active=True).first()
+                if actor is None or not actor.has_perm("documents.add_document"):
+                    raise RejectedResult(
+                        "The ingestion actor can no longer add documents"
+                    )
+        return _apply_suggestions(action, document, suggestions, logging_group)
+
+
+def _apply_suggestions(
+    action: WorkflowAction,
+    document: Document,
+    suggestions: dict,
+    logging_group,
+) -> list[str]:
+    """Persist permitted suggestions after the ingestion revision check."""
+    selected = set(action.ai_suggestion_fields or [])
+    owner = document.owner
     overwrite = action.ai_overwrite_existing
     create_missing = action.ai_create_missing
     updated_fields: list[str] = []

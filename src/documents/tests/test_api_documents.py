@@ -4633,17 +4633,22 @@ class TestDocumentApiCustomFieldsSorting(DirectoriesMixin, APITestCase):
         self.user = UserFactory(username="temp_admin", superuser=True)
         self.client.force_authenticate(user=self.user)
 
+        # Equal-width IDs keep JSON document-link ordering consistent across
+        # database backends, regardless of earlier tests' sequence values.
         self.doc1 = Document.objects.create(
+            pk=101,
             title="none1",
             checksum="A",
             mime_type="application/pdf",
         )
         self.doc2 = Document.objects.create(
+            pk=102,
             title="none2",
             checksum="B",
             mime_type="application/pdf",
         )
         self.doc3 = Document.objects.create(
+            pk=103,
             title="none3",
             checksum="C",
             mime_type="application/pdf",

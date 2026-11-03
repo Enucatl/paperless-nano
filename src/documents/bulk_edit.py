@@ -40,7 +40,6 @@ from documents.plugins.helpers import DocumentsStatusManager
 from documents.tasks import bulk_update_documents
 from documents.tasks import consume_file
 from documents.tasks import remove_document_from_index
-from documents.tasks import update_document_content_maybe_archive_file
 from documents.updates import modify_document_custom_fields
 from documents.versioning import get_latest_version_for_root
 from documents.versioning import get_root_document
@@ -76,10 +75,22 @@ def restore_archive_serial_numbers_task(
     *args,
     **kwargs,
 ) -> None:
-    restore_archive_serial_numbers(backup)
+    from documents.job_callbacks import run_callback
+
+    run_callback(
+        self.request.id,
+        self.name,
+        (backup, *args),
+        kwargs,
+        lambda: restore_archive_serial_numbers(backup),
+    )
 
 
-def release_archive_serial_numbers(doc_ids: list[int]) -> dict[int, int | None]:
+def release_archive_serial_numbers(
+    doc_ids: list[int],
+    *,
+    expected_asns: dict[int, int | None] | None = None,
+) -> dict[int, int | None]:
     """
     Clears ASNs on documents that are about to be replaced so new documents
     can be assigned ASNs without uniqueness collisions. Returns a backup map
@@ -90,7 +101,17 @@ def release_archive_serial_numbers(doc_ids: list[int]) -> dict[int, int | None]:
         archive_serial_number__isnull=False,
     ).only("pk", "archive_serial_number")
     backup = dict(qs.values_list("pk", "archive_serial_number"))
-    qs.update(archive_serial_number=None)
+    if expected_asns is None:
+        qs.update(archive_serial_number=None)
+    else:
+        released = {}
+        for doc_id, asn in backup.items():
+            if expected_asns.get(doc_id) == asn and Document.objects.filter(
+                pk=doc_id,
+                archive_serial_number=asn,
+            ).update(archive_serial_number=None):
+                released[doc_id] = asn
+        backup = released
     logger.info(f"Released archive serial numbers for documents {list(backup.keys())}")
     return backup
 
@@ -101,7 +122,10 @@ def restore_archive_serial_numbers(backup: dict[int, int | None]) -> None:
     rollback when replacement consumption fails.
     """
     for doc_id, asn in backup.items():
-        Document.objects.filter(pk=doc_id).update(archive_serial_number=asn)
+        Document.objects.filter(
+            pk=doc_id,
+            archive_serial_number__isnull=True,
+        ).update(archive_serial_number=asn)
     logger.info(f"Restored archive serial numbers for documents {list(backup.keys())}")
 
 
@@ -325,8 +349,65 @@ def modify_custom_fields(
     return "OK"
 
 
-@shared_task
-def delete(doc_ids: list[int]) -> Literal["OK"]:
+@shared_task(bind=True)
+def delete(
+    self,
+    doc_ids: list[int],
+    *,
+    expected_revisions: dict | None = None,
+    actor_id: int | None = None,
+) -> Literal["OK"]:
+    """Guard asynchronous deletion callbacks against repeated delivery."""
+    from documents.job_callbacks import run_callback
+
+    def apply_delete() -> Literal["OK"]:
+        """Recheck admitted callback targets before deleting their current state."""
+        if expected_revisions is None:
+            return _delete(doc_ids, raise_errors=bool(self.request.id))
+        from django.contrib.auth.models import User
+
+        from documents.job_callbacks import deletion_revision
+        from documents.jobs import RejectedResult
+        from documents.permissions import permitted_document_ids
+
+        with transaction.atomic():
+            documents = list(
+                Document.objects.select_for_update()
+                .filter(pk__in=doc_ids)
+                .order_by("pk")
+            )
+            for document in documents:
+                if deletion_revision(document) != expected_revisions.get(
+                    str(document.pk)
+                ):
+                    raise RejectedResult("Deletion target changed after admission")
+            if actor_id is not None:
+                actor = User.objects.filter(pk=actor_id, is_active=True).first()
+                if (
+                    actor is None
+                    or not actor.has_perm("documents.delete_document")
+                    or Document.objects.filter(pk__in=[doc.pk for doc in documents])
+                    .exclude(
+                        pk__in=permitted_document_ids(actor, perm="delete_document")
+                    )
+                    .exists()
+                ):
+                    raise RejectedResult(
+                        "The requesting user can no longer delete these documents"
+                    )
+            return _delete([doc.pk for doc in documents], raise_errors=True)
+
+    return run_callback(
+        self.request.id,
+        self.name,
+        (doc_ids,),
+        {"expected_revisions": expected_revisions, "actor_id": actor_id},
+        apply_delete,
+    )
+
+
+def _delete(doc_ids: list[int], *, raise_errors: bool = False) -> Literal["OK"]:
+    """Delete selected documents and retain their existing completion policy."""
     try:
         root_ids = (
             Document.objects.filter(id__in=doc_ids, root_document__isnull=True)
@@ -357,11 +438,19 @@ def delete(doc_ids: list[int]) -> Literal["OK"]:
                 "Detected a possible incompatible database column. See https://docs.paperless-ngx.com/troubleshooting/#convert-uuid-field",
             )
         logger.error(f"Error deleting documents: {e!s}")
+        if raise_errors:
+            raise
 
     return "OK"
 
 
-def reprocess(doc_ids: list[int], *, remote_ocr: bool = False) -> Literal["OK"]:
+def reprocess(
+    doc_ids: list[int],
+    *,
+    remote_ocr: bool = False,
+    user: User | None = None,
+    trigger_source: PaperlessTask.TriggerSource = PaperlessTask.TriggerSource.MANUAL,
+) -> Literal["OK"]:
     """
     Re-run parsing for the given documents.
 
@@ -371,6 +460,8 @@ def reprocess(doc_ids: list[int], *, remote_ocr: bool = False) -> Literal["OK"]:
     A root document with versions reprocesses its latest version, which is the
     file whose content, archive and thumbnail are shown for it.
     """
+    from documents.jobs import submit_reprocess
+
     latest_version = versions_newest_first(
         Document.objects.filter(root_document=OuterRef("pk")),
     ).values("id")[:1]
@@ -387,9 +478,11 @@ def reprocess(doc_ids: list[int], *, remote_ocr: bool = False) -> Literal["OK"]:
         .distinct()
     )
     for source_id in source_ids:
-        update_document_content_maybe_archive_file.apply_async(
-            kwargs={"document_id": source_id, "remote_ocr": remote_ocr},
-            headers={"trigger_source": PaperlessTask.TriggerSource.MANUAL},
+        submit_reprocess(
+            source_id,
+            actor_id=user.pk if user else None,
+            remote_ocr=remote_ocr,
+            trigger_source=trigger_source,
         )
 
     return "OK"
@@ -500,11 +593,16 @@ def merge(
     user: User | None = None,
     trigger_source: PaperlessTask.TriggerSource = PaperlessTask.TriggerSource.WEB_UI,
 ) -> Literal["OK"]:
+    from documents.job_callbacks import deletion_revision
+
     logger.info(
         f"Attempting to merge {len(doc_ids)} documents into a single document.",
     )
     qs = Document.objects.select_related("root_document").filter(id__in=doc_ids)
     docs_by_id = {doc.id: doc for doc in qs}
+    expected_revisions = {
+        str(doc.pk): deletion_revision(doc) for doc in docs_by_id.values()
+    }
     affected_docs: list[int] = []
     handoff_asn: int | None = None
     with pdf_ops.PdfMerger() as merger:
@@ -562,6 +660,7 @@ def merge(
 
     if user is not None:
         overrides.owner_id = user.id
+        overrides.actor_id = user.id
     if not delete_originals:
         overrides.skip_asn_if_exists = True
 
@@ -579,14 +678,28 @@ def merge(
     ).set(headers={"trigger_source": trigger_source})
 
     if delete_originals:
-        backup = release_archive_serial_numbers(affected_docs)
+        backup = release_archive_serial_numbers(
+            affected_docs,
+            expected_asns={
+                doc_id: docs_by_id[doc_id].archive_serial_number
+                for doc_id in affected_docs
+            },
+        )
+        for doc_id in backup:
+            expected_revisions[str(doc_id)]["fields"]["archive_serial_number"] = None
         logger.info(
             "Queueing removal of original documents after consumption of merged document",
         )
         try:
             consume_task.apply_async(
-                link=[delete.si(affected_docs)],
-                link_error=[restore_archive_serial_numbers_task.s(backup)],
+                link=[
+                    delete.si(
+                        affected_docs,
+                        expected_revisions=expected_revisions,
+                        actor_id=user.pk if user else None,
+                    ),
+                ],
+                link_error=[restore_archive_serial_numbers_task.si(backup)],
             )
         except Exception:
             restore_archive_serial_numbers(backup)
@@ -715,11 +828,14 @@ def split(
     user: User | None = None,
     trigger_source: PaperlessTask.TriggerSource = PaperlessTask.TriggerSource.WEB_UI,
 ) -> Literal["OK"]:
+    from documents.job_callbacks import deletion_revision
+
     logger.info(
         f"Attempting to split document {doc_ids[0]} into {len(pages)} documents",
     )
     doc = Document.objects.select_related("root_document").get(id=doc_ids[0])
     pair = _resolve_root_and_source_doc(doc, source_mode=source_mode)
+    expected_revisions = {str(doc.pk): deletion_revision(doc)}
 
     consume_tasks = []
 
@@ -742,6 +858,7 @@ def split(
             overrides.title = f"{doc.title} (split {idx + 1})"
             if user is not None:
                 overrides.owner_id = user.id
+                overrides.actor_id = user.id
             if not delete_originals:
                 overrides.skip_asn_if_exists = True
             logger.info(
@@ -758,16 +875,27 @@ def split(
             )
 
         if delete_originals:
-            backup = release_archive_serial_numbers([doc.id])
+            backup = release_archive_serial_numbers(
+                [doc.id],
+                expected_asns={doc.pk: doc.archive_serial_number},
+            )
+            if doc.pk in backup:
+                expected_revisions[str(doc.pk)]["fields"]["archive_serial_number"] = (
+                    None
+                )
             logger.info(
                 "Queueing removal of original document after consumption of the split documents",
             )
             try:
                 chord(
                     header=consume_tasks,
-                    body=delete.si([doc.id]),
+                    body=delete.si(
+                        [doc.id],
+                        expected_revisions=expected_revisions,
+                        actor_id=user.pk if user else None,
+                    ),
                 ).on_error(
-                    restore_archive_serial_numbers_task.s(backup),
+                    restore_archive_serial_numbers_task.si(backup),
                 ).apply_async()
             except Exception:
                 restore_archive_serial_numbers(backup)
@@ -844,12 +972,14 @@ def edit_pdf(
     document index (for splitting). Pages omitted from the list are
     discarded.
     """
+    from documents.job_callbacks import deletion_revision
 
     logger.info(
         f"Editing PDF of document {doc_ids[0]} with {len(operations)} operations",
     )
     doc = Document.objects.select_related("root_document").get(id=doc_ids[0])
     pair = _resolve_root_and_source_doc(doc, source_mode=source_mode)
+    expected_revisions = {str(doc.pk): deletion_revision(doc)}
     try:
         output_count = pdf_ops.validate_page_operations(
             operations,
@@ -930,13 +1060,24 @@ def edit_pdf(
                 )
 
             if delete_original:
-                backup = release_archive_serial_numbers([doc.id])
+                backup = release_archive_serial_numbers(
+                    [doc.id],
+                    expected_asns={doc.pk: doc.archive_serial_number},
+                )
+                if doc.pk in backup:
+                    expected_revisions[str(doc.pk)]["fields"][
+                        "archive_serial_number"
+                    ] = None
                 try:
                     chord(
                         header=consume_tasks,
-                        body=delete.si([doc.id]),
+                        body=delete.si(
+                            [doc.id],
+                            expected_revisions=expected_revisions,
+                            actor_id=user.pk if user else None,
+                        ),
                     ).on_error(
-                        restore_archive_serial_numbers_task.s(backup),
+                        restore_archive_serial_numbers_task.si(backup),
                     ).apply_async()
                 except Exception:
                     restore_archive_serial_numbers(backup)
@@ -968,9 +1109,12 @@ def remove_password(
     """
     Remove password protection from PDF documents.
     """
+    from documents.job_callbacks import deletion_revision
+
     for doc_id in doc_ids:
         doc = Document.objects.select_related("root_document").get(id=doc_id)
         pair = _resolve_root_and_source_doc(doc, source_mode=source_mode)
+        expected_revisions = {str(doc.pk): deletion_revision(doc)}
         try:
             logger.info(
                 f"Attempting password removal from document {pair.root_doc.id}",
@@ -1040,7 +1184,11 @@ def remove_password(
                 if delete_original:
                     chord(
                         header=consume_tasks,
-                        body=delete.si([doc.id]),
+                        body=delete.si(
+                            [doc.id],
+                            expected_revisions=expected_revisions,
+                            actor_id=user.pk if user else None,
+                        ),
                     ).delay()
                 else:
                     group(consume_tasks).delay()

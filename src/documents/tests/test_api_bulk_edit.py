@@ -12,6 +12,7 @@ from documents.models import CustomField
 from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import DocumentType
+from documents.models import PaperlessTask
 from documents.models import StoragePath
 from documents.models import Tag
 from paperless_testing.dirs import DirectoriesMixin
@@ -559,7 +560,14 @@ class TestBulkEditAPI(DirectoriesMixin, APITestCase):
         m.assert_called_once()
         args, kwargs = m.call_args
         self.assertEqual(args[0], [self.doc1.id])
-        self.assertEqual(kwargs, {"remote_ocr": False})
+        self.assertEqual(
+            kwargs,
+            {
+                "remote_ocr": False,
+                "user": self.user,
+                "trigger_source": PaperlessTask.TriggerSource.API_UPLOAD,
+            },
+        )
 
     @mock.patch("documents.views.bulk_edit.reprocess")
     def test_reprocess_documents_endpoint_remote_ocr(self, m) -> None:
@@ -581,7 +589,14 @@ class TestBulkEditAPI(DirectoriesMixin, APITestCase):
         m.assert_called_once()
         args, kwargs = m.call_args
         self.assertEqual(args[0], [self.doc1.id])
-        self.assertEqual(kwargs, {"remote_ocr": True})
+        self.assertEqual(
+            kwargs,
+            {
+                "remote_ocr": True,
+                "user": self.user,
+                "trigger_source": PaperlessTask.TriggerSource.API_UPLOAD,
+            },
+        )
 
     @mock.patch("documents.serialisers.bulk_edit.set_storage_path")
     def test_api_set_storage_path(self, m) -> None:

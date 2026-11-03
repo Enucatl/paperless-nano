@@ -85,6 +85,25 @@ if not pid:
         from paperless_ai.exceptions import LLMTimeoutError
         assert retry_task.autoretry_for == (LLMTimeoutError,)
         assert hasattr(retry_task, '_orig_run')
+        from documents.ingestion_jobs import DurableConsumeTask
+        from paperless_worker.metadata import describe_task
+        consume = app.tasks['documents.tasks.consume_file']
+        assert type(consume).__bases__ == (DurableConsumeTask,)
+        assert type(consume).after_return is DurableConsumeTask.after_return
+        assert describe_task(consume, app)['options']['name'] == consume.name
+        from unittest.mock import patch
+        with patch('celery.contrib.django.task.transaction.on_commit') as on_commit:
+            with patch.object(consume, 'delay') as delay:
+                consume.delay_on_commit(job_id='durable-job')
+                delay.assert_not_called()
+                on_commit.call_args.args[0]()
+                delay.assert_called_once_with(job_id='durable-job')
+        try:
+            describe_task(type(consume)(), app)
+        except ValueError as error:
+            assert 'custom task base' in str(error)
+        else:
+            raise AssertionError('Unregistered custom task base was accepted')
     except BaseException:
         import traceback
         traceback.print_exc()
@@ -133,6 +152,7 @@ def test_custom_task_hooks_fail_explicitly(worker_env: dict[str, str]) -> None:
     run_python(
         """
 from celery import Celery
+from celery.contrib.django.task import DjangoTask
 from paperless_worker.metadata import describe_task
 app = Celery('test', task_cls='celery.contrib.django.task:DjangoTask', fixups=[])
 @app.task(name='custom')
@@ -147,6 +167,25 @@ except ValueError as error:
     assert 'Request' in str(error)
 else:
     raise AssertionError('Custom request was silently dropped')
+del task.Request
+type(task._get_current_object()).after_return = lambda *args, **kwargs: None
+try:
+    describe_task(task._get_current_object(), app)
+except ValueError as error:
+    assert 'after_return' in str(error)
+else:
+    raise AssertionError('Custom completion hook was silently dropped')
+class CustomTask(DjangoTask):
+    pass
+@app.task(name='custom.base', base=CustomTask)
+def custom_base():
+    pass
+try:
+    describe_task(custom_base, app)
+except ValueError as error:
+    assert 'custom task base' in str(error)
+else:
+    raise AssertionError('Custom task base was silently dropped')
 """,
         worker_env,
     )

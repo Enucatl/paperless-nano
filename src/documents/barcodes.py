@@ -222,7 +222,8 @@ class BarcodePlugin(ConsumeTaskPlugin):
                             original_file=(tmp_dir / new_document.name).resolve(),
                             # Adding optional original_path for later uses in
                             # workflow matching
-                            original_path=self.input_doc.original_file,
+                            original_path=self.input_doc.source_path
+                            or self.input_doc.original_file,
                         ),
                         "overrides": self.metadata,
                     },

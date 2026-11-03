@@ -129,6 +129,7 @@ class ConsumerAPIView(APIView):
                 subdirs_as_tags=settings.CONSUMER_SUBDIRS_AS_TAGS,
                 task_id=task_id,
                 submission_key=submission_key,
+                actor_id=request.user.pk,
             )
             task = PaperlessTask.objects.filter(task_id=task_id).first()
             if task is None:

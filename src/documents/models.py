@@ -30,6 +30,42 @@ from documents.data_models import DocumentSource
 from documents.parsers import get_default_file_extension
 
 
+class DocumentJob(models.Model):
+    """Durable document processing input, result, and completion journal."""
+
+    class Status(models.TextChoices):
+        STAGING = "staging"
+        ATTENTION = "attention"
+        QUEUED = "queued"
+        RUNNING = "running"
+        PREPARED = "prepared"
+        COMMITTED = "committed"
+        SUCCEEDED = "succeeded"
+        FAILED = "failed"
+        REJECTED = "rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.QUEUED
+    )
+    kind = models.CharField(max_length=16, default="reprocess")
+    dispatch_options = models.JSONField(default=dict)
+    input = models.JSONField(default=dict)
+    configuration = models.JSONField(default=dict)
+    provider = models.JSONField(default=dict)
+    result = models.JSONField(default=dict)
+    attempts = models.PositiveIntegerField(default=0)
+    timeout = models.PositiveIntegerField()
+    error = models.TextField(blank=True)
+    created = models.DateTimeField(default=timezone.now)
+    updated = models.DateTimeField(default=timezone.now, db_index=True)
+    cleaned = models.BooleanField(default=False)
+
+    def __str__(self) -> str:
+        """Identify an operation without exposing document contents."""
+        return f"Document job {self.pk}: {self.status}"
+
+
 class ModelWithOwner(models.Model):
     owner = models.ForeignKey(
         User,
@@ -197,6 +233,8 @@ class Document(SoftDeleteModel, ModelWithOwner):  # type: ignore[django-manager-
             "primarily used for searching.",
         ),
     )
+
+    content_job = models.UUIDField(null=True, editable=False)
 
     content_length = models.GeneratedField(
         expression=Length("content"),
