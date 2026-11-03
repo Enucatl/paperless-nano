@@ -50,9 +50,9 @@ from documents.plugins.helpers import ProgressManager
 from documents.plugins.helpers import ProgressStatusOptions
 from documents.signals import document_consumption_finished
 from documents.signals import document_consumption_started
-from documents.signals import document_updated
 from documents.signals.handlers import run_workflows
 from documents.templating.workflows import parse_w_workflow_placeholders
+from documents.updates import document_update
 from documents.utils import compute_checksum
 from documents.utils import copy_basic_file_stats
 from documents.utils import copy_file_with_basic_stats
@@ -762,11 +762,12 @@ class ConsumerPlugin(
                         document.save()
 
                         if document.root_document_id:
-                            document_updated.send(
+                            with document_update(
+                                document.root_document,
                                 sender=self.__class__,
-                                document=document.root_document,
-                                skip_ai_index=True,  # document_consumption_finished already enqueues the LLM update
-                            )
+                                skip_ai_index=True,  # consumption already enqueues the LLM update
+                            ):
+                                pass
 
                         # Delete the file only if it was successfully consumed
                         self.log.debug(

@@ -15,7 +15,6 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db import transaction
-from django.db.models.signals import post_save
 from django.utils import timezone
 from filelock import FileLock
 
@@ -46,10 +45,10 @@ from documents.plugins.base import ConsumeTaskPlugin
 from documents.plugins.base import StopConsumeTaskError
 from documents.plugins.helpers import ProgressManager
 from documents.plugins.helpers import ProgressStatusOptions
-from documents.signals import document_updated
 from documents.signals.handlers import cleanup_document_deletion
 from documents.signals.handlers import run_workflows
 from documents.signals.handlers import send_websocket_document_updated
+from documents.updates import document_update
 from documents.utils import IterWrapper
 from documents.utils import compute_checksum
 from documents.utils import identity
@@ -323,23 +322,22 @@ def bulk_update_documents(document_ids) -> None:
     from documents.search import get_backend
 
     document_ids = list(document_ids)
-    # Annotated so the signal handlers below (e.g. matching) don't query the
-    # versions of each document. Indexing re-queries and re-annotates its own
-    # copy via add_or_update_ids() below, after these signals (and any
-    # workflow they trigger) have had a chance to mutate the documents.
+    # Workflows match effective version content; the batch index reads the
+    # final state again after all workflows have run.
     documents = annotate_effective_content(
         Document.objects.filter(id__in=document_ids),
     )
 
     for doc in documents:
         clear_document_caches(doc.pk)
-        document_updated.send(
-            sender=None,
-            document=doc,
+        with document_update(
+            doc,
             logging_group=uuid.uuid4(),
             skip_ai_index=True,  # bulk path calls update_llm_index once below
-        )
-        post_save.send(Document, instance=doc, created=False)
+            index=False,
+            reconcile_files=True,
+        ):
+            pass
 
     with get_backend().batch_update() as batch:
         batch.add_or_update_ids(document_ids)
@@ -804,7 +802,7 @@ def apply_ai_suggestions(self, action_id: int, document_id: int) -> None:
     if not apply_ai_suggestions_to_document(action, document):
         return
 
-    # No document_updated signal to avoid loop
+    # Do not run update workflows again for their own AI result.
     clear_document_caches(document.pk)
     index_document.delay(document.pk)
 

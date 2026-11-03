@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import logging
 import shutil
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
@@ -54,6 +55,8 @@ from documents.models import WorkflowTrigger
 from documents.permissions import restrict_queryset_to_visible
 from documents.plugins.helpers import DocumentsStatusManager
 from documents.templating.utils import convert_format_str_to_template_format
+from documents.updates import document_metadata_update
+from documents.updates import file_updates_deferred
 from documents.utils import compute_checksum
 from documents.utils import copy_file_with_basic_stats
 from documents.workflows.actions import build_workflow_action_context
@@ -441,6 +444,9 @@ def update_filename_and_move_files(
         if not _filename_template_uses_custom_fields(instance.document):
             return
         instance = instance.document
+
+    if file_updates_deferred(instance.pk):
+        return
 
     def validate_move(instance, old_path: Path, new_path: Path, root: Path) -> None:
         if not new_path.is_relative_to(root):
@@ -835,19 +841,6 @@ def run_workflows_added(
     )
 
 
-def run_workflows_updated(
-    sender,
-    document: Document,
-    logging_group: uuid.UUID | None = None,
-    **kwargs,
-) -> None:
-    run_workflows(
-        trigger_type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_UPDATED,
-        document=document,
-        logging_group=logging_group,
-    )
-
-
 def send_websocket_document_updated(
     sender,
     document: Document,
@@ -937,115 +930,115 @@ def run_workflows(
                 break
 
         if matching.document_matches_workflow(document, workflow, trigger_type):
-            action: WorkflowAction
-            has_move_to_trash_action = False
-            for action in workflow.actions.order_by("order", "pk"):
-                message = f"Applying {action} from {workflow}"
-                if not use_overrides:
-                    logger.info(message, extra={"group": logging_group})
-                else:
-                    messages.append(message)
-
-                if action.type == WorkflowAction.WorkflowActionType.ASSIGNMENT:
-                    if use_overrides and overrides:
-                        apply_assignment_to_overrides(action, overrides)
+            with (
+                document_metadata_update(document)
+                if not use_overrides
+                else nullcontext()
+            ):
+                action: WorkflowAction
+                has_move_to_trash_action = False
+                for action in workflow.actions.order_by("order", "pk"):
+                    message = f"Applying {action} from {workflow}"
+                    if not use_overrides:
+                        logger.info(message, extra={"group": logging_group})
                     else:
-                        apply_assignment_to_document(
+                        messages.append(message)
+
+                    if action.type == WorkflowAction.WorkflowActionType.ASSIGNMENT:
+                        if use_overrides and overrides:
+                            apply_assignment_to_overrides(action, overrides)
+                        else:
+                            apply_assignment_to_document(
+                                action,
+                                document,
+                                logging_group,
+                            )
+                    elif action.type == WorkflowAction.WorkflowActionType.REMOVAL:
+                        if use_overrides and overrides:
+                            apply_removal_to_overrides(action, overrides)
+                        else:
+                            apply_removal_to_document(action, document)
+                    elif action.type == WorkflowAction.WorkflowActionType.EMAIL:
+                        context = build_workflow_action_context(document, overrides)
+                        execute_email_action(
+                            action,
+                            document,
+                            context,
+                            logging_group,
+                            original_file,
+                            trigger_type,
+                        )
+                    elif action.type == WorkflowAction.WorkflowActionType.WEBHOOK:
+                        context = build_workflow_action_context(document, overrides)
+                        execute_webhook_action(
+                            action,
+                            document,
+                            context,
+                            logging_group,
+                            original_file,
+                        )
+                    elif (
+                        action.type
+                        == WorkflowAction.WorkflowActionType.PASSWORD_REMOVAL
+                    ):
+                        execute_password_removal_action(
                             action,
                             document,
                             logging_group,
+                            source_file=(
+                                original_file if caller_supplied_original_file else None
+                            ),
                         )
-                elif action.type == WorkflowAction.WorkflowActionType.REMOVAL:
-                    if use_overrides and overrides:
-                        apply_removal_to_overrides(action, overrides)
-                    else:
-                        apply_removal_to_document(action, document)
-                elif action.type == WorkflowAction.WorkflowActionType.EMAIL:
-                    context = build_workflow_action_context(document, overrides)
-                    execute_email_action(
-                        action,
-                        document,
-                        context,
-                        logging_group,
-                        original_file,
-                        trigger_type,
-                    )
-                elif action.type == WorkflowAction.WorkflowActionType.WEBHOOK:
-                    context = build_workflow_action_context(document, overrides)
-                    execute_webhook_action(
-                        action,
-                        document,
-                        context,
-                        logging_group,
-                        original_file,
-                    )
-                elif action.type == WorkflowAction.WorkflowActionType.PASSWORD_REMOVAL:
-                    execute_password_removal_action(
-                        action,
-                        document,
-                        logging_group,
-                        source_file=(
-                            original_file if caller_supplied_original_file else None
-                        ),
-                    )
-                elif action.type == WorkflowAction.WorkflowActionType.MOVE_TO_TRASH:
-                    has_move_to_trash_action = True
-                elif action.type == WorkflowAction.WorkflowActionType.REMOTE_OCR:
-                    if use_overrides and overrides:
-                        overrides.remote_ocr = True
-                    else:
-                        # If a workflow has a consumption trigger *and* another type,
-                        # the document has already been parsed by the time the other one fires
-                        logger.debug(
-                            "Remote OCR action only applies to consumption "
-                            "triggers, ignoring",
-                            extra={"group": logging_group},
-                        )
-                elif (
-                    action.type
-                    == WorkflowAction.WorkflowActionType.APPLY_AI_SUGGESTIONS
-                ):
-                    if use_overrides:
-                        # The document has not been parsed yet, so there is no
-                        # content for the LLM to make suggestions from
-                        logger.debug(
-                            "Apply AI suggestions action does not apply to "
-                            "consumption triggers, ignoring",
-                            extra={"group": logging_group},
-                        )
-                    else:
-                        # Queued rather than run sync
-                        from documents.tasks import apply_ai_suggestions
+                    elif action.type == WorkflowAction.WorkflowActionType.MOVE_TO_TRASH:
+                        has_move_to_trash_action = True
+                    elif action.type == WorkflowAction.WorkflowActionType.REMOTE_OCR:
+                        if use_overrides and overrides:
+                            overrides.remote_ocr = True
+                        else:
+                            # If a workflow has a consumption trigger *and* another type,
+                            # the document has already been parsed by the time the other one fires
+                            logger.debug(
+                                "Remote OCR action only applies to consumption "
+                                "triggers, ignoring",
+                                extra={"group": logging_group},
+                            )
+                    elif (
+                        action.type
+                        == WorkflowAction.WorkflowActionType.APPLY_AI_SUGGESTIONS
+                    ):
+                        if use_overrides:
+                            # The document has not been parsed yet, so there is no
+                            # content for the LLM to make suggestions from
+                            logger.debug(
+                                "Apply AI suggestions action does not apply to "
+                                "consumption triggers, ignoring",
+                                extra={"group": logging_group},
+                            )
+                        else:
+                            # Queued rather than run sync
+                            from documents.tasks import apply_ai_suggestions
 
-                        # kwargs so the PaperlessTask record can note the
-                        # document, see _extract_input_data
-                        apply_ai_suggestions.delay_on_commit(
-                            action_id=action.pk,
-                            document_id=document.pk,
-                        )
+                            # kwargs so the PaperlessTask record can note the
+                            # document, see _extract_input_data
+                            apply_ai_suggestions.delay_on_commit(
+                                action_id=action.pk,
+                                document_id=document.pk,
+                            )
 
-            if not use_overrides:
-                # limit title to 128 characters
-                document.title = document.title[:128]
-                # Save only the fields that workflow actions can set directly.
-                # Deliberately excludes filename and archive_filename — those are
-                # managed exclusively by update_filename_and_move_files via the
-                # post_save signal. Writing stale in-memory values here would revert
-                # a concurrent update_filename_and_move_files DB write, leaving the
-                # DB pointing at the old path while the file is already at the new
-                # one (see: https://github.com/paperless-ngx/paperless-ngx/issues/12386).
-                # modified has auto_now=True but is not auto-added when update_fields
-                # is specified, so it must be listed explicitly.
-                document.save(
-                    update_fields=[
-                        "title",
-                        "correspondent",
-                        "document_type",
-                        "storage_path",
-                        "owner",
-                        "modified",
-                    ],
-                )
+                if not use_overrides:
+                    # limit title to 128 characters
+                    document.title = document.title[:128]
+                    # Never overwrite filenames from a stale workflow instance.
+                    document.save(
+                        update_fields=[
+                            "title",
+                            "correspondent",
+                            "document_type",
+                            "storage_path",
+                            "owner",
+                            "modified",
+                        ],
+                    )
 
             WorkflowRun.objects.create(
                 workflow=workflow,

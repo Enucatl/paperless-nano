@@ -36,7 +36,6 @@ from django.utils.timezone import make_aware
 from django.utils.translation import gettext as _
 from drf_spectacular.utils import extend_schema_field
 from drf_spectacular.utils import extend_schema_serializer
-from drf_writable_nested.serializers import NestedUpdateMixin
 from guardian.core import ObjectPermissionChecker
 from guardian.utils import get_group_obj_perms_model
 from guardian.utils import get_user_obj_perms_model
@@ -45,11 +44,6 @@ from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.fields import SerializerMethodField
 from rest_framework.filters import OrderingFilter
-from rest_framework.utils import model_meta
-
-if settings.AUDIT_LOG_ENABLED:
-    from auditlog.context import set_actor
-
 
 from documents import bulk_edit
 from documents.data_models import DocumentSource
@@ -127,45 +121,6 @@ class DynamicFieldsModelSerializer(serializers.ModelSerializer[Any]):
             existing = set(self.fields)
             for field_name in existing - allowed:
                 self.fields.pop(field_name)
-
-
-class DocumentUpdateFieldsModelSerializer(DynamicFieldsModelSerializer):
-    stale_update_excluded_fields = frozenset({"filename", "archive_filename"})
-
-    def _get_update_fields(self, validated_data) -> list[str]:
-        model_fields = {
-            field.name
-            for field in self.Meta.model._meta.concrete_fields
-            if field.name not in self.stale_update_excluded_fields
-        }
-        update_fields = [
-            field_name for field_name in validated_data if field_name in model_fields
-        ]
-        if "modified" in model_fields and "modified" not in update_fields:
-            update_fields.append("modified")
-        return update_fields
-
-    def update(self, instance, validated_data):
-        serializers.raise_errors_on_nested_writes("update", self, validated_data)
-        info = model_meta.get_field_info(instance)
-
-        m2m_fields = []
-        for attr, value in validated_data.items():
-            if attr in info.relations and info.relations[attr].to_many:
-                m2m_fields.append((attr, value))
-            else:
-                setattr(instance, attr, value)
-
-        # File names are managed by post-save file handling.  Saving only the
-        # serializer-updated fields prevents stale in-memory path values from
-        # overwriting a concurrent move.
-        instance.save(update_fields=self._get_update_fields(validated_data))
-
-        for attr, value in m2m_fields:
-            field = getattr(instance, attr)
-            field.set(value)
-
-        return instance
 
 
 class MatchingModelSerializer(serializers.ModelSerializer[Any]):
@@ -846,27 +801,13 @@ class CustomFieldInstanceSerializer(serializers.ModelSerializer[CustomFieldInsta
     value = ReadWriteSerializerMethodField(allow_null=True)
 
     def create(self, validated_data):
-        # An instance is attached to a document
-        document: Document = validated_data["document"]
-        # And to a CustomField
-        custom_field: CustomField = validated_data["field"]
-        # This key must exist, as it is validated
-        data_store_name = CustomFieldInstance.get_value_field_name(
-            custom_field.data_type,
-        )
+        from documents.updates import save_custom_field_value
 
-        if custom_field.data_type == CustomField.FieldDataType.DOCUMENTLINK:
-            # prior to update so we can look for any docs that are going to be removed
-            bulk_edit.reflect_doclinks(document, custom_field, validated_data["value"])
-
-        # Actually update or create the instance, providing the value
-        # to fill in the correct attribute based on the type
-        instance, _ = CustomFieldInstance.objects.update_or_create(
-            document=document,
-            field=custom_field,
-            defaults={data_store_name: validated_data["value"]},
+        return save_custom_field_value(
+            validated_data["document"],
+            validated_data["field"],
+            validated_data["value"],
         )
-        return instance
 
     def get_value(self, obj: CustomFieldInstance) -> str | int | float | dict | None:
         return obj.value
@@ -1014,8 +955,7 @@ class DocumentVersionInfoSerializer(serializers.Serializer[_DocumentVersionInfo]
 )
 class DocumentSerializer(
     OwnedObjectSerializer,
-    NestedUpdateMixin,
-    DocumentUpdateFieldsModelSerializer,
+    DynamicFieldsModelSerializer,
 ):
     correspondent = CorrespondentField(allow_null=True)
     tags = TagsField(many=True)
@@ -1169,100 +1109,25 @@ class DocumentSerializer(
                     ],
                 },
             )
+        if "custom_fields" in attrs:
+            # PATCH still replaces each supplied custom-field value in full.
+            value_field = self.fields["custom_fields"].child.fields["value"]
+            custom_field_errors = [
+                {"value": [value_field.error_messages["required"]]}
+                if "value" not in field
+                else {}
+                for field in attrs.get("custom_fields", [])
+            ]
+            if any(custom_field_errors):
+                raise serializers.ValidationError(
+                    {"custom_fields": custom_field_errors}
+                )
         return super().validate(attrs)
 
     def update(self, instance: Document, validated_data):
-        if "created_date" in validated_data:
-            if "created" not in validated_data:
-                validated_data["created"] = validated_data["created_date"]
-            logger.warning(
-                "created_date is deprecated, use created instead",
-            )
-            validated_data.pop("created_date")
-        if instance.custom_fields.count() > 0 and "custom_fields" in validated_data:
-            incoming_custom_fields = [
-                field["field"] for field in validated_data["custom_fields"]
-            ]
-            for custom_field_instance in instance.custom_fields.filter(
-                field__data_type=CustomField.FieldDataType.DOCUMENTLINK,
-            ):
-                if (
-                    custom_field_instance.field not in incoming_custom_fields
-                    and custom_field_instance.value is not None
-                ):
-                    # Doc link field is being removed entirely
-                    for doc_id in custom_field_instance.value:
-                        bulk_edit.remove_doclink(
-                            instance,
-                            custom_field_instance.field,
-                            doc_id,
-                        )
-        if "tags" in validated_data:
-            # Respect tag hierarchy on updates:
-            # - Adding a child adds its ancestors
-            # - Removing a parent removes all its descendants
-            prev_tags = set(instance.tags.all())
-            requested_tags = set(validated_data["tags"])
+        from documents.updates import save_document_metadata
 
-            # Tags newly added in this update and the ancestors they require
-            added_tags = requested_tags - prev_tags
-            required_by_add_tags = set(added_tags)
-            for t in added_tags:
-                required_by_add_tags.update(t.get_ancestors())
-
-            # Tags being removed in this update and all descendants, except
-            # those required by a tag that is being added in this same update
-            removed_tags = prev_tags - requested_tags
-            blocked_tags = set(removed_tags)
-            for t in removed_tags:
-                blocked_tags.update(t.get_descendants())
-            blocked_tags.difference_update(required_by_add_tags)
-
-            # Add all parent tags
-            final_tags = set(requested_tags)
-            for t in requested_tags:
-                final_tags.update(t.get_ancestors())
-
-            # Drop removed parents and their descendants
-            final_tags.difference_update(blocked_tags)
-
-            validated_data["tags"] = list(final_tags)
-        if validated_data.get("remove_inbox_tags"):
-            current_tag_ids = {t.pk for t in instance.tags.all()}
-            tags = (
-                validated_data["tags"]
-                if "tags" in validated_data
-                else list(instance.tags.all())
-            )
-
-            # Tags newly added in this update, plus their ancestors, are kept
-            keep_ids: set[int] = set()
-            for tag in tags:
-                if tag.pk not in current_tag_ids:
-                    keep_ids.add(tag.pk)
-                    keep_ids.update(int(pk) for pk in tag.get_ancestors_pks())
-
-            # Remove inbox tags and their descendants, except those being kept
-            remove_ids: set[int] = set()
-            for inbox_tag in (
-                Tag.objects.filter(is_inbox_tag=True)
-                .exclude(pk__in=keep_ids)
-                .only("pk", "tn_descendants_pks")
-            ):
-                remove_ids.add(inbox_tag.pk)
-                remove_ids.update(int(pk) for pk in inbox_tag.get_descendants_pks())
-
-            validated_data["tags"] = [t for t in tags if t.pk not in remove_ids]
-
-        if settings.AUDIT_LOG_ENABLED:
-            with set_actor(self.user):
-                super().update(instance, validated_data)
-        else:
-            super().update(instance, validated_data)
-
-        # hard delete custom field instances that were soft deleted
-        CustomFieldInstance.deleted_objects.filter(document=instance).delete()
-        return instance
+        return save_document_metadata(instance, validated_data, user=self.user)
 
     def __init__(self, *args, **kwargs) -> None:
         self.truncate_content = kwargs.pop("truncate_content", False)

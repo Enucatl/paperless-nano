@@ -221,7 +221,6 @@ from documents.serialisers import UiSettingsViewSerializer
 from documents.serialisers import WorkflowActionSerializer
 from documents.serialisers import WorkflowSerializer
 from documents.serialisers import WorkflowTriggerSerializer
-from documents.signals import document_updated
 from documents.tasks import build_share_link_bundle
 from documents.tasks import consume_file
 from documents.tasks import empty_trash
@@ -229,6 +228,8 @@ from documents.tasks import llmindex_index
 from documents.tasks import sanity_check
 from documents.tasks import train_classifier
 from documents.tasks import update_document_parent_tags
+from documents.updates import document_metadata_update
+from documents.updates import document_update
 from documents.utils import get_boolean
 from documents.versioning import VersionResolutionError
 from documents.versioning import annotate_effective_content
@@ -1306,35 +1307,22 @@ class DocumentViewSet(
             data=data,
             partial=serializer_partial,
         )
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
+        with document_update(root_doc, sender=self.__class__):
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
 
-        if content_updated and content_doc.id != root_doc.id:
-            content_doc.content = (
-                str(updated_content) if updated_content is not None else ""
-            )
-            content_doc.save(update_fields=["content", "modified"])
+            if content_updated and content_doc.id != root_doc.id:
+                content_doc.content = (
+                    str(updated_content) if updated_content is not None else ""
+                )
+                with document_metadata_update(content_doc):
+                    content_doc.save(update_fields=["content", "modified"])
 
-        refreshed_doc = self.get_queryset().get(pk=root_doc.pk)
-        response_data = self.get_serializer(refreshed_doc).data
-        if "version" in request.query_params and "content" in response_data:
-            response_data["content"] = content_doc.content
-        response = Response(response_data)
-
-        from documents.search import get_backend
-
-        document_updated.send(
-            sender=self.__class__,
-            document=refreshed_doc,
-        )
-
-        # Index the final workflow state, including deletion.
-        backend = get_backend()
-        final_doc = Document.objects.filter(pk=root_doc.pk).first()
-        if final_doc is None:
-            backend.remove(root_doc.pk)
-        else:
-            backend.add_or_update(final_doc)
+            refreshed_doc = self.get_queryset().get(pk=root_doc.pk)
+            response_data = self.get_serializer(refreshed_doc).data
+            if "version" in request.query_params and "content" in response_data:
+                response_data["content"] = content_doc.content
+            response = Response(response_data)
 
         return response
 
@@ -2317,7 +2305,6 @@ class DocumentViewSet(
         version_doc.delete()
         root_doc.modified = timezone.now()
         Document.objects.filter(pk=root_doc.pk).update(modified=root_doc.modified)
-        _backend.add_or_update(root_doc)
         if settings.AUDIT_LOG_ENABLED:
             actor = (
                 request.user if request.user and request.user.is_authenticated else None
@@ -2339,10 +2326,8 @@ class DocumentViewSet(
             Document.objects.filter(Q(id=root_doc.id) | Q(root_document=root_doc)),
         ).first()
 
-        document_updated.send(
-            sender=self.__class__,
-            document=root_doc,
-        )
+        with document_update(root_doc, sender=self.__class__):
+            pass
         return Response(
             {
                 "result": "OK",
@@ -2393,7 +2378,8 @@ class DocumentViewSet(
         version_doc = self._get_version_doc_for_root(root_doc, version_id)
         old_label = version_doc.version_label
         version_doc.version_label = serializer.validated_data["version_label"]
-        version_doc.save(update_fields=["version_label"])
+        with document_metadata_update(version_doc):
+            version_doc.save(update_fields=["version_label"])
         root_doc.modified = timezone.now()
         Document.objects.filter(pk=root_doc.pk).update(modified=root_doc.modified)
 
@@ -2414,10 +2400,8 @@ class DocumentViewSet(
                 },
             )
 
-        document_updated.send(
-            sender=self.__class__,
-            document=root_doc,
-        )
+        with document_update(root_doc, sender=self.__class__):
+            pass
 
         return Response(
             {

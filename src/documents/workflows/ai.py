@@ -254,15 +254,15 @@ def apply_ai_suggestions_to_document(
             updated_fields.append("tags")
 
     if updated_fields:
-        # save fields and update modified (excluding m2m tags from update_fields)
-        direct_updated_fields = [
-            field for field in updated_fields if field in DIRECT_FIELDS.values()
-        ]
-        document.save(update_fields=[*direct_updated_fields, "modified"])
+        from documents.updates import document_metadata_update
 
-    # Tags at the end so m2m_changed doesn't trigger db and overwrite other changes
-    if tags_to_add:
-        document.add_nested_tags(tags_to_add)
+        with document_metadata_update(document):
+            direct_updated_fields = [
+                field for field in updated_fields if field in DIRECT_FIELDS.values()
+            ]
+            document.save(update_fields=[*direct_updated_fields, "modified"])
+            if tags_to_add:
+                document.add_nested_tags(tags_to_add)
 
     logger.info(
         "Applied AI suggestions %s to document %s",

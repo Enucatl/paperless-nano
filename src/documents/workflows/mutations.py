@@ -24,11 +24,7 @@ def apply_assignment_to_document(
     action: WorkflowAction, annotated with 'has_assign_*' boolean fields
     """
     if action.has_assign_tags:
-        # Apply to a freshly-fetched instance rather than the shared `document`.
-        # Document.tags.add() fires an m2m_changed signal that ultimately calls
-        # instance.refresh_from_db(), which would discard any other unsaved
-        # assignment fields (e.g. storage_path) already staged on `document`.
-        Document.objects.get(pk=document.pk).add_nested_tags(action.assign_tags.all())
+        document.add_nested_tags(action.assign_tags.all())
 
     if action.assign_correspondent:
         document.correspondent = action.assign_correspondent
@@ -215,7 +211,7 @@ def apply_removal_to_document(
     """
 
     if action.remove_all_tags:
-        Document.objects.get(pk=document.pk).tags.clear()
+        document.tags.clear()
     else:
         tag_ids_to_remove: set[int] = set()
         for tag in action.remove_tags.all():
@@ -223,7 +219,7 @@ def apply_removal_to_document(
             tag_ids_to_remove.update(int(pk) for pk in tag.get_descendants_pks())
 
         if tag_ids_to_remove:
-            Document.objects.get(pk=document.pk).tags.remove(*tag_ids_to_remove)
+            document.tags.remove(*tag_ids_to_remove)
 
     if action.remove_all_correspondents or (
         document.correspondent

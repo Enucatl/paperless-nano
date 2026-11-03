@@ -533,9 +533,9 @@ class TestApplyAISuggestionsTask(DirectoriesMixin, TestCase):
             - The task runs
         THEN:
             - The search index and caches are refreshed directly, deliberately
-              not via the document_updated signal: that re-runs updated
-              workflows, which for this action means queueing another LLM
-              query for a document it just changed, forever
+              without notifications or another document-update operation,
+              which would queue another LLM query for a document it just
+              changed, forever
         """
         with (
             mock.patch(
@@ -544,7 +544,7 @@ class TestApplyAISuggestionsTask(DirectoriesMixin, TestCase):
             ),
             mock.patch("documents.tasks.index_document") as index_document,
             mock.patch("documents.tasks.clear_document_caches") as clear_caches,
-            mock.patch("documents.tasks.document_updated") as document_updated,
+            mock.patch("documents.signals.document_updated") as document_updated,
         ):
             tasks.apply_ai_suggestions(self.action.pk, self.doc.pk)
 
