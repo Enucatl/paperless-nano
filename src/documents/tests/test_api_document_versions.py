@@ -516,12 +516,16 @@ class TestDocumentVersioningApi(DirectoriesMixin, APITestCase):
         )
         version = Document.objects.create(
             title="v1",
+            content="Version-specific text",
             checksum="v1",
             mime_type="application/pdf",
             root_document=root,
         )
 
-        with mock.patch("documents.views.DocumentViewSet.get_metadata") as metadata:
+        with (
+            mock.patch("documents.views.DocumentViewSet.get_metadata") as metadata,
+            mock.patch("documents.views.detect_language", return_value="de") as detect,
+        ):
             metadata.return_value = []
             resp = self.client.get(
                 f"/api/documents/{root.id}/metadata/?version={version.id}",
@@ -529,6 +533,8 @@ class TestDocumentVersioningApi(DirectoriesMixin, APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(metadata.called)
+        detect.assert_called_once_with(version.content)
+        self.assertEqual(resp.data["lang"], "de")
 
     def test_metadata_version_param_errors(self) -> None:
         root = self._create_pdf(title="root", checksum="root")
@@ -564,9 +570,11 @@ class TestDocumentVersioningApi(DirectoriesMixin, APITestCase):
         )
         self.client.force_authenticate(user=other)
 
-        resp = self.client.get(f"/api/documents/{doc.id}/metadata/")
+        with mock.patch("documents.views.detect_language") as detect:
+            resp = self.client.get(f"/api/documents/{doc.id}/metadata/")
 
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        detect.assert_not_called()
 
     def test_update_version_enqueues_consume_with_overrides(self) -> None:
         root = Document.objects.create(

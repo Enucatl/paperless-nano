@@ -1,6 +1,7 @@
 import datetime
 import json
 import shutil
+import subprocess
 import tempfile
 import uuid
 import zoneinfo
@@ -2624,6 +2625,17 @@ class TestDocumentApi(DirectoriesMixin, ConsumeTaskMixin, APITestCase):
     def test_get_metadata_invalid_doc(self) -> None:
         response = self.client.get("/api/documents/34576/metadata/")
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_get_metadata_language_timeout(self) -> None:
+        """A failed read-only inference preserves metadata and its English fallback."""
+        doc = Document.objects.create(content="Text", mime_type="application/pdf")
+        with mock.patch(
+            "documents.views.detect_language",
+            side_effect=subprocess.TimeoutExpired("language helper", 30),
+        ):
+            response = self.client.get(f"/api/documents/{doc.pk}/metadata/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["lang"], "en")
 
     def test_get_metadata_no_archive(self) -> None:
         doc = Document.objects.create(

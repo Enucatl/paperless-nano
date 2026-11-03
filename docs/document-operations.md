@@ -1076,3 +1076,60 @@ Changed-file hooks passed, including Ruff, Prettier and codespell. No production
 runtime, full suite, PostgreSQL/MariaDB, live remote services, RAM measurements or
 long-idle deployment workload was checked. No push, deployment or image publication
 was performed. The preexisting workflow and memory-report changes remain excluded.
+
+## Language detection residency (#27)
+
+Document metadata resolves access permissions and the requested effective version
+before passing its content to `documents.language.detect_language`. The detector
+runs the existing `langdetect` implementation in a short-lived Python process;
+its language profiles are released when that process exits. UTF-8 text crosses a
+private standard-input pipe, and the parent accepts only a language-code result.
+The request contains only document text, without paths or database objects.
+The helper does not initialize Django, publish files, modify documents or enqueue
+work. `subprocess.run` owns waiting, timeout termination and child reaping, without
+a persistent pool or custom lifecycle manager.
+
+The metadata response, permission/version selection and cache behavior are
+unchanged. Empty content returns the existing English fallback; failed or timed-out
+inference still uses that fallback in the metadata endpoint. Each nonempty request
+pays model startup time. Concurrent requests may overlap temporary detector memory;
+this must be counted when evaluating the candidate.
+
+Verification passed **386 selected cases**, including real
+concurrent multilingual inference, Unicode pipe encoding with an ASCII child I/O
+environment, arbitrary working directories, absence of detector imports in the
+caller, invalid results and timeout fallback. API checks cover permission denial,
+selected-version content and existing metadata behavior. The selection also covers
+durable ingestion/reprocessing, retries, stale-result rejection, recovery, parser
+operations and normal/lean-worker compatibility. It used Python 3.14.9, Django
+5.2.17, SQLite and frozen uv testing/lint dependencies in disposable
+`docker run --rm --userns=host` containers. `uv run --no-sync ruff format .` ran in
+the disposable source copy; only the owned test file needed formatting. Ruff passed
+for all five changed Python files.
+
+The exact selection used `pytest -o addopts='' -n 4 --dist=loadscope
+--randomly-seed=1 --tb=short`:
+
+- `src/documents/tests/`: `test_language.py`, `test_api_documents.py`,
+  `test_api_document_versions.py`, `test_version_conditionals.py`,
+  `test_api_permissions.py`, `test_document_jobs.py`, `test_ingestion_jobs.py`,
+  `test_job_callbacks.py`, `test_document_jobs_command.py`,
+  `test_parser_operations.py`, `test_thumbnail_operations.py`.
+- `src/paperless/tests/`: `test_import_boundaries.py`, `test_asgi.py`,
+  `test_celery.py`, `test_worker_trace.py`.
+- `src/paperless_worker/tests/` (entire directory).
+
+Three runs per variant measured a 59.21 MiB (14.7%) reduction in post-feature
+Paperless PSS and a 59.12 MiB (5.0%) reduction across the six local services.
+Metadata requests cost approximately 0.31 seconds extra. Four repeat runs also
+verified actual queued retry/recovery, committed completion without reparsing,
+and stale-result rejection after the idle workload. The methods, individual
+measurements, rejected alternatives and scope limits are recorded in
+[memory-measurement.md](memory-measurement.md). Existing missing-static
+and synchronous-ASGI-stream warnings remain. The full suite and MariaDB were not
+run for this change; the isolated residency workload uses PostgreSQL 18.
+
+The final migration check found no model changes. All applicable changed-file
+hooks passed (12 passed, seven with no matching files), including Ruff, Prettier,
+codespell and Dockerfile checks. Independent review found no material correctness
+or safety issue. Preexisting workflow and memory-report diffs were preserved.

@@ -1,0 +1,2549 @@
+{
+  "units": "MiB except explicitly named seconds and counts",
+  "scope": "Six isolated local services; selected 12 seeded plus 2 ingested documents; no remote inference or production histories. One-second cgroup samples and endpoint process PSS.",
+  "runs": [
+    {
+      "variant": "metadata-baseline1",
+      "image_tag": "paperless-memory27:baseline",
+      "idle_window_seconds": 300,
+      "readiness_seconds": 12.777,
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 159.883,
+          "endpoint_web_pss": 296.513,
+          "endpoint_all_pss": 1068.006,
+          "endpoint_service_pss": {
+            "db": 73.988,
+            "broker": 17.368,
+            "webserver": 296.513,
+            "phoenix": 507.277,
+            "webhook-listener": 68.032,
+            "ai": 104.827
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.274,
+          "all_current": {
+            "min": 1160.594,
+            "median": 1168.51,
+            "p95": 1254.273,
+            "max": 1256.129
+          },
+          "all_anon": {
+            "min": 849.051,
+            "median": 855.691,
+            "p95": 940.734,
+            "max": 942.551
+          },
+          "all_file": {
+            "min": 224.566,
+            "median": 226.328,
+            "p95": 227.676,
+            "max": 228.754
+          },
+          "service_anon_medians": {
+            "db": 24.652,
+            "broker": 5.195,
+            "webserver": 256.891,
+            "phoenix": 420.164,
+            "webhook-listener": 59.938,
+            "ai": 88.801
+          }
+        },
+        "post-browse-idle": {
+          "endpoint_app_pss": 176.944,
+          "endpoint_web_pss": 313.956,
+          "endpoint_all_pss": 1088.135,
+          "endpoint_service_pss": {
+            "db": 76.654,
+            "broker": 17.388,
+            "webserver": 313.956,
+            "phoenix": 507.277,
+            "webhook-listener": 68.032,
+            "ai": 104.827
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 30,
+          "sampled_duration_seconds": 29.027,
+          "all_current": {
+            "min": 1183.16,
+            "median": 1184.543,
+            "p95": 1186.172,
+            "max": 1186.176
+          },
+          "all_anon": {
+            "min": 867.836,
+            "median": 867.859,
+            "p95": 868.254,
+            "max": 868.254
+          },
+          "all_file": {
+            "min": 229.23,
+            "median": 229.715,
+            "p95": 230.285,
+            "max": 230.285
+          },
+          "service_anon_medians": {
+            "db": 25.008,
+            "broker": 5.219,
+            "webserver": 268.73,
+            "phoenix": 420.164,
+            "webhook-listener": 59.938,
+            "ai": 88.801
+          }
+        },
+        "post-first-metadata": {
+          "endpoint_app_pss": 247.272,
+          "endpoint_web_pss": 384.28,
+          "endpoint_all_pss": 1158.246,
+          "endpoint_service_pss": {
+            "db": 76.441,
+            "broker": 17.388,
+            "webserver": 384.28,
+            "phoenix": 507.277,
+            "webhook-listener": 68.032,
+            "ai": 104.827
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-all-metadata": {
+          "endpoint_app_pss": 255.788,
+          "endpoint_web_pss": 392.796,
+          "endpoint_all_pss": 1166.991,
+          "endpoint_service_pss": {
+            "db": 76.636,
+            "broker": 17.423,
+            "webserver": 392.796,
+            "phoenix": 507.277,
+            "webhook-listener": 68.032,
+            "ai": 104.827
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 257.925,
+          "endpoint_web_pss": 393.925,
+          "endpoint_all_pss": 1180.329,
+          "endpoint_service_pss": {
+            "db": 88.801,
+            "broker": 17.469,
+            "webserver": 393.925,
+            "phoenix": 507.277,
+            "webhook-listener": 68.031,
+            "ai": 104.826
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 299,
+          "sampled_duration_seconds": 298.271,
+          "all_current": {
+            "min": 1259.355,
+            "median": 1265.008,
+            "p95": 1350.141,
+            "max": 1350.848
+          },
+          "all_anon": {
+            "min": 940.629,
+            "median": 940.977,
+            "p95": 1024.832,
+            "max": 1024.84
+          },
+          "all_file": {
+            "min": 230.324,
+            "median": 237.434,
+            "p95": 237.48,
+            "max": 237.48
+          },
+          "service_anon_medians": {
+            "db": 25.156,
+            "broker": 5.293,
+            "webserver": 341.699,
+            "phoenix": 420.164,
+            "webhook-listener": 59.938,
+            "ai": 88.801
+          }
+        },
+        "post-suggestions-idle": {
+          "endpoint_app_pss": 264.167,
+          "endpoint_web_pss": 400.378,
+          "endpoint_all_pss": 1186.813,
+          "endpoint_service_pss": {
+            "db": 88.816,
+            "broker": 17.484,
+            "webserver": 400.378,
+            "phoenix": 507.277,
+            "webhook-listener": 68.031,
+            "ai": 104.826
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.259,
+          "all_current": {
+            "min": 1268.199,
+            "median": 1269.738,
+            "p95": 1357.312,
+            "max": 1357.938
+          },
+          "all_anon": {
+            "min": 946.984,
+            "median": 947.191,
+            "p95": 1032.141,
+            "max": 1032.188
+          },
+          "all_file": {
+            "min": 235.473,
+            "median": 235.484,
+            "p95": 237.488,
+            "max": 237.488
+          },
+          "service_anon_medians": {
+            "db": 25.355,
+            "broker": 5.309,
+            "webserver": 347.602,
+            "phoenix": 420.164,
+            "webhook-listener": 59.938,
+            "ai": 88.801
+          }
+        },
+        "post-processing-idle": {
+          "endpoint_app_pss": 269.86,
+          "endpoint_web_pss": 493.02,
+          "endpoint_all_pss": 1280.148,
+          "endpoint_service_pss": {
+            "db": 89.514,
+            "broker": 17.477,
+            "webserver": 493.02,
+            "phoenix": 507.281,
+            "webhook-listener": 68.031,
+            "ai": 104.826
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.32,
+          "all_current": {
+            "min": 1279.023,
+            "median": 1280.691,
+            "p95": 1365.516,
+            "max": 1366.508
+          },
+          "all_anon": {
+            "min": 954.414,
+            "median": 954.559,
+            "p95": 1038.598,
+            "max": 1038.633
+          },
+          "all_file": {
+            "min": 238.316,
+            "median": 238.324,
+            "p95": 238.379,
+            "max": 238.391
+          },
+          "service_anon_medians": {
+            "db": 25.383,
+            "broker": 5.305,
+            "webserver": 354.859,
+            "phoenix": 420.164,
+            "webhook-listener": 59.938,
+            "ai": 88.801
+          }
+        },
+        "final-idle": {
+          "endpoint_app_pss": 272.288,
+          "endpoint_web_pss": 408.479,
+          "endpoint_all_pss": 1195.702,
+          "endpoint_service_pss": {
+            "db": 89.6,
+            "broker": 17.484,
+            "webserver": 408.479,
+            "phoenix": 507.281,
+            "webhook-listener": 68.031,
+            "ai": 104.826
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.318,
+          "all_current": {
+            "min": 1279.332,
+            "median": 1280.861,
+            "p95": 1366.008,
+            "max": 1366.895
+          },
+          "all_anon": {
+            "min": 954.273,
+            "median": 954.359,
+            "p95": 1038.875,
+            "max": 1038.93
+          },
+          "all_file": {
+            "min": 238.742,
+            "median": 238.762,
+            "p95": 238.777,
+            "max": 238.777
+          },
+          "service_anon_medians": {
+            "db": 25.484,
+            "broker": 5.312,
+            "webserver": 354.641,
+            "phoenix": 420.168,
+            "webhook-listener": 59.938,
+            "ai": 88.801
+          }
+        }
+      },
+      "metadata_latency": {
+        "requests": 25,
+        "first_seconds": 0.229,
+        "subsequent_seconds": {
+          "min": 0.021,
+          "median": 0.028,
+          "p95": 0.045,
+          "max": 0.062
+        },
+        "total_seconds": 0.988
+      },
+      "peak_bounds": {
+        "sampled_simultaneous_current_lower_bound": 1406.02,
+        "sum_independent_service_peak_upper_bound": 1449.383
+      },
+      "nonzero_memory_events": {},
+      "return_to_idle_observations": {
+        "post-processing-idle": [
+          {
+            "seconds_after_observation_start": 32.032,
+            "web_current_drop": 84.535
+          },
+          {
+            "seconds_after_observation_start": 212.226,
+            "web_current_drop": 84.594
+          }
+        ],
+        "final-idle": [
+          {
+            "seconds_after_observation_start": 31.031,
+            "web_current_drop": 83.816
+          },
+          {
+            "seconds_after_observation_start": 173.183,
+            "web_current_drop": 80.293
+          },
+          {
+            "seconds_after_observation_start": 211.221,
+            "web_current_drop": 84.477
+          }
+        ]
+      },
+      "outcomes": {
+        "metadata_preview_concurrent_download_search": true,
+        "workflow_final_state_indexed": true,
+        "ingestions": [
+          {
+            "status": "success",
+            "seconds": 3.133
+          },
+          {
+            "status": "success",
+            "seconds": 1.097
+          }
+        ],
+        "reprocess": "success",
+        "scheduled_tasks": {
+          "check_workflows:success": 1,
+          "mail_fetch:success": 3
+        },
+        "recovery_schedule_registered": true
+      },
+      "lifecycle_log_counts": {
+        "scale_up": 9,
+        "scale_down": 9,
+        "recovery_received": 5,
+        "includes_postmeasurement_checks": false
+      },
+      "runtime_checks": null,
+      "harness_sha256": {
+        "runner": "88d88ad70b487ebab43bec6b22cdb75aa268653cb7d5b609bc32d0e3e511fee6",
+        "seed": "be5f658fa2a4fe745e0ac87499521a91b36860a380c438eb0100642f96826767",
+        "workload": "ce81950783345226803bfabcac7b10274cfbd247410c6c5dac1ba09a4b9ded7a"
+      },
+      "worker_retirement_log_seconds_after_phase_start": {
+        "post-processing-idle": [
+          31.6,
+          211.6
+        ],
+        "final-idle": [
+          30.3,
+          210.3
+        ]
+      }
+    },
+    {
+      "variant": "metadata-baseline2",
+      "image_tag": "paperless-memory27:baseline",
+      "idle_window_seconds": 300,
+      "readiness_seconds": 11.77,
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 159.831,
+          "endpoint_web_pss": 296.804,
+          "endpoint_all_pss": 1066.493,
+          "endpoint_service_pss": {
+            "db": 73.742,
+            "broker": 17.056,
+            "webserver": 296.804,
+            "phoenix": 506.195,
+            "webhook-listener": 67.937,
+            "ai": 104.76
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.319,
+          "all_current": {
+            "min": 1167.004,
+            "median": 1170.896,
+            "p95": 1255.375,
+            "max": 1256.387
+          },
+          "all_anon": {
+            "min": 855.582,
+            "median": 857.461,
+            "p95": 941.355,
+            "max": 941.391
+          },
+          "all_file": {
+            "min": 225.008,
+            "median": 226.34,
+            "p95": 227.688,
+            "max": 228.812
+          },
+          "service_anon_medians": {
+            "db": 24.527,
+            "broker": 5.168,
+            "webserver": 258.203,
+            "phoenix": 420.699,
+            "webhook-listener": 59.945,
+            "ai": 88.801
+          }
+        },
+        "post-browse-idle": {
+          "endpoint_app_pss": 173.408,
+          "endpoint_web_pss": 310.374,
+          "endpoint_all_pss": 1082.877,
+          "endpoint_service_pss": {
+            "db": 76.528,
+            "broker": 17.083,
+            "webserver": 310.374,
+            "phoenix": 506.195,
+            "webhook-listener": 67.937,
+            "ai": 104.76
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 30,
+          "sampled_duration_seconds": 29.031,
+          "all_current": {
+            "min": 1180.895,
+            "median": 1182.586,
+            "p95": 1183.688,
+            "max": 1183.895
+          },
+          "all_anon": {
+            "min": 865.504,
+            "median": 865.52,
+            "p95": 866.184,
+            "max": 866.184
+          },
+          "all_file": {
+            "min": 229.109,
+            "median": 229.672,
+            "p95": 230.18,
+            "max": 230.18
+          },
+          "service_anon_medians": {
+            "db": 24.887,
+            "broker": 5.215,
+            "webserver": 265.973,
+            "phoenix": 420.699,
+            "webhook-listener": 59.945,
+            "ai": 88.801
+          }
+        },
+        "post-first-metadata": {
+          "endpoint_app_pss": 243.002,
+          "endpoint_web_pss": 379.968,
+          "endpoint_all_pss": 1152.431,
+          "endpoint_service_pss": {
+            "db": 76.488,
+            "broker": 17.083,
+            "webserver": 379.968,
+            "phoenix": 506.195,
+            "webhook-listener": 67.937,
+            "ai": 104.76
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-all-metadata": {
+          "endpoint_app_pss": 252.287,
+          "endpoint_web_pss": 389.253,
+          "endpoint_all_pss": 1161.776,
+          "endpoint_service_pss": {
+            "db": 76.514,
+            "broker": 17.118,
+            "webserver": 389.253,
+            "phoenix": 506.195,
+            "webhook-listener": 67.937,
+            "ai": 104.76
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 250.232,
+          "endpoint_web_pss": 473.503,
+          "endpoint_all_pss": 1258.426,
+          "endpoint_service_pss": {
+            "db": 88.861,
+            "broker": 17.168,
+            "webserver": 473.503,
+            "phoenix": 506.199,
+            "webhook-listener": 67.936,
+            "ai": 104.759
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.318,
+          "all_current": {
+            "min": 1255.02,
+            "median": 1261.977,
+            "p95": 1347.527,
+            "max": 1348.656
+          },
+          "all_anon": {
+            "min": 936.941,
+            "median": 937.23,
+            "p95": 1021.508,
+            "max": 1021.891
+          },
+          "all_file": {
+            "min": 230.32,
+            "median": 237.434,
+            "p95": 237.555,
+            "max": 237.555
+          },
+          "service_anon_medians": {
+            "db": 25.188,
+            "broker": 5.293,
+            "webserver": 337.516,
+            "phoenix": 420.703,
+            "webhook-listener": 59.945,
+            "ai": 88.801
+          }
+        },
+        "post-suggestions-idle": {
+          "endpoint_app_pss": 256.614,
+          "endpoint_web_pss": 392.938,
+          "endpoint_all_pss": 1177.912,
+          "endpoint_service_pss": {
+            "db": 88.886,
+            "broker": 17.195,
+            "webserver": 392.938,
+            "phoenix": 506.199,
+            "webhook-listener": 67.936,
+            "ai": 104.759
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 299,
+          "sampled_duration_seconds": 298.318,
+          "all_current": {
+            "min": 1264.727,
+            "median": 1266.398,
+            "p95": 1350.93,
+            "max": 1351.453
+          },
+          "all_anon": {
+            "min": 941.094,
+            "median": 941.328,
+            "p95": 1025.344,
+            "max": 1025.344
+          },
+          "all_file": {
+            "min": 237.551,
+            "median": 237.566,
+            "p95": 237.57,
+            "max": 237.57
+          },
+          "service_anon_medians": {
+            "db": 25.426,
+            "broker": 5.32,
+            "webserver": 341.125,
+            "phoenix": 420.703,
+            "webhook-listener": 59.945,
+            "ai": 88.801
+          }
+        },
+        "post-processing-idle": {
+          "endpoint_app_pss": 265.164,
+          "endpoint_web_pss": 488.693,
+          "endpoint_all_pss": 1274.126,
+          "endpoint_service_pss": {
+            "db": 89.352,
+            "broker": 17.188,
+            "webserver": 488.693,
+            "phoenix": 506.199,
+            "webhook-listener": 67.936,
+            "ai": 104.759
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.324,
+          "all_current": {
+            "min": 1277.844,
+            "median": 1280.205,
+            "p95": 1365.051,
+            "max": 1365.988
+          },
+          "all_anon": {
+            "min": 951.098,
+            "median": 951.246,
+            "p95": 1035.453,
+            "max": 1035.457
+          },
+          "all_file": {
+            "min": 240.391,
+            "median": 240.406,
+            "p95": 240.418,
+            "max": 240.418
+          },
+          "service_anon_medians": {
+            "db": 25.426,
+            "broker": 5.312,
+            "webserver": 351.059,
+            "phoenix": 420.703,
+            "webhook-listener": 59.945,
+            "ai": 88.801
+          }
+        },
+        "final-idle": {
+          "endpoint_app_pss": 267.216,
+          "endpoint_web_pss": 403.488,
+          "endpoint_all_pss": 1189.007,
+          "endpoint_service_pss": {
+            "db": 89.438,
+            "broker": 17.188,
+            "webserver": 403.488,
+            "phoenix": 506.199,
+            "webhook-listener": 67.936,
+            "ai": 104.759
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.32,
+          "all_current": {
+            "min": 1278.098,
+            "median": 1279.582,
+            "p95": 1364.34,
+            "max": 1366.676
+          },
+          "all_anon": {
+            "min": 950.629,
+            "median": 950.719,
+            "p95": 1034.754,
+            "max": 1035.738
+          },
+          "all_file": {
+            "min": 240.77,
+            "median": 240.793,
+            "p95": 240.797,
+            "max": 240.797
+          },
+          "service_anon_medians": {
+            "db": 25.426,
+            "broker": 5.328,
+            "webserver": 350.516,
+            "phoenix": 420.703,
+            "webhook-listener": 59.945,
+            "ai": 88.801
+          }
+        }
+      },
+      "metadata_latency": {
+        "requests": 25,
+        "first_seconds": 0.243,
+        "subsequent_seconds": {
+          "min": 0.019,
+          "median": 0.028,
+          "p95": 0.043,
+          "max": 0.051
+        },
+        "total_seconds": 0.933
+      },
+      "peak_bounds": {
+        "sampled_simultaneous_current_lower_bound": 1404.082,
+        "sum_independent_service_peak_upper_bound": 1445.938
+      },
+      "nonzero_memory_events": {},
+      "return_to_idle_observations": {
+        "post-processing-idle": [
+          {
+            "seconds_after_observation_start": 32.034,
+            "web_current_drop": 84.555
+          },
+          {
+            "seconds_after_observation_start": 182.2,
+            "web_current_drop": 84.832
+          }
+        ],
+        "final-idle": [
+          {
+            "seconds_after_observation_start": 130.139,
+            "web_current_drop": 85.633
+          },
+          {
+            "seconds_after_observation_start": 181.196,
+            "web_current_drop": 84.684
+          }
+        ]
+      },
+      "outcomes": {
+        "metadata_preview_concurrent_download_search": true,
+        "workflow_final_state_indexed": true,
+        "ingestions": [
+          {
+            "status": "success",
+            "seconds": 3.128
+          },
+          {
+            "status": "success",
+            "seconds": 1.212
+          }
+        ],
+        "reprocess": "success",
+        "scheduled_tasks": {
+          "mail_fetch:success": 3,
+          "check_workflows:success": 1
+        },
+        "recovery_schedule_registered": true
+      },
+      "lifecycle_log_counts": {
+        "scale_up": 10,
+        "scale_down": 9,
+        "recovery_received": 6,
+        "includes_postmeasurement_checks": true
+      },
+      "runtime_checks": {
+        "parser_retry_via_recovery_sweep": true,
+        "committed_completion_resumed_without_reparse": true,
+        "stale_result_rejected_and_input_retained": true
+      },
+      "harness_sha256": {
+        "runner": "e877f9ec1c12c86f0f4d7235a136fd708dac62cdaa112201f8e1cc8b12d9d9dd",
+        "seed": "fb48d2dcec757bd58795be90daab9fe94826714ac622bc4faed49a6308a7b68a",
+        "workload": "b6323e1a810187feb5fecf846d269c08829aab1b5df5fc7fba0eafd170d65cf3",
+        "runtime_checks": "b0ea21aefbe146464a07f58a9c9094f236d8271be81b996a4a5d3c34ba8dab77"
+      },
+      "worker_retirement_log_seconds_after_phase_start": {
+        "post-processing-idle": [
+          31.5,
+          181.5
+        ],
+        "final-idle": [
+          0.2,
+          180.2
+        ]
+      }
+    },
+    {
+      "variant": "metadata-baseline3",
+      "image_tag": "paperless-memory27:baseline",
+      "idle_window_seconds": 300,
+      "readiness_seconds": 11.77,
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 161.654,
+          "endpoint_web_pss": 297.031,
+          "endpoint_all_pss": 1056.908,
+          "endpoint_service_pss": {
+            "db": 65.358,
+            "broker": 17.184,
+            "webserver": 297.031,
+            "phoenix": 505.074,
+            "webhook-listener": 67.576,
+            "ai": 104.685
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 299,
+          "sampled_duration_seconds": 298.312,
+          "all_current": {
+            "min": 1023.258,
+            "median": 1187.68,
+            "p95": 1275.43,
+            "max": 1277.359
+          },
+          "all_anon": {
+            "min": 843.305,
+            "median": 849.98,
+            "p95": 933.934,
+            "max": 933.945
+          },
+          "all_file": {
+            "min": 109.062,
+            "median": 255.125,
+            "p95": 256.281,
+            "max": 256.32
+          },
+          "service_anon_medians": {
+            "db": 17.047,
+            "broker": 5.199,
+            "webserver": 258.938,
+            "phoenix": 420.055,
+            "webhook-listener": 59.934,
+            "ai": 88.801
+          }
+        },
+        "post-browse-idle": {
+          "endpoint_app_pss": 181.052,
+          "endpoint_web_pss": 316.407,
+          "endpoint_all_pss": 1079.122,
+          "endpoint_service_pss": {
+            "db": 68.173,
+            "broker": 17.207,
+            "webserver": 316.407,
+            "phoenix": 505.074,
+            "webhook-listener": 67.576,
+            "ai": 104.685
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 30,
+          "sampled_duration_seconds": 29.031,
+          "all_current": {
+            "min": 1064.379,
+            "median": 1065.789,
+            "p95": 1066.949,
+            "max": 1067.242
+          },
+          "all_anon": {
+            "min": 863.789,
+            "median": 863.805,
+            "p95": 863.805,
+            "max": 863.809
+          },
+          "all_file": {
+            "min": 134.574,
+            "median": 135.68,
+            "p95": 136.586,
+            "max": 136.758
+          },
+          "service_anon_medians": {
+            "db": 17.27,
+            "broker": 5.23,
+            "webserver": 272.512,
+            "phoenix": 420.055,
+            "webhook-listener": 59.934,
+            "ai": 88.801
+          }
+        },
+        "post-first-metadata": {
+          "endpoint_app_pss": 243.804,
+          "endpoint_web_pss": 379.15,
+          "endpoint_all_pss": 1141.675,
+          "endpoint_service_pss": {
+            "db": 67.982,
+            "broker": 17.207,
+            "webserver": 379.15,
+            "phoenix": 505.074,
+            "webhook-listener": 67.576,
+            "ai": 104.685
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-all-metadata": {
+          "endpoint_app_pss": 248.843,
+          "endpoint_web_pss": 384.189,
+          "endpoint_all_pss": 1146.667,
+          "endpoint_service_pss": {
+            "db": 67.904,
+            "broker": 17.238,
+            "webserver": 384.189,
+            "phoenix": 505.074,
+            "webhook-listener": 67.576,
+            "ai": 104.685
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 249.522,
+          "endpoint_web_pss": 386.029,
+          "endpoint_all_pss": 1161.14,
+          "endpoint_service_pss": {
+            "db": 80.564,
+            "broker": 17.292,
+            "webserver": 386.029,
+            "phoenix": 505.0,
+            "webhook-listener": 67.572,
+            "ai": 104.682
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.319,
+          "all_current": {
+            "min": 1125.469,
+            "median": 1163.869,
+            "p95": 1245.711,
+            "max": 1253.277
+          },
+          "all_anon": {
+            "min": 925.199,
+            "median": 926.262,
+            "p95": 1011.086,
+            "max": 1011.098
+          },
+          "all_file": {
+            "min": 139.258,
+            "median": 166.266,
+            "p95": 173.848,
+            "max": 174.602
+          },
+          "service_anon_medians": {
+            "db": 17.438,
+            "broker": 5.309,
+            "webserver": 334.539,
+            "phoenix": 420.055,
+            "webhook-listener": 59.934,
+            "ai": 88.801
+          }
+        },
+        "post-suggestions-idle": {
+          "endpoint_app_pss": 256.929,
+          "endpoint_web_pss": 393.037,
+          "endpoint_all_pss": 1168.191,
+          "endpoint_service_pss": {
+            "db": 80.589,
+            "broker": 17.312,
+            "webserver": 393.037,
+            "phoenix": 505.0,
+            "webhook-listener": 67.572,
+            "ai": 104.682
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.33,
+          "all_current": {
+            "min": 1111.629,
+            "median": 1115.715,
+            "p95": 1220.793,
+            "max": 1222.047
+          },
+          "all_anon": {
+            "min": 933.715,
+            "median": 933.887,
+            "p95": 1017.766,
+            "max": 1017.793
+          },
+          "all_file": {
+            "min": 122.051,
+            "median": 124.637,
+            "p95": 142.27,
+            "max": 142.27
+          },
+          "service_anon_medians": {
+            "db": 17.664,
+            "broker": 5.332,
+            "webserver": 342.102,
+            "phoenix": 420.055,
+            "webhook-listener": 59.934,
+            "ai": 88.801
+          }
+        },
+        "post-processing-idle": {
+          "endpoint_app_pss": 267.503,
+          "endpoint_web_pss": 403.662,
+          "endpoint_all_pss": 1179.368,
+          "endpoint_service_pss": {
+            "db": 81.145,
+            "broker": 17.308,
+            "webserver": 403.662,
+            "phoenix": 505.0,
+            "webhook-listener": 67.572,
+            "ai": 104.682
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.327,
+          "all_current": {
+            "min": 1144.223,
+            "median": 1146.312,
+            "p95": 1230.832,
+            "max": 1231.516
+          },
+          "all_anon": {
+            "min": 942.789,
+            "median": 943.117,
+            "p95": 1027.113,
+            "max": 1027.117
+          },
+          "all_file": {
+            "min": 144.512,
+            "median": 144.527,
+            "p95": 144.742,
+            "max": 144.746
+          },
+          "service_anon_medians": {
+            "db": 17.664,
+            "broker": 5.332,
+            "webserver": 351.332,
+            "phoenix": 420.055,
+            "webhook-listener": 59.934,
+            "ai": 88.801
+          }
+        },
+        "final-idle": {
+          "endpoint_app_pss": 267.769,
+          "endpoint_web_pss": 403.83,
+          "endpoint_all_pss": 1179.621,
+          "endpoint_service_pss": {
+            "db": 81.229,
+            "broker": 17.308,
+            "webserver": 403.83,
+            "phoenix": 505.0,
+            "webhook-listener": 67.572,
+            "ai": 104.682
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.32,
+          "all_current": {
+            "min": 1145.637,
+            "median": 1147.172,
+            "p95": 1231.793,
+            "max": 1232.898
+          },
+          "all_anon": {
+            "min": 943.242,
+            "median": 943.336,
+            "p95": 1027.434,
+            "max": 1027.441
+          },
+          "all_file": {
+            "min": 145.316,
+            "median": 145.414,
+            "p95": 145.422,
+            "max": 145.422
+          },
+          "service_anon_medians": {
+            "db": 17.664,
+            "broker": 5.332,
+            "webserver": 351.551,
+            "phoenix": 420.055,
+            "webhook-listener": 59.934,
+            "ai": 88.801
+          }
+        }
+      },
+      "metadata_latency": {
+        "requests": 25,
+        "first_seconds": 0.268,
+        "subsequent_seconds": {
+          "min": 0.021,
+          "median": 0.028,
+          "p95": 0.047,
+          "max": 0.055
+        },
+        "total_seconds": 0.998
+      },
+      "peak_bounds": {
+        "sampled_simultaneous_current_lower_bound": 1277.359,
+        "sum_independent_service_peak_upper_bound": 1484.449
+      },
+      "nonzero_memory_events": {},
+      "return_to_idle_observations": {
+        "post-processing-idle": [
+          {
+            "seconds_after_observation_start": 33.035,
+            "web_current_drop": 84.645
+          },
+          {
+            "seconds_after_observation_start": 123.134,
+            "web_current_drop": 84.398
+          },
+          {
+            "seconds_after_observation_start": 242.268,
+            "web_current_drop": 84.375
+          }
+        ],
+        "final-idle": [
+          {
+            "seconds_after_observation_start": 29.031,
+            "web_current_drop": 84.906
+          },
+          {
+            "seconds_after_observation_start": 119.125,
+            "web_current_drop": 84.648
+          }
+        ]
+      },
+      "outcomes": {
+        "metadata_preview_concurrent_download_search": true,
+        "workflow_final_state_indexed": true,
+        "ingestions": [
+          {
+            "status": "success",
+            "seconds": 3.145
+          },
+          {
+            "status": "success",
+            "seconds": 3.265
+          }
+        ],
+        "reprocess": "success",
+        "scheduled_tasks": {
+          "mail_fetch:success": 2
+        },
+        "recovery_schedule_registered": true
+      },
+      "lifecycle_log_counts": {
+        "scale_up": 10,
+        "scale_down": 9,
+        "recovery_received": 6,
+        "includes_postmeasurement_checks": true
+      },
+      "runtime_checks": {
+        "parser_retry_via_recovery_sweep": true,
+        "committed_completion_resumed_without_reparse": true,
+        "stale_result_rejected_and_input_retained": true
+      },
+      "harness_sha256": {
+        "runner": "e877f9ec1c12c86f0f4d7235a136fd708dac62cdaa112201f8e1cc8b12d9d9dd",
+        "seed": "fb48d2dcec757bd58795be90daab9fe94826714ac622bc4faed49a6308a7b68a",
+        "workload": "b6323e1a810187feb5fecf846d269c08829aab1b5df5fc7fba0eafd170d65cf3",
+        "runtime_checks": "b0ea21aefbe146464a07f58a9c9094f236d8271be81b996a4a5d3c34ba8dab77"
+      },
+      "worker_retirement_log_seconds_after_phase_start": {
+        "post-processing-idle": [
+          31.8,
+          121.8,
+          241.8
+        ],
+        "final-idle": [
+          28.5,
+          118.5
+        ]
+      }
+    },
+    {
+      "variant": "language1",
+      "image_tag": "paperless-memory27:language",
+      "idle_window_seconds": 300,
+      "readiness_seconds": 13.798,
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 160.163,
+          "endpoint_web_pss": 295.873,
+          "endpoint_all_pss": 1065.286,
+          "endpoint_service_pss": {
+            "db": 73.966,
+            "broker": 17.09,
+            "webserver": 295.873,
+            "phoenix": 505.914,
+            "webhook-listener": 67.774,
+            "ai": 104.669
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.308,
+          "all_current": {
+            "min": 1079.562,
+            "median": 1113.053,
+            "p95": 1304.656,
+            "max": 1306.91
+          },
+          "all_anon": {
+            "min": 854.324,
+            "median": 856.348,
+            "p95": 939.207,
+            "max": 939.516
+          },
+          "all_file": {
+            "min": 148.566,
+            "median": 178.309,
+            "p95": 278.051,
+            "max": 278.078
+          },
+          "service_anon_medians": {
+            "db": 24.621,
+            "broker": 5.188,
+            "webserver": 257.699,
+            "phoenix": 420.117,
+            "webhook-listener": 59.918,
+            "ai": 88.801
+          }
+        },
+        "post-browse-idle": {
+          "endpoint_app_pss": 173.347,
+          "endpoint_web_pss": 397.087,
+          "endpoint_all_pss": 1169.271,
+          "endpoint_service_pss": {
+            "db": 76.686,
+            "broker": 17.141,
+            "webserver": 397.087,
+            "phoenix": 505.914,
+            "webhook-listener": 67.774,
+            "ai": 104.669
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {},
+          "complete_samples": 30,
+          "sampled_duration_seconds": 29.031,
+          "all_current": {
+            "min": 1114.578,
+            "median": 1199.998,
+            "p95": 1200.973,
+            "max": 1201.449
+          },
+          "all_anon": {
+            "min": 867.129,
+            "median": 951.18,
+            "p95": 951.18,
+            "max": 951.18
+          },
+          "all_file": {
+            "min": 172.648,
+            "median": 173.551,
+            "p95": 174.32,
+            "max": 174.328
+          },
+          "service_anon_medians": {
+            "db": 24.902,
+            "broker": 5.227,
+            "webserver": 352.211,
+            "phoenix": 420.121,
+            "webhook-listener": 59.918,
+            "ai": 88.801
+          }
+        },
+        "post-first-metadata": {
+          "endpoint_app_pss": 181.169,
+          "endpoint_web_pss": 404.903,
+          "endpoint_all_pss": 1176.994,
+          "endpoint_service_pss": {
+            "db": 76.593,
+            "broker": 17.141,
+            "webserver": 404.903,
+            "phoenix": 505.914,
+            "webhook-listener": 67.774,
+            "ai": 104.669
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-all-metadata": {
+          "endpoint_app_pss": 187.505,
+          "endpoint_web_pss": 411.286,
+          "endpoint_all_pss": 1183.864,
+          "endpoint_service_pss": {
+            "db": 77.053,
+            "broker": 17.168,
+            "webserver": 411.286,
+            "phoenix": 505.914,
+            "webhook-listener": 67.774,
+            "ai": 104.669
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 187.665,
+          "endpoint_web_pss": 410.587,
+          "endpoint_all_pss": 1194.666,
+          "endpoint_service_pss": {
+            "db": 88.533,
+            "broker": 17.19,
+            "webserver": 410.587,
+            "phoenix": 505.914,
+            "webhook-listener": 67.773,
+            "ai": 104.668
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.304,
+          "all_current": {
+            "min": 1123.059,
+            "median": 1130.523,
+            "p95": 1214.031,
+            "max": 1231.914
+          },
+          "all_anon": {
+            "min": 874.02,
+            "median": 875.996,
+            "p95": 960.547,
+            "max": 960.551
+          },
+          "all_file": {
+            "min": 178.207,
+            "median": 178.285,
+            "p95": 196.199,
+            "max": 197.363
+          },
+          "service_anon_medians": {
+            "db": 25.082,
+            "broker": 5.273,
+            "webserver": 276.961,
+            "phoenix": 420.121,
+            "webhook-listener": 59.918,
+            "ai": 88.801
+          }
+        },
+        "post-suggestions-idle": {
+          "endpoint_app_pss": 191.163,
+          "endpoint_web_pss": 414.571,
+          "endpoint_all_pss": 1198.705,
+          "endpoint_service_pss": {
+            "db": 88.564,
+            "broker": 17.214,
+            "webserver": 414.571,
+            "phoenix": 505.914,
+            "webhook-listener": 67.773,
+            "ai": 104.668
+          },
+          "endpoint_web_process_count": 18,
+          "endpoint_extra_worker_present": true,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.318,
+          "all_current": {
+            "min": 1126.148,
+            "median": 1127.566,
+            "p95": 1212.453,
+            "max": 1213.617
+          },
+          "all_anon": {
+            "min": 877.422,
+            "median": 877.559,
+            "p95": 961.836,
+            "max": 961.844
+          },
+          "all_file": {
+            "min": 178.492,
+            "median": 178.562,
+            "p95": 178.578,
+            "max": 178.578
+          },
+          "service_anon_medians": {
+            "db": 25.305,
+            "broker": 5.293,
+            "webserver": 278.121,
+            "phoenix": 420.121,
+            "webhook-listener": 59.918,
+            "ai": 88.801
+          }
+        },
+        "post-processing-idle": {
+          "endpoint_app_pss": 206.505,
+          "endpoint_web_pss": 342.851,
+          "endpoint_all_pss": 1127.759,
+          "endpoint_service_pss": {
+            "db": 89.335,
+            "broker": 17.218,
+            "webserver": 342.851,
+            "phoenix": 505.914,
+            "webhook-listener": 67.773,
+            "ai": 104.668
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.333,
+          "all_current": {
+            "min": 1148.168,
+            "median": 1149.707,
+            "p95": 1234.359,
+            "max": 1238.797
+          },
+          "all_anon": {
+            "min": 889.18,
+            "median": 889.258,
+            "p95": 973.336,
+            "max": 976.699
+          },
+          "all_file": {
+            "min": 188.059,
+            "median": 188.07,
+            "p95": 188.094,
+            "max": 188.094
+          },
+          "service_anon_medians": {
+            "db": 25.305,
+            "broker": 5.305,
+            "webserver": 289.809,
+            "phoenix": 420.121,
+            "webhook-listener": 59.918,
+            "ai": 88.801
+          }
+        },
+        "final-idle": {
+          "endpoint_app_pss": 206.364,
+          "endpoint_web_pss": 342.53,
+          "endpoint_all_pss": 1127.523,
+          "endpoint_service_pss": {
+            "db": 89.42,
+            "broker": 17.218,
+            "webserver": 342.53,
+            "phoenix": 505.914,
+            "webhook-listener": 67.773,
+            "ai": 104.668
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.32,
+          "all_current": {
+            "min": 1148.496,
+            "median": 1150.16,
+            "p95": 1234.504,
+            "max": 1235.855
+          },
+          "all_anon": {
+            "min": 888.906,
+            "median": 889.441,
+            "p95": 973.5,
+            "max": 973.895
+          },
+          "all_file": {
+            "min": 188.449,
+            "median": 188.469,
+            "p95": 188.48,
+            "max": 188.48
+          },
+          "service_anon_medians": {
+            "db": 25.305,
+            "broker": 5.305,
+            "webserver": 289.992,
+            "phoenix": 420.121,
+            "webhook-listener": 59.918,
+            "ai": 88.801
+          }
+        }
+      },
+      "metadata_latency": {
+        "requests": 25,
+        "first_seconds": 0.493,
+        "subsequent_seconds": {
+          "min": 0.316,
+          "median": 0.334,
+          "p95": 0.349,
+          "max": 0.354
+        },
+        "total_seconds": 8.51
+      },
+      "peak_bounds": {
+        "sampled_simultaneous_current_lower_bound": 1306.91,
+        "sum_independent_service_peak_upper_bound": 1436.492
+      },
+      "nonzero_memory_events": {},
+      "return_to_idle_observations": {
+        "post-processing-idle": [
+          {
+            "seconds_after_observation_start": 22.024,
+            "web_current_drop": 84.328
+          },
+          {
+            "seconds_after_observation_start": 112.121,
+            "web_current_drop": 84.148
+          },
+          {
+            "seconds_after_observation_start": 292.325,
+            "web_current_drop": 84.215
+          }
+        ],
+        "final-idle": [
+          {
+            "seconds_after_observation_start": 49.052,
+            "web_current_drop": 85.094
+          },
+          {
+            "seconds_after_observation_start": 247.264,
+            "web_current_drop": 85.281
+          },
+          {
+            "seconds_after_observation_start": 289.309,
+            "web_current_drop": 84.613
+          }
+        ]
+      },
+      "outcomes": {
+        "metadata_preview_concurrent_download_search": true,
+        "workflow_final_state_indexed": true,
+        "ingestions": [
+          {
+            "status": "success",
+            "seconds": 2.135
+          },
+          {
+            "status": "success",
+            "seconds": 3.123
+          }
+        ],
+        "reprocess": "success",
+        "scheduled_tasks": {
+          "mail_fetch:success": 2
+        },
+        "recovery_schedule_registered": true
+      },
+      "lifecycle_log_counts": {
+        "scale_up": 9,
+        "scale_down": 9,
+        "recovery_received": 6,
+        "includes_postmeasurement_checks": false
+      },
+      "runtime_checks": null,
+      "harness_sha256": {
+        "runner": "f55c1d0eb3fafeffe9573fde7e59d2ce4a4b78fcd82984f58aa5c30f59b9323b",
+        "seed": "be5f658fa2a4fe745e0ac87499521a91b36860a380c438eb0100642f96826767",
+        "workload": "5ef1212a2f11244200ee7918da8772e593e369facd811027a49c4cdf6fbbdbdd"
+      },
+      "worker_retirement_log_seconds_after_phase_start": {
+        "post-processing-idle": [
+          21.4,
+          111.4,
+          291.4
+        ],
+        "final-idle": [
+          48.0,
+          288.1
+        ]
+      }
+    },
+    {
+      "variant": "language2",
+      "image_tag": "paperless-memory27:language",
+      "idle_window_seconds": 300,
+      "readiness_seconds": 12.269,
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 160.094,
+          "endpoint_web_pss": 296.862,
+          "endpoint_all_pss": 1065.369,
+          "endpoint_service_pss": {
+            "db": 73.814,
+            "broker": 17.169,
+            "webserver": 296.862,
+            "phoenix": 505.246,
+            "webhook-listener": 67.615,
+            "ai": 104.662
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.314,
+          "all_current": {
+            "min": 1162.922,
+            "median": 1171.582,
+            "p95": 1257.184,
+            "max": 1259.496
+          },
+          "all_anon": {
+            "min": 849.637,
+            "median": 857.516,
+            "p95": 941.48,
+            "max": 943.676
+          },
+          "all_file": {
+            "min": 226.258,
+            "median": 227.637,
+            "p95": 229.367,
+            "max": 230.48
+          },
+          "service_anon_medians": {
+            "db": 24.641,
+            "broker": 5.195,
+            "webserver": 258.727,
+            "phoenix": 420.172,
+            "webhook-listener": 59.934,
+            "ai": 88.797
+          }
+        },
+        "post-browse-idle": {
+          "endpoint_app_pss": 175.538,
+          "endpoint_web_pss": 312.713,
+          "endpoint_all_pss": 1084.217,
+          "endpoint_service_pss": {
+            "db": 76.796,
+            "broker": 17.185,
+            "webserver": 312.713,
+            "phoenix": 505.246,
+            "webhook-listener": 67.615,
+            "ai": 104.662
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 30,
+          "sampled_duration_seconds": 29.032,
+          "all_current": {
+            "min": 1185.445,
+            "median": 1186.336,
+            "p95": 1187.133,
+            "max": 1187.273
+          },
+          "all_anon": {
+            "min": 867.117,
+            "median": 867.527,
+            "p95": 867.527,
+            "max": 867.527
+          },
+          "all_file": {
+            "min": 230.84,
+            "median": 231.395,
+            "p95": 231.855,
+            "max": 231.855
+          },
+          "service_anon_medians": {
+            "db": 24.883,
+            "broker": 5.23,
+            "webserver": 268.512,
+            "phoenix": 420.172,
+            "webhook-listener": 59.934,
+            "ai": 88.797
+          }
+        },
+        "post-first-metadata": {
+          "endpoint_app_pss": 183.448,
+          "endpoint_web_pss": 320.623,
+          "endpoint_all_pss": 1092.113,
+          "endpoint_service_pss": {
+            "db": 76.782,
+            "broker": 17.185,
+            "webserver": 320.623,
+            "phoenix": 505.246,
+            "webhook-listener": 67.615,
+            "ai": 104.662
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 0
+        },
+        "post-all-metadata": {
+          "endpoint_app_pss": 189.671,
+          "endpoint_web_pss": 326.846,
+          "endpoint_all_pss": 1098.622,
+          "endpoint_service_pss": {
+            "db": 77.041,
+            "broker": 17.212,
+            "webserver": 326.846,
+            "phoenix": 505.246,
+            "webhook-listener": 67.615,
+            "ai": 104.662
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 190.476,
+          "endpoint_web_pss": 326.76,
+          "endpoint_all_pss": 1110.119,
+          "endpoint_service_pss": {
+            "db": 88.602,
+            "broker": 17.238,
+            "webserver": 326.76,
+            "phoenix": 505.246,
+            "webhook-listener": 67.613,
+            "ai": 104.66
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 299,
+          "sampled_duration_seconds": 298.32,
+          "all_current": {
+            "min": 1194.625,
+            "median": 1201.43,
+            "p95": 1281.434,
+            "max": 1282.289
+          },
+          "all_anon": {
+            "min": 874.758,
+            "median": 874.984,
+            "p95": 958.828,
+            "max": 958.844
+          },
+          "all_file": {
+            "min": 232.512,
+            "median": 239.191,
+            "p95": 239.191,
+            "max": 239.191
+          },
+          "service_anon_medians": {
+            "db": 25.051,
+            "broker": 5.281,
+            "webserver": 275.68,
+            "phoenix": 420.172,
+            "webhook-listener": 59.934,
+            "ai": 88.797
+          }
+        },
+        "post-suggestions-idle": {
+          "endpoint_app_pss": 193.964,
+          "endpoint_web_pss": 330.436,
+          "endpoint_all_pss": 1113.849,
+          "endpoint_service_pss": {
+            "db": 88.612,
+            "broker": 17.281,
+            "webserver": 330.436,
+            "phoenix": 505.246,
+            "webhook-listener": 67.613,
+            "ai": 104.66
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.318,
+          "all_current": {
+            "min": 1203.406,
+            "median": 1205.193,
+            "p95": 1289.68,
+            "max": 1290.176
+          },
+          "all_anon": {
+            "min": 878.324,
+            "median": 878.582,
+            "p95": 962.543,
+            "max": 962.543
+          },
+          "all_file": {
+            "min": 239.191,
+            "median": 239.211,
+            "p95": 239.215,
+            "max": 239.215
+          },
+          "service_anon_medians": {
+            "db": 25.25,
+            "broker": 5.328,
+            "webserver": 279.102,
+            "phoenix": 420.172,
+            "webhook-listener": 59.934,
+            "ai": 88.797
+          }
+        },
+        "post-processing-idle": {
+          "endpoint_app_pss": 210.319,
+          "endpoint_web_pss": 346.674,
+          "endpoint_all_pss": 1130.562,
+          "endpoint_service_pss": {
+            "db": 89.084,
+            "broker": 17.285,
+            "webserver": 346.674,
+            "phoenix": 505.246,
+            "webhook-listener": 67.613,
+            "ai": 104.66
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 299,
+          "sampled_duration_seconds": 298.321,
+          "all_current": {
+            "min": 1222.301,
+            "median": 1223.816,
+            "p95": 1307.922,
+            "max": 1310.215
+          },
+          "all_anon": {
+            "min": 893.594,
+            "median": 894.02,
+            "p95": 978.027,
+            "max": 978.215
+          },
+          "all_file": {
+            "min": 242.051,
+            "median": 242.055,
+            "p95": 242.055,
+            "max": 242.059
+          },
+          "service_anon_medians": {
+            "db": 25.27,
+            "broker": 5.332,
+            "webserver": 294.516,
+            "phoenix": 420.172,
+            "webhook-listener": 59.934,
+            "ai": 88.797
+          }
+        },
+        "final-idle": {
+          "endpoint_app_pss": 211.183,
+          "endpoint_web_pss": 347.67,
+          "endpoint_all_pss": 1131.656,
+          "endpoint_service_pss": {
+            "db": 89.186,
+            "broker": 17.281,
+            "webserver": 347.67,
+            "phoenix": 505.246,
+            "webhook-listener": 67.613,
+            "ai": 104.66
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 299,
+          "sampled_duration_seconds": 298.309,
+          "all_current": {
+            "min": 1223.836,
+            "median": 1225.633,
+            "p95": 1310.641,
+            "max": 1331.082
+          },
+          "all_anon": {
+            "min": 894.559,
+            "median": 895.359,
+            "p95": 979.551,
+            "max": 998.375
+          },
+          "all_file": {
+            "min": 242.414,
+            "median": 242.449,
+            "p95": 242.453,
+            "max": 242.453
+          },
+          "service_anon_medians": {
+            "db": 25.285,
+            "broker": 5.328,
+            "webserver": 295.859,
+            "phoenix": 420.172,
+            "webhook-listener": 59.934,
+            "ai": 88.797
+          }
+        }
+      },
+      "metadata_latency": {
+        "requests": 25,
+        "first_seconds": 0.465,
+        "subsequent_seconds": {
+          "min": 0.31,
+          "median": 0.33,
+          "p95": 0.34,
+          "max": 0.358
+        },
+        "total_seconds": 8.363
+      },
+      "peak_bounds": {
+        "sampled_simultaneous_current_lower_bound": 1335.137,
+        "sum_independent_service_peak_upper_bound": 1389.258
+      },
+      "nonzero_memory_events": {},
+      "return_to_idle_observations": {
+        "post-processing-idle": [
+          {
+            "seconds_after_observation_start": 22.022,
+            "web_current_drop": 84.34
+          }
+        ],
+        "final-idle": [
+          {
+            "seconds_after_observation_start": 48.052,
+            "web_current_drop": 84.797
+          },
+          {
+            "seconds_after_observation_start": 168.18,
+            "web_current_drop": 84.359
+          }
+        ]
+      },
+      "outcomes": {
+        "metadata_preview_concurrent_download_search": true,
+        "workflow_final_state_indexed": true,
+        "ingestions": [
+          {
+            "status": "success",
+            "seconds": 3.12
+          },
+          {
+            "status": "success",
+            "seconds": 3.125
+          }
+        ],
+        "reprocess": "success",
+        "scheduled_tasks": {
+          "mail_fetch:success": 3
+        },
+        "recovery_schedule_registered": true
+      },
+      "lifecycle_log_counts": {
+        "scale_up": 9,
+        "scale_down": 8,
+        "recovery_received": 7,
+        "includes_postmeasurement_checks": true
+      },
+      "runtime_checks": {
+        "parser_retry_via_recovery_sweep": true,
+        "committed_completion_resumed_without_reparse": true,
+        "stale_result_rejected_and_input_retained": true
+      },
+      "harness_sha256": {
+        "runner": "e877f9ec1c12c86f0f4d7235a136fd708dac62cdaa112201f8e1cc8b12d9d9dd",
+        "seed": "fb48d2dcec757bd58795be90daab9fe94826714ac622bc4faed49a6308a7b68a",
+        "workload": "b6323e1a810187feb5fecf846d269c08829aab1b5df5fc7fba0eafd170d65cf3",
+        "runtime_checks": "b0ea21aefbe146464a07f58a9c9094f236d8271be81b996a4a5d3c34ba8dab77"
+      },
+      "worker_retirement_log_seconds_after_phase_start": {
+        "post-processing-idle": [
+          20.5
+        ],
+        "final-idle": [
+          47.2,
+          167.2
+        ]
+      }
+    },
+    {
+      "variant": "language3",
+      "image_tag": "paperless-memory27:language",
+      "idle_window_seconds": 300,
+      "readiness_seconds": 11.77,
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 159.44,
+          "endpoint_web_pss": 295.211,
+          "endpoint_all_pss": 1064.863,
+          "endpoint_service_pss": {
+            "db": 73.828,
+            "broker": 17.064,
+            "webserver": 295.211,
+            "phoenix": 506.188,
+            "webhook-listener": 67.85,
+            "ai": 104.723
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.32,
+          "all_current": {
+            "min": 1160.168,
+            "median": 1166.572,
+            "p95": 1253.504,
+            "max": 1255.09
+          },
+          "all_anon": {
+            "min": 848.906,
+            "median": 854.918,
+            "p95": 940.41,
+            "max": 940.422
+          },
+          "all_file": {
+            "min": 224.016,
+            "median": 225.352,
+            "p95": 226.727,
+            "max": 227.715
+          },
+          "service_anon_medians": {
+            "db": 24.641,
+            "broker": 5.133,
+            "webserver": 255.77,
+            "phoenix": 420.621,
+            "webhook-listener": 59.949,
+            "ai": 88.805
+          }
+        },
+        "post-browse-idle": {
+          "endpoint_app_pss": 173.611,
+          "endpoint_web_pss": 309.37,
+          "endpoint_all_pss": 1081.869,
+          "endpoint_service_pss": {
+            "db": 76.647,
+            "broker": 17.092,
+            "webserver": 309.37,
+            "phoenix": 506.188,
+            "webhook-listener": 67.85,
+            "ai": 104.723
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 30,
+          "sampled_duration_seconds": 29.031,
+          "all_current": {
+            "min": 1179.117,
+            "median": 1180.219,
+            "p95": 1181.027,
+            "max": 1181.586
+          },
+          "all_anon": {
+            "min": 864.406,
+            "median": 864.418,
+            "p95": 864.426,
+            "max": 864.441
+          },
+          "all_file": {
+            "min": 228.121,
+            "median": 228.73,
+            "p95": 229.215,
+            "max": 229.215
+          },
+          "service_anon_medians": {
+            "db": 24.871,
+            "broker": 5.215,
+            "webserver": 264.953,
+            "phoenix": 420.621,
+            "webhook-listener": 59.949,
+            "ai": 88.805
+          }
+        },
+        "post-first-metadata": {
+          "endpoint_app_pss": 181.744,
+          "endpoint_web_pss": 317.472,
+          "endpoint_all_pss": 1089.987,
+          "endpoint_service_pss": {
+            "db": 76.664,
+            "broker": 17.092,
+            "webserver": 317.472,
+            "phoenix": 506.188,
+            "webhook-listener": 67.85,
+            "ai": 104.723
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-all-metadata": {
+          "endpoint_app_pss": 188.799,
+          "endpoint_web_pss": 324.526,
+          "endpoint_all_pss": 1097.407,
+          "endpoint_service_pss": {
+            "db": 77.002,
+            "broker": 17.119,
+            "webserver": 324.526,
+            "phoenix": 506.188,
+            "webhook-listener": 67.85,
+            "ai": 104.723
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {
+            "db:FileNotFoundError": 1
+          },
+          "complete_samples": 0
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 188.002,
+          "endpoint_web_pss": 324.366,
+          "endpoint_all_pss": 1108.69,
+          "endpoint_service_pss": {
+            "db": 88.418,
+            "broker": 17.149,
+            "webserver": 324.366,
+            "phoenix": 506.188,
+            "webhook-listener": 67.849,
+            "ai": 104.721
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.311,
+          "all_current": {
+            "min": 1189.523,
+            "median": 1197.912,
+            "p95": 1280.922,
+            "max": 1285.605
+          },
+          "all_anon": {
+            "min": 872.348,
+            "median": 873.766,
+            "p95": 957.98,
+            "max": 959.883
+          },
+          "all_file": {
+            "min": 229.754,
+            "median": 236.949,
+            "p95": 236.965,
+            "max": 236.965
+          },
+          "service_anon_medians": {
+            "db": 25.055,
+            "broker": 5.266,
+            "webserver": 274.145,
+            "phoenix": 420.621,
+            "webhook-listener": 59.949,
+            "ai": 88.805
+          }
+        },
+        "post-suggestions-idle": {
+          "endpoint_app_pss": 191.471,
+          "endpoint_web_pss": 327.698,
+          "endpoint_all_pss": 1112.422,
+          "endpoint_service_pss": {
+            "db": 88.79,
+            "broker": 17.173,
+            "webserver": 327.698,
+            "phoenix": 506.191,
+            "webhook-listener": 67.849,
+            "ai": 104.721
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.321,
+          "all_current": {
+            "min": 1198.445,
+            "median": 1199.818,
+            "p95": 1284.852,
+            "max": 1285.516
+          },
+          "all_anon": {
+            "min": 875.496,
+            "median": 875.605,
+            "p95": 959.738,
+            "max": 959.742
+          },
+          "all_file": {
+            "min": 236.961,
+            "median": 236.961,
+            "p95": 237.012,
+            "max": 237.012
+          },
+          "service_anon_medians": {
+            "db": 25.25,
+            "broker": 5.293,
+            "webserver": 275.707,
+            "phoenix": 420.621,
+            "webhook-listener": 59.949,
+            "ai": 88.805
+          }
+        },
+        "post-processing-idle": {
+          "endpoint_app_pss": 208.182,
+          "endpoint_web_pss": 344.526,
+          "endpoint_all_pss": 1129.718,
+          "endpoint_service_pss": {
+            "db": 89.242,
+            "broker": 17.188,
+            "webserver": 344.526,
+            "phoenix": 506.191,
+            "webhook-listener": 67.849,
+            "ai": 104.721
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.315,
+          "all_current": {
+            "min": 1210.152,
+            "median": 1219.83,
+            "p95": 1303.922,
+            "max": 1308.414
+          },
+          "all_anon": {
+            "min": 891.316,
+            "median": 892.395,
+            "p95": 976.324,
+            "max": 978.449
+          },
+          "all_file": {
+            "min": 232.668,
+            "median": 239.848,
+            "p95": 239.867,
+            "max": 239.867
+          },
+          "service_anon_medians": {
+            "db": 25.312,
+            "broker": 5.312,
+            "webserver": 292.391,
+            "phoenix": 420.625,
+            "webhook-listener": 59.949,
+            "ai": 88.805
+          }
+        },
+        "final-idle": {
+          "endpoint_app_pss": 208.408,
+          "endpoint_web_pss": 344.616,
+          "endpoint_all_pss": 1129.891,
+          "endpoint_service_pss": {
+            "db": 89.329,
+            "broker": 17.185,
+            "webserver": 344.616,
+            "phoenix": 506.191,
+            "webhook-listener": 67.849,
+            "ai": 104.721
+          },
+          "endpoint_web_process_count": 17,
+          "endpoint_extra_worker_present": false,
+          "pss_capture_errors": {},
+          "complete_samples": 300,
+          "sampled_duration_seconds": 299.308,
+          "all_current": {
+            "min": 1213.551,
+            "median": 1216.074,
+            "p95": 1301.246,
+            "max": 1302.422
+          },
+          "all_anon": {
+            "min": 891.367,
+            "median": 891.551,
+            "p95": 975.676,
+            "max": 975.68
+          },
+          "all_file": {
+            "min": 236.02,
+            "median": 236.039,
+            "p95": 237.652,
+            "max": 237.652
+          },
+          "service_anon_medians": {
+            "db": 25.316,
+            "broker": 5.309,
+            "webserver": 291.547,
+            "phoenix": 420.625,
+            "webhook-listener": 59.949,
+            "ai": 88.805
+          }
+        }
+      },
+      "metadata_latency": {
+        "requests": 25,
+        "first_seconds": 0.451,
+        "subsequent_seconds": {
+          "min": 0.309,
+          "median": 0.335,
+          "p95": 0.353,
+          "max": 0.379
+        },
+        "total_seconds": 8.505
+      },
+      "peak_bounds": {
+        "sampled_simultaneous_current_lower_bound": 1342.43,
+        "sum_independent_service_peak_upper_bound": 1384.117
+      },
+      "nonzero_memory_events": {},
+      "return_to_idle_observations": {
+        "post-processing-idle": [
+          {
+            "seconds_after_observation_start": 23.023,
+            "web_current_drop": 84.48
+          },
+          {
+            "seconds_after_observation_start": 232.248,
+            "web_current_drop": 84.07
+          }
+        ],
+        "final-idle": [
+          {
+            "seconds_after_observation_start": 49.048,
+            "web_current_drop": 84.688
+          },
+          {
+            "seconds_after_observation_start": 229.232,
+            "web_current_drop": 84.562
+          }
+        ]
+      },
+      "outcomes": {
+        "metadata_preview_concurrent_download_search": true,
+        "workflow_final_state_indexed": true,
+        "ingestions": [
+          {
+            "status": "success",
+            "seconds": 3.133
+          },
+          {
+            "status": "success",
+            "seconds": 3.122
+          }
+        ],
+        "reprocess": "success",
+        "scheduled_tasks": {
+          "check_workflows:success": 1,
+          "mail_fetch:success": 2
+        },
+        "recovery_schedule_registered": true
+      },
+      "lifecycle_log_counts": {
+        "scale_up": 9,
+        "scale_down": 8,
+        "recovery_received": 6,
+        "includes_postmeasurement_checks": true
+      },
+      "runtime_checks": {
+        "parser_retry_via_recovery_sweep": true,
+        "committed_completion_resumed_without_reparse": true,
+        "stale_result_rejected_and_input_retained": true
+      },
+      "harness_sha256": {
+        "runner": "e877f9ec1c12c86f0f4d7235a136fd708dac62cdaa112201f8e1cc8b12d9d9dd",
+        "seed": "fb48d2dcec757bd58795be90daab9fe94826714ac622bc4faed49a6308a7b68a",
+        "workload": "b6323e1a810187feb5fecf846d269c08829aab1b5df5fc7fba0eafd170d65cf3",
+        "runtime_checks": "b0ea21aefbe146464a07f58a9c9094f236d8271be81b996a4a5d3c34ba8dab77"
+      },
+      "worker_retirement_log_seconds_after_phase_start": {
+        "post-processing-idle": [
+          21.8,
+          231.8
+        ],
+        "final-idle": [
+          48.5,
+          228.5
+        ]
+      }
+    }
+  ],
+  "group_medians": {
+    "baseline": {
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 159.883,
+          "endpoint_web_pss": 296.804,
+          "endpoint_all_pss": 1066.493,
+          "all_current": 1170.896,
+          "all_anon": 855.691,
+          "all_file": 226.34
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 250.232,
+          "endpoint_web_pss": 393.925,
+          "endpoint_all_pss": 1180.329,
+          "all_current": 1261.977,
+          "all_anon": 937.23,
+          "all_file": 237.434
+        },
+        "final-idle": {
+          "endpoint_app_pss": 267.769,
+          "endpoint_web_pss": 403.83,
+          "endpoint_all_pss": 1189.007,
+          "all_current": 1279.582,
+          "all_anon": 950.719,
+          "all_file": 238.762
+        }
+      },
+      "readiness_seconds": 11.77,
+      "metadata_first_seconds": 0.243,
+      "metadata_subsequent_median_seconds": 0.028
+    },
+    "candidate": {
+      "phases": {
+        "startup-idle": {
+          "endpoint_app_pss": 160.094,
+          "endpoint_web_pss": 295.873,
+          "endpoint_all_pss": 1065.286,
+          "all_current": 1166.572,
+          "all_anon": 856.348,
+          "all_file": 225.352
+        },
+        "post-metadata-idle": {
+          "endpoint_app_pss": 188.002,
+          "endpoint_web_pss": 326.76,
+          "endpoint_all_pss": 1110.119,
+          "all_current": 1197.912,
+          "all_anon": 874.984,
+          "all_file": 236.949
+        },
+        "final-idle": {
+          "endpoint_app_pss": 208.408,
+          "endpoint_web_pss": 344.616,
+          "endpoint_all_pss": 1129.891,
+          "all_current": 1216.074,
+          "all_anon": 891.551,
+          "all_file": 236.039
+        }
+      },
+      "readiness_seconds": 12.269,
+      "metadata_first_seconds": 0.465,
+      "metadata_subsequent_median_seconds": 0.334
+    }
+  },
+  "final_median_reductions": {
+    "endpoint_app_pss": {
+      "mib": 59.361,
+      "percent": 22.169
+    },
+    "endpoint_web_pss": {
+      "mib": 59.214,
+      "percent": 14.663
+    },
+    "endpoint_all_pss": {
+      "mib": 59.116,
+      "percent": 4.972
+    },
+    "all_current": {
+      "mib": 63.508,
+      "percent": 4.963
+    },
+    "all_anon": {
+      "mib": 59.168,
+      "percent": 6.224
+    },
+    "all_file": {
+      "mib": 2.723,
+      "percent": 1.14
+    }
+  },
+  "image_audit": {
+    "images": {
+      "baseline": {
+        "tag": "paperless-memory27:baseline",
+        "currently_resolved_image_id": "sha256:d54f813531bf655f7127c865f7d183257fdcd1563bc31af8f3d3f9c453e83a13",
+        "language_module_sha256": null,
+        "views_module_sha256": "94f97efdd857a86709371471d6d23a0308a2b39c1ff569f822ba62849a32734c"
+      },
+      "candidate": {
+        "tag": "paperless-memory27:language",
+        "currently_resolved_image_id": "sha256:ef555323af3dd53791bae84d584fe535c2d9aa9065b1c6d4c6a4fdd0e19fd0a5",
+        "language_module_sha256": "8d1478895974826f56f419b49098a49f8ec2ff665346f11528a1fe6f00b8f14f",
+        "language_module_matches_current_source": true,
+        "views_module_sha256": "090f9888409144b47e58b5a244a27a6829c89670ac54c75c1998714b087742c9",
+        "views_module_matches_current_source": true
+      }
+    },
+    "changed_production_python_modules": [
+      "documents.language",
+      "documents.views"
+    ],
+    "historical_identity_limit": "The four repeats record immutable identities of all six services. Only the initial baseline1 and candidate1 runs lack per-run immutable identity capture; their tags match retained build identities.",
+    "recorded_service_images": {
+      "metadata-baseline2": {
+        "db": "sha256:708d8b40fc8d6a2dd755126ffa4f462d02c8b8769455813593439fb95778aaa1",
+        "broker": "sha256:e75aeb7605eaad6bdf48bdf1be5ff5c4407af94b98f415d550122a91100b0176",
+        "webserver": "sha256:d54f813531bf655f7127c865f7d183257fdcd1563bc31af8f3d3f9c453e83a13",
+        "phoenix": "sha256:5651c7acc453c69eb78002b1271d19e6ed706ad138ffb6b01607cce2f4169d1e",
+        "webhook-listener": "sha256:c70c1065c138ddb643a7f6969db9df1d65306b3633b2b4d8fa6f99bb917d3a1b",
+        "ai": "sha256:0815873ec01594e984c39201138f512b0c9723e5e7b5c641a6014c8a6a79706d"
+      },
+      "metadata-baseline3": {
+        "db": "sha256:708d8b40fc8d6a2dd755126ffa4f462d02c8b8769455813593439fb95778aaa1",
+        "broker": "sha256:e75aeb7605eaad6bdf48bdf1be5ff5c4407af94b98f415d550122a91100b0176",
+        "webserver": "sha256:d54f813531bf655f7127c865f7d183257fdcd1563bc31af8f3d3f9c453e83a13",
+        "phoenix": "sha256:5651c7acc453c69eb78002b1271d19e6ed706ad138ffb6b01607cce2f4169d1e",
+        "webhook-listener": "sha256:c70c1065c138ddb643a7f6969db9df1d65306b3633b2b4d8fa6f99bb917d3a1b",
+        "ai": "sha256:0815873ec01594e984c39201138f512b0c9723e5e7b5c641a6014c8a6a79706d"
+      },
+      "language2": {
+        "db": "sha256:708d8b40fc8d6a2dd755126ffa4f462d02c8b8769455813593439fb95778aaa1",
+        "broker": "sha256:e75aeb7605eaad6bdf48bdf1be5ff5c4407af94b98f415d550122a91100b0176",
+        "webserver": "sha256:ef555323af3dd53791bae84d584fe535c2d9aa9065b1c6d4c6a4fdd0e19fd0a5",
+        "phoenix": "sha256:5651c7acc453c69eb78002b1271d19e6ed706ad138ffb6b01607cce2f4169d1e",
+        "webhook-listener": "sha256:c70c1065c138ddb643a7f6969db9df1d65306b3633b2b4d8fa6f99bb917d3a1b",
+        "ai": "sha256:0815873ec01594e984c39201138f512b0c9723e5e7b5c641a6014c8a6a79706d"
+      },
+      "language3": {
+        "db": "sha256:708d8b40fc8d6a2dd755126ffa4f462d02c8b8769455813593439fb95778aaa1",
+        "broker": "sha256:e75aeb7605eaad6bdf48bdf1be5ff5c4407af94b98f415d550122a91100b0176",
+        "webserver": "sha256:ef555323af3dd53791bae84d584fe535c2d9aa9065b1c6d4c6a4fdd0e19fd0a5",
+        "phoenix": "sha256:5651c7acc453c69eb78002b1271d19e6ed706ad138ffb6b01607cce2f4169d1e",
+        "webhook-listener": "sha256:c70c1065c138ddb643a7f6969db9df1d65306b3633b2b4d8fa6f99bb917d3a1b",
+        "ai": "sha256:0815873ec01594e984c39201138f512b0c9723e5e7b5c641a6014c8a6a79706d"
+      }
+    }
+  },
+  "interpretation": [
+    "All final endpoints have 17 web processes; intermediate post-metadata endpoints baseline2 and candidate1 include an extra Celery worker and are not directly comparable as idle PSS.",
+    "Use final application/web PSS and anonymous-memory differences for attribution; raw current includes differently charged shared file caches and kernel memory.",
+    "Observed approximately 84 MiB drops track worker retirement; schedules interrupt the 300-second windows, so no uninterrupted five-minute or multiday-idle guarantee is established.",
+    "Recovery received logs alone do not establish completed recovery. Four repeat runs independently passed injected retry/recovery/completion/stale-result checks after memory sampling.",
+    "Peak lower bounds use one-second simultaneous samples; upper bounds sum independent per-service lifetime peaks.",
+    "Two initial runs predate runtime fault checks and metadata-language result recording; feature request sequence is otherwise comparable.",
+    "PSS sums across distinct service cgroups can include proportional shared mappings that differ from cgroup file ownership.",
+    "Worker retirement log offsets are estimated from final PSS file modification time and one-second sampling; allow approximately two seconds uncertainty. Baseline2 retires a worker at the start of the final window; the later 130-second cgroup drop is not its first retirement."
+  ],
+  "metadata_language_results": {
+    "runs_with_recorded_languages": 5,
+    "all_recorded_maps_equal": true
+  },
+  "cleanup": {
+    "trial_containers_remaining": 0,
+    "trial_volumes_remaining": 0,
+    "trial_networks_remaining": 0,
+    "raw_snapshot_and_images_retained": true
+  },
+  "workload_semantic_parity_excluding_language_result_recording_and_docstrings": {
+    "metadata-baseline1": true,
+    "metadata-baseline2": true,
+    "metadata-baseline3": true,
+    "language1": true,
+    "language2": true,
+    "language3": true
+  }
+}

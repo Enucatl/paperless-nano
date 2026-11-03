@@ -74,7 +74,6 @@ from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_serializer
 from drf_spectacular.utils import extend_schema_view
 from drf_spectacular.utils import inline_serializer
-from langdetect import detect
 from packaging import version as packaging_version
 from redis import Redis
 from rest_framework import parsers
@@ -145,6 +144,7 @@ from documents.filters import ShareLinkFilterSet
 from documents.filters import StoragePathFilterSet
 from documents.filters import TagFilterSet
 from documents.filters import TitleContentFilter
+from documents.language import detect_language
 from documents.mail import EmailAttachment
 from documents.mail import send_email
 from documents.matching import match_correspondents
@@ -1530,7 +1530,7 @@ class DocumentViewSet(
 
         lang = "en"
         try:
-            lang = detect(doc.content)
+            lang = detect_language(doc.content)
         except Exception:
             pass
         meta["lang"] = lang
