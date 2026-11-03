@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import time
 
+from documents.classifier_training import train_classifier
 from documents.management.commands.base import PaperlessCommand
-from documents.tasks import train_classifier
 
 
 class Command(PaperlessCommand):

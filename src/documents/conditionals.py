@@ -7,10 +7,11 @@ from rest_framework.request import Request
 
 from documents.caching import CACHE_5_MINUTES
 from documents.caching import CACHE_50_MINUTES
-from documents.caching import CLASSIFIER_HASH_KEY
 from documents.caching import CLASSIFIER_MODIFIED_KEY
 from documents.caching import CLASSIFIER_VERSION_KEY
 from documents.caching import get_thumbnail_modified_key
+from documents.classification import ClassificationProviderError
+from documents.classification import InvalidClassificationResult
 from documents.classifier import DocumentClassifier
 from documents.models import Document
 from documents.versioning import resolve_effective_document_by_pk
@@ -23,24 +24,19 @@ def suggestions_etag(request, pk: int) -> str | None:
     setting is also unchanged
 
     """
-    # If no model file, no etag at all
-    if not settings.MODEL_FILE.exists():
-        return None
-    # Check cache information
-    cache_hits = cache.get_many(
-        [CLASSIFIER_VERSION_KEY, CLASSIFIER_HASH_KEY],
-    )
-    # If the version differs somehow, no etag
-    if (
-        CLASSIFIER_VERSION_KEY in cache_hits
-        and cache_hits[CLASSIFIER_VERSION_KEY] != DocumentClassifier.FORMAT_VERSION
+    from documents.classification_operations import suggestion_scope
+    from documents.permissions import has_perms_owner_aware
+
+    document = Document.objects.filter(pk=pk).first()
+    if document is None or not has_perms_owner_aware(
+        request.user, "change_document", document
     ):
         return None
-    elif CLASSIFIER_HASH_KEY in cache_hits:
-        # Refresh the cache and return the hash digest and the dates setting
-        cache.touch(CLASSIFIER_HASH_KEY, CACHE_5_MINUTES)
-        return f"{cache_hits[CLASSIFIER_HASH_KEY]}:{settings.NUMBER_OF_SUGGESTED_DATES}"
-    return None
+    try:
+        return suggestion_scope(document, request.user)
+    except (TimeoutError, ClassificationProviderError, InvalidClassificationResult):
+        # The endpoint maps provider failures; a conditional cannot answer them.
+        return None
 
 
 def suggestions_last_modified(request, pk: int) -> datetime | None:
@@ -49,6 +45,10 @@ def suggestions_last_modified(request, pk: int) -> datetime | None:
     as there is not way to track the suggested date setting modification, but it seems
     unlikely that changes too often
     """
+    # A date cannot represent permission/configuration changes; only ETags can
+    # safely answer conditional requests. Keep the informational header otherwise.
+    if request.META.get("HTTP_IF_MODIFIED_SINCE"):
+        return None
     # No file, no last modified
     if not settings.MODEL_FILE.exists():
         return None

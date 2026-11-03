@@ -6,12 +6,14 @@ import logging
 import pickle
 import re
 import unicodedata
+import uuid
 import warnings
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import os
     from collections.abc import Callable
     from collections.abc import Iterator
     from datetime import datetime
@@ -27,6 +29,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.cache import caches
 from django.db.models import Prefetch
+from filelock import FileLock
 
 from documents._snowball_stopwords import ENGLISH as ENGLISH_STOP_WORDS
 from documents.caching import CACHE_5_MINUTES
@@ -89,12 +92,12 @@ class _SignedFileWriter:
 
     def __init__(self, target: Path, mac: hmac.HMAC) -> None:
         self._target = target
-        self._temp = target.with_name(f"{target.name}.part")
+        self._temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.part")
         self._mac = mac
         self._file: BinaryIO
 
     def __enter__(self) -> Self:
-        self._file = self._temp.open("wb")
+        self._file = self._temp.open("xb")
         self._file.write(bytes(self._mac.digest_size))
         return self
 
@@ -157,6 +160,40 @@ class ClassifierModelCorruptError(Exception):
     pass
 
 
+def classifier_model_lock() -> FileLock:
+    """Serialize model activation and removal across worker and CLI processes."""
+    return FileLock(f"{settings.MODEL_FILE}.lock")
+
+
+def active_model_identity() -> str | None:
+    """Read the activation token without loading the model or trusting its data.
+
+    This is only a freshness token. Inference still verifies the entire signed
+    payload before unpickling it.
+    """
+    try:
+        with Path(settings.MODEL_FILE).open("rb") as model_file:
+            signature = model_file.read(DocumentClassifier.HMAC_SIZE)
+    except OSError:
+        return None
+    return signature.hex() if len(signature) == DocumentClassifier.HMAC_SIZE else None
+
+
+def _remove_failed_model(failed_stat: os.stat_result) -> None:
+    """Remove a failed snapshot without deleting a concurrently activated model."""
+    try:
+        with classifier_model_lock():
+            current = Path(settings.MODEL_FILE).stat()
+            if (current.st_ino, current.st_size, current.st_mtime_ns) == (
+                failed_stat.st_ino,
+                failed_stat.st_size,
+                failed_stat.st_mtime_ns,
+            ):
+                Path(settings.MODEL_FILE).unlink()
+    except OSError:
+        logger.exception("Unable to remove invalid classification model")
+
+
 def load_classifier(*, raise_exception: bool = False) -> DocumentClassifier | None:
     if not settings.CLASSIFIER_ENABLED:
         return None
@@ -170,11 +207,12 @@ def load_classifier(*, raise_exception: bool = False) -> DocumentClassifier | No
 
     classifier = DocumentClassifier()
     try:
+        stat = Path(settings.MODEL_FILE).stat()
         classifier.load()
 
     except IncompatibleClassifierVersionError as e:
         logger.info(f"Classifier version incompatible: {e.message}, will re-train")
-        Path(settings.MODEL_FILE).unlink()
+        _remove_failed_model(stat)
         classifier = None
         if raise_exception:
             raise e
@@ -184,7 +222,7 @@ def load_classifier(*, raise_exception: bool = False) -> DocumentClassifier | No
             "Unrecoverable error while loading document "
             "classification model, deleting model file.",
         )
-        Path(settings.MODEL_FILE).unlink()
+        _remove_failed_model(stat)
         classifier = None
         if raise_exception:
             raise e
@@ -219,6 +257,7 @@ class DocumentClassifier:
         self.last_doc_change_time: datetime | None = None
         # Hash of primary keys of AUTO matching values last used in training
         self.last_auto_type_hash: bytes | None = None
+        self.model_identity: str | None = None
 
         self.data_vectorizer = None
         self.data_vectorizer_hash = None
@@ -258,6 +297,7 @@ class DocumentClassifier:
         return mac.digest()
 
     def load(self) -> None:
+        self.model_identity = None
         from sklearn.exceptions import InconsistentVersionWarning
 
         raw = Path(settings.MODEL_FILE).read_bytes()
@@ -315,25 +355,49 @@ class DocumentClassifier:
             ):
                 raise IncompatibleClassifierVersionError("sklearn version update")
 
+        self.model_identity = bytes(signature).hex()
+
     def save(self) -> None:
-        # Stream to disk instead of building the payload in memory. Protocol 5+
-        # pickles numpy arrays without copying them (the default is 4 before 3.14).
-        with _SignedFileWriter(settings.MODEL_FILE, self._new_hmac()) as f:
-            pickle.dump(
-                (
-                    self.FORMAT_VERSION,
-                    self.last_doc_change_time,
-                    self.last_auto_type_hash,
-                    self.data_vectorizer,
-                    self.tags_binarizer,
-                    self.tags_classifier,
-                    self.correspondent_classifier,
-                    self.document_type_classifier,
-                    self.storage_path_classifier,
-                ),
-                f,
-                protocol=pickle.HIGHEST_PROTOCOL,
-            )
+        """Activate a fully written signed model, then publish its cache identity."""
+        with classifier_model_lock():
+            # Stream to disk instead of building the payload in memory. Protocol 5+
+            # pickles numpy arrays without copying them (the default is 4 before 3.14).
+            with _SignedFileWriter(settings.MODEL_FILE, self._new_hmac()) as f:
+                pickle.dump(
+                    (
+                        self.FORMAT_VERSION,
+                        self.last_doc_change_time,
+                        self.last_auto_type_hash,
+                        self.data_vectorizer,
+                        self.tags_binarizer,
+                        self.tags_classifier,
+                        self.correspondent_classifier,
+                        self.document_type_classifier,
+                        self.storage_path_classifier,
+                    ),
+                    f,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            self.model_identity = active_model_identity()
+            self._cache_active_model()
+
+    def _cache_active_model(self) -> None:
+        """Refresh legacy cache keys only for the currently activated model."""
+        if self.model_identity is None or self.last_auto_type_hash is None:
+            return
+        if self.model_identity != active_model_identity():
+            return
+        cache.set(
+            CLASSIFIER_MODIFIED_KEY,
+            self.last_doc_change_time,
+            CACHE_50_MINUTES,
+        )
+        cache.set(
+            CLASSIFIER_HASH_KEY,
+            self.last_auto_type_hash.hex(),
+            CACHE_50_MINUTES,
+        )
+        cache.set(CLASSIFIER_VERSION_KEY, self.FORMAT_VERSION, CACHE_50_MINUTES)
 
     def train(
         self,
@@ -422,16 +486,11 @@ class DocumentClassifier:
             and self.last_doc_change_time >= latest_doc_change
         ) and self.last_auto_type_hash == hasher.digest():
             logger.info("No updates since last training")
-            # Set the classifier information into the cache
-            # Caching for 50 minutes, so slightly less than the normal retrain time
-            cache.set(
-                CLASSIFIER_MODIFIED_KEY,
-                self.last_doc_change_time,
-                CACHE_50_MINUTES,
-            )
-            cache.set(CLASSIFIER_HASH_KEY, hasher.hexdigest(), CACHE_50_MINUTES)
-            cache.set(CLASSIFIER_VERSION_KEY, self.FORMAT_VERSION, CACHE_50_MINUTES)
+            with classifier_model_lock():
+                self._cache_active_model()
             return False
+
+        self.model_identity = None
 
         # subtract 1 since -1 (null) is also part of the classes.
 
@@ -577,12 +636,6 @@ class DocumentClassifier:
         self.last_doc_change_time = latest_doc_change
         self.last_auto_type_hash = hasher.digest()
         self._update_data_vectorizer_hash()
-
-        # Set the classifier information into the cache
-        # Caching for 50 minutes, so slightly less than the normal retrain time
-        cache.set(CLASSIFIER_MODIFIED_KEY, self.last_doc_change_time, CACHE_50_MINUTES)
-        cache.set(CLASSIFIER_HASH_KEY, hasher.hexdigest(), CACHE_50_MINUTES)
-        cache.set(CLASSIFIER_VERSION_KEY, self.FORMAT_VERSION, CACHE_50_MINUTES)
 
         return True
 

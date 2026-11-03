@@ -34,7 +34,11 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def mock_document():
+def mock_document(mocker):
+    mocker.patch(
+        "paperless_ai.ai_classifier.snapshot_document", return_value="revision"
+    )
+    mocker.patch("paperless_ai.ai_classifier.assert_document_unchanged")
     doc = MagicMock(spec=Document)
     doc.title = "Test Title"
     doc.filename = "test_file.pdf"
@@ -1220,9 +1224,10 @@ def test_get_ai_document_classification_localizes_only_new_names(
           existing_ids - localization must never corrupt an exact taxonomy match
     """
     document = DocumentFactory.create(content="Some content")
+    tag = TagFactory.create(name="Contractor")
     mock_retrieve.return_value = []
     mock_build_candidates.return_value = TaxonomyCandidates(
-        tags=[TaxonomyCandidate(id=12, name="Contractor", weight=1.0)],
+        tags=[TaxonomyCandidate(id=tag.pk, name=tag.name, weight=1.0)],
         document_types=[],
         correspondents=[],
         storage_paths=[],
@@ -1231,7 +1236,7 @@ def test_get_ai_document_classification_localizes_only_new_names(
     mock_client.run_llm_query.side_effect = [
         {
             "title": "Invoice",
-            "tags": {"existing_ids": [12], "new_names": ["Contractor Work"]},
+            "tags": {"existing_ids": [tag.pk], "new_names": ["Contractor Work"]},
             "correspondents": {"existing_ids": [], "new_names": []},
             "document_types": {"existing_ids": [], "new_names": []},
             "storage_paths": {"existing_ids": [], "new_names": []},
@@ -1253,5 +1258,5 @@ def test_get_ai_document_classification_localizes_only_new_names(
 
     localization_prompt = mock_client.run_llm_query.call_args_list[1].args[0]
     assert "Contractor Work" in localization_prompt
-    assert result["tags"]["existing_ids"] == [12]  # untouched by localization
+    assert result["tags"]["existing_ids"] == [tag.pk]  # untouched by localization
     assert result["tags"]["new_names"] == ["Auftragsarbeit"]

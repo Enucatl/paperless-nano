@@ -699,3 +699,150 @@ codespell. The final assertion and verification-documentation edits also passed
 the changed-file hooks.
 The full suite, PostgreSQL/MariaDB, deployment, and RAM checks were not performed.
 Existing PDF form-copy and missing-static-directory warnings remain.
+
+## Replaceable classification (#24)
+
+`documents.classification` defines a JSON-compatible version 1 request and
+result. Requests contain content, a document revision, relevant metadata and
+permitted `{id, name}` candidates grouped by taxonomy. Results contain the same
+revision, provider/model identity and proposed IDs. The optional AI suggestions
+payload retains title, dates and new names; its existing IDs must agree with the
+validated assignments. Providers receive no ORM documents, users, HTTP requests
+or Celery context. They do not persist assignments or choose retry policy.
+
+`classification_operations` owns source snapshots, provider selection and
+candidate permission checks. Classic inference enters it through the four
+existing matching functions. The built-in adapter retains sklearn predictions,
+text truncation, vectorization caching, signed cache validation, confidence
+thresholds and language processing. Model predictions for deleted or unavailable
+labels are discarded by that adapter, as before; a provider result outside its
+supplied candidate set is rejected by the core. Rules still use full effective
+content and retain their ordering relative to automatic matches.
+
+Ingestion reuses its selected model through the existing ordered hooks. The
+retagger keeps selective targets, first-match policy, overwrite and suggest
+modes. The assignment handlers retain manual overrides, inbox tags, nested tags
+and file reconciliation. They lock/check the target and run in a transaction;
+replacement tags are removed only after inference and validation succeed.
+Metadata, tag, effective-version, candidate, configuration and model changes
+during inference reject the result. Nothing queues automatic inference retries:
+a new invocation takes a fresh snapshot, while ingestion failures retain the
+existing durable job recovery rules. Raw external database writes are not made
+part of a global transaction protocol by this extraction.
+
+AI classification uses the same contract. Core code retrieves permitted RAG
+context, builds prompts and resolves returned names. The provider runs the
+existing LLM/localization implementation using plain values. Core validation
+checks the document, configuration and existing candidate IDs again. All AI
+workflow callers, including scheduled/update workflows, recheck the revision
+before applying results. Creation of missing objects, selected fields, overwrite
+policy, additive tags and workflow ordering remain core policies. Background AI
+callbacks keep their existing bounded retries and ingestion receipts.
+
+### Selecting a provider and execution policy
+
+The default `PAPERLESS_CLASSIFICATION_PROVIDER` is empty and selects the existing
+classifier. A dotted no-argument factory can replace classic automatic matching.
+For example, set it to
+`documents.classification_providers.NameTaggingProvider` to use the included
+small provider that proposes permitted auto tags whose names occur in the text.
+It proposes no scalar values; core rules continue to work. This is an explicit
+alternative, not a fallback or a new default. No persistence code changes when
+selecting it. `CLASSIFIER_ENABLED` still controls classic automatic inference.
+
+Factories must expose a cheap `identity` tuple (implementation version, immutable
+model/configuration identifier) and `classify(request)`. A changed model or
+configuration must change that identity. Factories may be constructed to check
+cache freshness without doing inference; expensive model loading belongs in
+execution. The built-in identity uses the signature of the fully verified model
+snapshot and effective inference settings. Reading the active signature for cache
+freshness never substitutes for HMAC verification before unpickling. Remote
+services that silently replace weights behind an unchanged model identifier
+cannot be detected locally.
+
+Execution remains synchronous in the current web/worker/CLI callers. The contract
+defines no process lifecycle, pool, timeout timer or memory cap. Providers report
+timeouts with `TimeoutError`, operational failures with
+`ClassificationProviderError`, and never return a partial successful result.
+Classic suggestions return 503 for timeout, 502 for a declared provider failure
+and 409 for a stale/invalid result. Unexpected exceptions propagate as failures.
+No failed response is cached. The separate AI endpoint retains its existing
+400/502/503 configuration/backend/timeout behavior and adds 409 for rejected
+results. Missing, disabled, incompatible or corrupt built-in models still permit
+rule matching; existing corrupt-model logging/removal is retained.
+
+### Cache and model ownership
+
+Successful suggestion response shapes are unchanged. Classic cache entries are
+bound to document/version state, requesting user, permitted candidates/rules,
+provider/model identity and inference/date configuration. Existing invalidation
+continues to delete the document cache entry; only the latest variant is stored.
+ETags use the same scope so edits, revocations and provider changes cannot yield
+an old 304. Last-Modified remains informational; date-only conditional requests
+are evaluated again because timestamps cannot represent permission/configuration
+changes. AI cache keys also include effective model/configuration identity and
+continue to resolve candidate permissions freshly on hits.
+
+`classifier_training.train_classifier` owns built-in training independently of
+inference. The Celery task and management command delegate to it. Training jobs
+are serialized; each model writer has a unique temporary file. Activation is an
+atomic signed-file replacement and only successful activation advertises cache
+metadata. A stale reader cannot republish metadata for a newer model, and failed
+model cleanup cannot remove a concurrently activated replacement. Successful
+inference loading still works with read-only model storage. This retains format,
+sklearn compatibility and signed-pickle checks.
+
+This implements the #24 boundary without an idle-RAM claim. Django, Celery,
+databases, OCR and search implementations remain in place. #25 (OCR), #26
+(search) and #27 (measured residency reductions) remain separate work. The
+reported 300 MB baseline, approximately 2 GB active goal and proposed 3 GB peak
+cap have not been remeasured or enforced here.
+
+### Classification verification (2026-11-03)
+
+The broad run passed **938 tests**, with **one existing skip** for classifier
+instance caching that was already disabled for memory usage. The final focused
+run passed **71 tests**, covering the subsequent session-user, provider-startup
+failure and revoked-superuser fixes. These selections overlap and are not added
+together. Earlier failures exposed persisted date normalization and file
+reconciliation updating a separate ORM instance; both are fixed and the broad
+run was repeated successfully. Existing missing-static-directory warnings remain.
+
+All tests ran in disposable `docker run --rm --userns=host` containers as an
+unprivileged user, with a read-only source mount and copied working tree. The
+environment used Python 3.14.2, Django 5.2.17, SQLite, Ghostscript 10.05.1 and
+frozen uv testing/lint dependencies. Dependencies and generated artifacts stayed
+in temporary container storage and a named Docker volume. Temporary verification
+resources were removed after the checks.
+
+The broad command was `pytest -o addopts='' -n 4 --dist=loadscope
+--randomly-seed=1`, selecting these files under `src/documents/tests/`:
+`test_classification.py`, `test_classifier_activation.py`, `test_classifier.py`,
+`test_matchables.py`, `test_permission_filtering_security.py`,
+`test_api_documents.py`, `test_api_permissions.py`, `test_api_document_versions.py`,
+`test_version_conditionals.py`, `test_consumer.py`, `test_ingestion_jobs.py`,
+`test_ingestion_followups.py`, `test_job_callbacks.py`, `test_tasks.py`,
+`test_workflows.py`, `test_management_retagger.py`,
+`test_document_maintenance_updates.py`, `test_document_updates.py` and
+`test_management.py`. It also selected `src/paperless_worker/tests/`;
+`test_classification_provider.py`, `test_ai_classifier.py`, `test_matching.py`
+and `test_lazy_imports.py` under `src/paperless_ai/tests/`; and
+`test_import_boundaries.py`, `test_disabled_feature_workflows.py`,
+`test_worker_trace.py` and `test_worker_serialization.py` under
+`src/paperless/tests/`.
+
+The final focused run used the same options with
+`-k 'classification or suggestions or ai_classifier'`, selecting
+`test_classification.py`, `test_api_documents.py` and
+`test_permission_filtering_security.py` under `src/documents/tests/`, plus
+`test_classification_provider.py` and `test_ai_classifier.py` under
+`src/paperless_ai/tests/`. A preceding 16-case run also passed the classic
+contract/persistence/cache cases after the session-user fix.
+
+`makemigrations --check --dry-run --skip-checks` found no missing migrations.
+Changed-file hooks passed, including Ruff, Prettier and codespell. The existing
+uncommitted workflow and memory-report changes were preserved separately.
+
+The full suite, PostgreSQL/MariaDB, deployment and RAM checks were not performed.
+The #23 recovery limitation remains: ambiguous external effects retain their
+inputs and require explicit operator reconciliation.

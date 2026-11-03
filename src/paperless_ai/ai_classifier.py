@@ -1,10 +1,20 @@
+import json
 import logging
+from hashlib import sha256
 
 from django.conf import settings
 from django.contrib.auth.models import User
 
+from documents.classification import ClassificationRequest
+from documents.classification import ClassificationResult
+from documents.classification import InvalidClassificationResult
+from documents.classification import validate_result
+from documents.classification_operations import MODELS
+from documents.classification_operations import assert_document_unchanged
+from documents.classification_operations import snapshot_document
 from documents.models import Document
 from documents.permissions import permitted_document_ids
+from documents.permissions import permitted_object_ids
 from documents.permissions import user_is_active_superuser
 from documents.versioning import annotate_effective_content
 from paperless.config import AIConfig
@@ -299,42 +309,59 @@ def _candidate_id_allowlist(
     }
 
 
-def get_ai_document_classification(
-    document: Document,
-    user: User | None = None,
-    output_language: str | None = None,
-) -> ClassificationSuggestions:
-    ai_config = AIConfig()
+def ai_classification_identity(
+    config: AIConfig,
+    output_language: str | None,
+) -> tuple[str, str]:
+    """Identify the configured inference model without exposing credentials."""
+    configuration = {
+        "backend": config.llm_backend,
+        "model": config.llm_model,
+        "endpoint": config.llm_endpoint,
+        "language": output_language,
+        "context_size": config.llm_context_size,
+        "embedding_chunk_size": config.llm_embedding_chunk_size,
+        "embedding_backend": config.llm_embedding_backend,
+        "embedding_model": config.llm_embedding_model,
+        "embedding_endpoint": config.llm_embedding_endpoint,
+        "extra_params": config.llm_extra_params,
+    }
+    return "paperless-ai-v1", sha256(
+        json.dumps(configuration, sort_keys=True).encode(),
+    ).hexdigest()
 
-    candidates, context = get_taxonomy_context(document, user)
-    prompt = build_prompt_with_rag(
-        document,
-        ai_config,
-        candidates=candidates,
-        context=context,
-    )
 
-    client = AIClient()
-    # Hand the pooled DB connection back while the (slow) LLM query runs so it
-    # is not pinned for the call's duration; see paperless_ai.db and #12976.
-    with db_connection_released():
-        result = client.run_llm_query(
-            prompt,
-            allowed_candidate_ids=_candidate_id_allowlist(candidates),
+class LLMClassificationProvider:
+    """Run the existing LLM using only a serialized classification snapshot."""
+
+    def __init__(self, client: AIClient, identity: tuple[str, str]) -> None:
+        """Bind an initialized client and its model identity for this execution."""
+        self.client = client
+        self.identity = identity
+
+    def classify(self, request: ClassificationRequest) -> ClassificationResult:
+        """Propose assignments and names without reading or modifying documents."""
+        result = self.client.run_llm_query(
+            request["metadata"]["prompt"],
+            allowed_candidate_ids=_candidate_id_allowlist(request["candidates"]),
         )
         suggestions = parse_ai_response(result)
-        if output_language:
-            localized = client.run_llm_query(
-                build_localization_prompt(suggestions, output_language),
+        language = request["metadata"]["output_language_name"]
+        if language:
+            localized = self.client.run_llm_query(
+                render_prompt(
+                    LocalizationPromptContext(
+                        language_name=language,
+                        suggestions_json=classification_suggestions_to_model(
+                            suggestions,
+                        ).model_dump_json(),
+                    ),
+                ),
             )
             localized_suggestions = parse_ai_response(localized)
 
-            def _localized_choice(field: str) -> TaxonomyChoiceDict:
-                # existing_ids always come from the ORIGINAL suggestions -
-                # never from localized_suggestions, whatever the model echoed
-                # back there. This is the concrete fix for the bug this
-                # feature exists to close: localization must never be able to
-                # corrupt an exact taxonomy match.
+            def localized_choice(field: str) -> TaxonomyChoiceDict:
+                """Preserve original IDs when localizing proposed new names."""
                 return TaxonomyChoiceDict(
                     existing_ids=suggestions[field]["existing_ids"],
                     new_names=localized_suggestions[field]["new_names"]
@@ -343,10 +370,83 @@ def get_ai_document_classification(
 
             suggestions = ClassificationSuggestions(
                 title=localized_suggestions["title"] or suggestions["title"],
-                tags=_localized_choice("tags"),
-                correspondents=suggestions["correspondents"],  # never localized
-                document_types=_localized_choice("document_types"),
-                storage_paths=_localized_choice("storage_paths"),
+                tags=localized_choice("tags"),
+                correspondents=suggestions["correspondents"],
+                document_types=localized_choice("document_types"),
+                storage_paths=localized_choice("storage_paths"),
                 dates=suggestions["dates"],
             )
-    return suggestions
+        return ClassificationResult(
+            version=request["version"],
+            revision=request["revision"],
+            provider=self.identity[0],
+            model=self.identity[1],
+            assignments={
+                field: suggestions[field]["existing_ids"]
+                for field in request["candidates"]
+            },
+            suggestions=suggestions,
+        )
+
+
+def get_ai_document_classification(
+    document: Document,
+    user: User | None = None,
+    output_language: str | None = None,
+) -> ClassificationSuggestions:
+    """Build permitted inputs and validate inference before returning suggestions."""
+    revision = snapshot_document(document)
+    assert_document_unchanged(document, revision)
+    ai_config = AIConfig()
+    identity = ai_classification_identity(ai_config, output_language)
+    candidates, context = get_taxonomy_context(document, user)
+    prompt = build_prompt_with_rag(
+        document,
+        ai_config,
+        candidates=candidates,
+        context=context,
+    )
+    request = ClassificationRequest(
+        version=1,
+        revision=revision,
+        content=document.get_effective_content() or "",
+        metadata={
+            "prompt": prompt,
+            "output_language_name": (
+                get_language_name(output_language) if output_language else None
+            ),
+        },
+        candidates={
+            field: [{"id": item["id"], "name": item["name"]} for item in values]
+            for field, values in candidates.items()
+        },
+    )
+    provider = LLMClassificationProvider(AIClient(), identity)
+    # Release the pooled connection while the provider performs remote inference.
+    with db_connection_released():
+        result = provider.classify(json.loads(json.dumps(request)))
+    validate_result(request, result, identity)
+    assert_document_unchanged(document, revision)
+    if ai_classification_identity(AIConfig(), output_language) != identity:
+        raise InvalidClassificationResult("AI model changed during classification")
+    if user is not None:
+        user = User.objects.filter(pk=user.pk, is_active=True).first()
+        if user is None:
+            raise InvalidClassificationResult("Classification user is no longer active")
+    for field, values in result["assignments"].items():
+        if result["suggestions"][field]["existing_ids"] != values:
+            raise InvalidClassificationResult(
+                "AI suggestions disagree with assignments"
+            )
+        model = MODELS[field]
+        permitted = set(
+            model.objects.filter(
+                pk__in=values,
+                id__in=permitted_object_ids(
+                    user, model, f"view_{model._meta.model_name}"
+                ),
+            ).values_list("pk", flat=True),
+        )
+        if set(values) != permitted:
+            raise InvalidClassificationResult("Classification candidates changed")
+    return result["suggestions"]

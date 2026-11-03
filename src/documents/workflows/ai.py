@@ -1,5 +1,4 @@
 import logging
-from contextlib import nullcontext
 from datetime import date
 from datetime import datetime
 from typing import TypeVar
@@ -7,6 +6,9 @@ from typing import TypeVar
 from django.contrib.auth.models import User
 from django.db import transaction
 
+from documents.classification import InvalidClassificationResult
+from documents.classification_operations import assert_document_unchanged
+from documents.classification_operations import snapshot_document
 from documents.job_context import active_ingestion_job
 from documents.models import Correspondent
 from documents.models import Document
@@ -155,6 +157,7 @@ def apply_ai_suggestions_to_document(
     # Workflows run without a user, so we use the document owner
     owner = document.owner
 
+    revision = snapshot_document(document)
     ingestion_id = active_ingestion_job.get()
     if ingestion_id is not None:
         from documents.job_callbacks import deletion_revision
@@ -167,6 +170,8 @@ def apply_ai_suggestions_to_document(
             owner,
             get_llm_output_language(ai_config, owner),
         )
+    except InvalidClassificationResult:
+        raise
     except ValueError:
         # A bad AI config will not fix itself, so swallow it rather than
         # letting the caller retry. Timeouts, rate limits, network errors etc
@@ -178,16 +183,14 @@ def apply_ai_suggestions_to_document(
         )
         return []
 
-    with transaction.atomic() if ingestion_id is not None else nullcontext():
+    with transaction.atomic():
+        current = Document.objects.select_for_update().filter(pk=document.pk).first()
         if ingestion_id is not None:
             from documents.jobs import RejectedResult
             from documents.jobs import _check_permission
             from documents.models import DocumentJob
 
-            document = (
-                Document.objects.select_for_update().filter(pk=document.pk).first()
-            )
-            if document is None or deletion_revision(document) != input_revision:
+            if current is None or deletion_revision(current) != input_revision:
                 raise RejectedResult("Document changed while obtaining AI suggestions")
             job = DocumentJob.objects.get(pk=ingestion_id)
             actor_id = job.input["overrides"].get("actor_id")
@@ -199,7 +202,10 @@ def apply_ai_suggestions_to_document(
                     raise RejectedResult(
                         "The ingestion actor can no longer add documents"
                     )
-        return _apply_suggestions(action, document, suggestions, logging_group)
+        if current is None:
+            raise InvalidClassificationResult("Document deleted during classification")
+        assert_document_unchanged(current, revision)
+        return _apply_suggestions(action, current, suggestions, logging_group)
 
 
 def _apply_suggestions(
@@ -208,7 +214,7 @@ def _apply_suggestions(
     suggestions: dict,
     logging_group,
 ) -> list[str]:
-    """Persist permitted suggestions after the ingestion revision check."""
+    """Persist permitted suggestions after the document revision check."""
     selected = set(action.ai_suggestion_fields or [])
     owner = document.owner
     overwrite = action.ai_overwrite_existing

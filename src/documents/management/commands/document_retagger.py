@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 from rich.table import Table
 from rich.text import Text
 
-from documents.classifier import load_classifier
+from documents.classification_operations import (
+    load_classification_provider as load_classifier,
+)
 from documents.management.commands.base import PaperlessCommand
 from documents.models import Document
 from documents.signals.handlers import set_correspondent

@@ -31,6 +31,7 @@ from rest_framework import serializers
 from documents import matching
 from documents.caching import invalidate_llm_suggestions_cache
 from documents.caching import invalidate_suggestions_cache
+from documents.classification_operations import classification_assignment
 from documents.data_models import ConsumableDocument
 from documents.file_handling import delete_empty_directories
 from documents.file_handling import filename_uses_custom_fields
@@ -86,6 +87,7 @@ def add_inbox_tags(sender, document: Document, logging_group=None, **kwargs) -> 
     document.add_nested_tags(inbox_tags)
 
 
+@classification_assignment
 def set_correspondent(
     sender: object,
     document: Document,
@@ -148,6 +150,7 @@ def set_correspondent(
     return selected
 
 
+@classification_assignment
 def set_document_type(
     sender: object,
     document: Document,
@@ -210,6 +213,7 @@ def set_document_type(
     return selected
 
 
+@classification_assignment
 def set_tags(
     sender: object,
     document: Document,
@@ -254,6 +258,8 @@ def set_tags(
     else:
         tags_to_remove = set()
 
+    matched_tags = matching.match_tags(document, classifier)
+
     if replace and not dry_run:
         Document.tags.through.objects.filter(document=document).exclude(
             Q(tag__is_inbox_tag=True),
@@ -262,7 +268,6 @@ def set_tags(
         ).delete()
 
     current_tags = set(document.tags.all())
-    matched_tags = matching.match_tags(document, classifier)
     tags_to_add = set(matched_tags) - current_tags
 
     if tags_to_add and not dry_run:
@@ -276,6 +281,7 @@ def set_tags(
     return tags_to_add, tags_to_remove
 
 
+@classification_assignment
 def set_storage_path(
     sender: object,
     document: Document,

@@ -30,6 +30,7 @@ from documents.caching import CACHE_50_MINUTES
 from documents.caching import CLASSIFIER_HASH_KEY
 from documents.caching import CLASSIFIER_MODIFIED_KEY
 from documents.caching import CLASSIFIER_VERSION_KEY
+from documents.classification_operations import suggestion_scope
 from documents.data_models import DocumentSource
 from documents.models import Correspondent
 from documents.models import CustomField
@@ -2829,7 +2830,7 @@ class TestDocumentApi(DirectoriesMixin, ConsumeTaskMixin, APITestCase):
         self.assertIn("ETag", response.headers)
         self.assertEqual(
             response.headers["ETag"],
-            f'"{classifier_checksum_hex}:{settings.NUMBER_OF_SUGGESTED_DATES}"',
+            f'"{suggestion_scope(doc, self.user)}"',
         )
 
         response = self.client.get(f"/api/documents/{doc.pk}/suggestions/")

@@ -26,14 +26,11 @@ from documents.data_models import StoredBarcode
 from documents.exceptions import SearchIndexLockError
 from documents.ingestion_jobs import DurableConsumeTask
 from documents.matching import prefilter_documents_by_workflowtrigger
-from documents.models import Correspondent
 from documents.models import CustomFieldInstance
 from documents.models import Document
-from documents.models import DocumentType
 from documents.models import PaperlessTask
 from documents.models import ShareLink
 from documents.models import ShareLinkBundle
-from documents.models import StoragePath
 from documents.models import Tag
 from documents.models import WorkflowRun
 from documents.models import WorkflowTrigger
@@ -123,41 +120,10 @@ def train_classifier(
     *,
     status_callback: Callable[[str], None] | None = None,
 ) -> str:
-    if not settings.CLASSIFIER_ENABLED:
-        return "Classifier disabled, not training"
+    """Run the classifier training operation through the Celery adapter."""
+    from documents.classifier_training import train_classifier as train
 
-    if (
-        not Tag.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()
-        and not DocumentType.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()
-        and not Correspondent.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()
-        and not StoragePath.objects.filter(matching_algorithm=Tag.MATCH_AUTO).exists()
-    ):
-        result = "No automatic matching items, not training"
-        logger.info(result)
-        # Special case, items were once auto and trained, so remove the model
-        # and prevent its use again
-        if settings.MODEL_FILE.exists():  # pragma: no cover
-            logger.info(f"Removing {settings.MODEL_FILE} so it won't be used")
-            settings.MODEL_FILE.unlink()
-        return result
-
-    from documents.classifier import DocumentClassifier
-    from documents.classifier import load_classifier
-
-    classifier = load_classifier()
-
-    if not classifier:
-        classifier = DocumentClassifier()
-
-    if classifier.train(status_callback=status_callback):
-        logger.info(
-            f"Saving updated classifier model to {settings.MODEL_FILE}...",
-        )
-        classifier.save()
-        return "Training completed successfully"
-    else:
-        logger.debug("Training data unchanged.")
-        return "Training data unchanged"
+    return train(status_callback=status_callback)
 
 
 @shared_task(bind=True, base=DurableConsumeTask)

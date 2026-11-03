@@ -11,21 +11,15 @@ from rest_framework import serializers
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentSource
 from documents.filters import CustomFieldQueryParser
-from documents.models import Correspondent
 from documents.models import Document
-from documents.models import DocumentType
 from documents.models import MatchingModel
-from documents.models import StoragePath
-from documents.models import Tag
 from documents.models import Workflow
 from documents.models import WorkflowTrigger
-from documents.permissions import permitted_object_ids
 from documents.regex import safe_regex_search
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
-    from documents.classifier import DocumentClassifier
 
 logger = logging.getLogger("paperless.matching")
 
@@ -44,122 +38,32 @@ def log_reason(
     )
 
 
-def match_correspondents(document: Document, classifier: DocumentClassifier, user=None):
-    pred_id = (
-        classifier.predict_correspondent(document.suggestion_content)
-        if classifier
-        else None
-    )
+def _match_candidates(document, classifier, field, user=None):
+    """Merge validated provider proposals with core rules in candidate order."""
+    from documents.classification_operations import proposed_assignments
 
-    if user is None and document.owner is not None:
-        user = document.owner
-
-    if user is not None:
-        correspondents = Correspondent.objects.filter(
-            id__in=permitted_object_ids(user, Correspondent, "view_correspondent"),
-        )
-    else:
-        correspondents = Correspondent.objects.all()
-
-    return list(
-        filter(
-            lambda o: (
-                matches(o, document)
-                or (
-                    o.pk == pred_id and o.matching_algorithm == MatchingModel.MATCH_AUTO
-                )
-            ),
-            correspondents,
-        ),
-    )
+    candidates, predicted_ids = proposed_assignments(document, field, classifier, user)
+    return [
+        candidate
+        for candidate in candidates
+        if matches(candidate, document) or candidate.pk in predicted_ids
+    ]
 
 
-def match_document_types(document: Document, classifier: DocumentClassifier, user=None):
-    pred_id = (
-        classifier.predict_document_type(document.suggestion_content)
-        if classifier
-        else None
-    )
-    if user is None and document.owner is not None:
-        user = document.owner
-
-    if user is not None:
-        document_types = DocumentType.objects.filter(
-            id__in=permitted_object_ids(user, DocumentType, "view_documenttype"),
-        )
-    else:
-        document_types = DocumentType.objects.all()
-
-    return list(
-        filter(
-            lambda o: (
-                matches(o, document)
-                or (
-                    o.pk == pred_id and o.matching_algorithm == MatchingModel.MATCH_AUTO
-                )
-            ),
-            document_types,
-        ),
-    )
+def match_correspondents(document: Document, classifier, user=None):
+    return _match_candidates(document, classifier, "correspondents", user)
 
 
-def match_tags(document: Document, classifier: DocumentClassifier, user=None):
-    predicted_tag_ids = (
-        classifier.predict_tags(document.suggestion_content) if classifier else []
-    )
-
-    if user is None and document.owner is not None:
-        user = document.owner
-
-    if user is not None:
-        tags = Tag.objects.filter(
-            id__in=permitted_object_ids(user, Tag, "view_tag"),
-        )
-    else:
-        tags = Tag.objects.all()
-
-    return list(
-        filter(
-            lambda o: (
-                matches(o, document)
-                or (
-                    o.matching_algorithm == MatchingModel.MATCH_AUTO
-                    and o.pk in predicted_tag_ids
-                )
-            ),
-            tags,
-        ),
-    )
+def match_document_types(document: Document, classifier, user=None):
+    return _match_candidates(document, classifier, "document_types", user)
 
 
-def match_storage_paths(document: Document, classifier: DocumentClassifier, user=None):
-    pred_id = (
-        classifier.predict_storage_path(document.suggestion_content)
-        if classifier
-        else None
-    )
+def match_tags(document: Document, classifier, user=None):
+    return _match_candidates(document, classifier, "tags", user)
 
-    if user is None and document.owner is not None:
-        user = document.owner
 
-    if user is not None:
-        storage_paths = StoragePath.objects.filter(
-            id__in=permitted_object_ids(user, StoragePath, "view_storagepath"),
-        )
-    else:
-        storage_paths = StoragePath.objects.all()
-
-    return list(
-        filter(
-            lambda o: (
-                matches(o, document)
-                or (
-                    o.pk == pred_id and o.matching_algorithm == MatchingModel.MATCH_AUTO
-                )
-            ),
-            storage_paths,
-        ),
-    )
+def match_storage_paths(document: Document, classifier, user=None):
+    return _match_candidates(document, classifier, "storage_paths", user)
 
 
 def matches(matching_model: MatchingModel, document: Document):

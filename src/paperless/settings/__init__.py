@@ -95,6 +95,7 @@ MODEL_FILE = get_path_from_env(
     DATA_DIR / "classification_model.pickle",
 )
 
+CLASSIFICATION_PROVIDER = os.getenv("PAPERLESS_CLASSIFICATION_PROVIDER", "")
 CLASSIFIER_ENABLED = get_bool_from_env("PAPERLESS_CLASSIFIER_ENABLED", "YES")
 
 # Minimum confidence (0.0-1.0) for the ML classifier to assign a correspondent,

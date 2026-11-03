@@ -1275,6 +1275,22 @@ assignments and rule-based matching continue to work.
 
     Defaults to true.
 
+#### [`PAPERLESS_CLASSIFICATION_PROVIDER=<factory>`](#PAPERLESS_CLASSIFICATION_PROVIDER) {#PAPERLESS_CLASSIFICATION_PROVIDER}
+
+: Selects a dotted Python factory implementing the versioned classification
+contract for automatic matching. Empty selects the built-in classifier.
+`PAPERLESS_CLASSIFIER_ENABLED` also controls replacement providers. Rule matching,
+permissions, manual overrides and persistence remain in the core.
+
+: `documents.classification_providers.NameTaggingProvider` is an included example
+that suggests permitted auto tags whose names appear in document content. It does
+not propose correspondents, document types or storage paths. Training remains a
+separate built-in operation; replacement providers own their model preparation.
+See [the classification contract](document-operations.md#replaceable-classification-24)
+for factory, identity and failure requirements.
+
+    Defaults to empty.
+
 #### [`PAPERLESS_TRAIN_TASK_CRON=<cron expression>`](#PAPERLESS_TRAIN_TASK_CRON) {#PAPERLESS_TRAIN_TASK_CRON}
 
 : Configures the scheduled automatic classifier training frequency. The value

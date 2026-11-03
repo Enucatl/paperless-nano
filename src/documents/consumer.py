@@ -19,7 +19,9 @@ from filelock import FileLock
 from rest_framework.reverse import reverse
 
 from documents.barcodes import read_barcode_values
-from documents.classifier import load_classifier
+from documents.classification_operations import (
+    load_classification_provider as load_classifier,
+)
 from documents.data_models import ConsumableDocument
 from documents.data_models import ConsumeFileSuccessResult
 from documents.data_models import DocumentMetadataOverrides

@@ -113,6 +113,12 @@ from documents.caching import refresh_suggestions_cache
 from documents.caching import set_llm_suggestions_cache
 from documents.caching import set_metadata_cache
 from documents.caching import set_suggestions_cache
+from documents.classification import ClassificationProviderError
+from documents.classification import InvalidClassificationResult
+from documents.classification_operations import assert_document_unchanged
+from documents.classification_operations import load_classification_provider
+from documents.classification_operations import snapshot_document
+from documents.classification_operations import suggestion_scope
 from documents.conditionals import metadata_etag
 from documents.conditionals import metadata_last_modified
 from documents.conditionals import preview_etag
@@ -1553,48 +1559,73 @@ class DocumentViewSet(
         ):
             return HttpResponseForbidden("Insufficient permissions")
 
-        document_suggestions = get_suggestion_cache(doc.pk)
+        try:
+            revision = snapshot_document(doc)
+            scope = suggestion_scope(doc, request.user)
+            document_suggestions = get_suggestion_cache(doc.pk, scope=scope)
+            if document_suggestions is not None:
+                refresh_suggestions_cache(doc.pk)
+                return Response(document_suggestions.suggestions)
 
-        if document_suggestions is not None:
-            refresh_suggestions_cache(doc.pk)
-            return Response(document_suggestions.suggestions)
+            classifier = load_classification_provider()
+            # Loading may retire an incompatible/corrupt model; rules still work.
+            scope = suggestion_scope(doc, request.user)
 
-        from documents.classifier import load_classifier
+            dates = []
+            if settings.NUMBER_OF_SUGGESTED_DATES > 0:
+                with get_date_parser() as date_parser:
+                    gen = date_parser.parse(doc.filename, doc.content)
+                    dates = sorted(
+                        {
+                            i
+                            for i in itertools.islice(
+                                gen, settings.NUMBER_OF_SUGGESTED_DATES
+                            )
+                        },
+                    )
 
-        classifier = load_classifier()
+            resp_data = {
+                "correspondents": [
+                    c.id for c in match_correspondents(doc, classifier, request.user)
+                ],
+                "tags": [t.id for t in match_tags(doc, classifier, request.user)],
+                "document_types": [
+                    dt.id for dt in match_document_types(doc, classifier, request.user)
+                ],
+                "storage_paths": [
+                    dt.id for dt in match_storage_paths(doc, classifier, request.user)
+                ],
+                "dates": [
+                    date.strftime("%Y-%m-%d") for date in dates if date is not None
+                ],
+            }
 
-        dates = []
-        if settings.NUMBER_OF_SUGGESTED_DATES > 0:
-            with get_date_parser() as date_parser:
-                gen = date_parser.parse(doc.filename, doc.content)
-                dates = sorted(
-                    {
-                        i
-                        for i in itertools.islice(
-                            gen,
-                            settings.NUMBER_OF_SUGGESTED_DATES,
-                        )
-                    },
+            assert_document_unchanged(doc, revision)
+            actor = User.objects.filter(pk=request.user.pk, is_active=True).first()
+            if actor is None or not has_perms_owner_aware(
+                actor, "change_document", doc
+            ):
+                return HttpResponseForbidden("Insufficient permissions")
+            if suggestion_scope(doc, actor) != scope:
+                raise InvalidClassificationResult(
+                    "Suggestions changed during classification"
                 )
-
-        resp_data = {
-            "correspondents": [
-                c.id for c in match_correspondents(doc, classifier, request.user)
-            ],
-            "tags": [t.id for t in match_tags(doc, classifier, request.user)],
-            "document_types": [
-                dt.id for dt in match_document_types(doc, classifier, request.user)
-            ],
-            "storage_paths": [
-                dt.id for dt in match_storage_paths(doc, classifier, request.user)
-            ],
-            "dates": [date.strftime("%Y-%m-%d") for date in dates if date is not None],
-        }
-
-        # Cache the suggestions and the classifier hash for later
-        set_suggestions_cache(doc.pk, resp_data, classifier)
-
-        return Response(resp_data)
+            set_suggestions_cache(doc.pk, resp_data, classifier, scope=scope)
+            return Response(resp_data)
+        except InvalidClassificationResult as exc:
+            return Response(
+                {"classification": [str(exc)]}, status=status.HTTP_409_CONFLICT
+            )
+        except TimeoutError:
+            return Response(
+                {"classification": ["Classification timed out."]},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except ClassificationProviderError:
+            return Response(
+                {"classification": ["Classification provider failed."]},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
     @action(
         methods=["get"],
@@ -1622,6 +1653,7 @@ class DocumentViewSet(
         if not ai_config.ai_enabled:
             return HttpResponseBadRequest("AI is required for this feature")
 
+        from paperless_ai.ai_classifier import ai_classification_identity
         from paperless_ai.ai_classifier import get_llm_output_language
         from paperless_ai.matching import extract_unmatched_names
         from paperless_ai.matching import match_correspondents_by_name
@@ -1644,6 +1676,7 @@ class DocumentViewSet(
                 ai_config.llm_model,
                 ai_config.llm_endpoint,
                 output_language,
+                ":".join(ai_classification_identity(ai_config, output_language)),
                 f"user={request.user.pk}",
             )
             if part
@@ -1675,6 +1708,8 @@ class DocumentViewSet(
                     request.user,
                     output_language,
                 )
+            except InvalidClassificationResult as exc:
+                return Response({"ai": [str(exc)]}, status=status.HTTP_409_CONFLICT)
             except ValueError as exc:
                 logger.exception(
                     "Invalid AI configuration while generating suggestions for "
@@ -1720,6 +1755,10 @@ class DocumentViewSet(
                 backend=llm_cache_backend,
             )
 
+        actor = User.objects.filter(pk=request.user.pk, is_active=True).first()
+        if actor is None or not has_perms_owner_aware(actor, "change_document", doc):
+            return HttpResponseForbidden("Insufficient permissions")
+
         tags_choice: TaxonomyChoiceDict = llm_suggestions["tags"]
         correspondents_choice: TaxonomyChoiceDict = llm_suggestions["correspondents"]
         document_types_choice: TaxonomyChoiceDict = llm_suggestions["document_types"]
@@ -1737,9 +1776,9 @@ class DocumentViewSet(
             first-seen order) rather than trusting the two lookups to be
             disjoint.
             """
-            matched = resolve_ids(choice["existing_ids"], request.user) + match_names(
+            matched = resolve_ids(choice["existing_ids"], actor) + match_names(
                 choice["new_names"],
-                request.user,
+                actor,
             )
             seen_ids: set[int] = set()
             deduped = []
