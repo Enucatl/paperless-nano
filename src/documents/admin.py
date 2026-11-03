@@ -17,6 +17,7 @@ from documents.models import ShareLinkBundle
 from documents.models import StoragePath
 from documents.models import Tag
 from documents.tasks import update_document_parent_tags
+from documents.updates import document_metadata_update
 
 if settings.AUDIT_LOG_ENABLED:
     from auditlog.admin import LogEntryAdmin
@@ -114,10 +115,15 @@ class DocumentAdmin(GuardedModelAdmin):
         super().delete_model(request, obj)
 
     def save_model(self, request, obj, form, change):
+        with document_metadata_update(obj):
+            super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
         from documents.search import get_backend
 
-        get_backend().add_or_update(obj)
-        super().save_model(request, obj, form, change)
+        with document_metadata_update(form.instance):
+            super().save_related(request, form, formsets, change)
+        get_backend().add_or_update(form.instance)
 
 
 class RuleInline(admin.TabularInline):

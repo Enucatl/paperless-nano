@@ -1003,7 +1003,7 @@ class TestWorkflows(
         # since we are only testing DB state here.
         with (
             mock.patch(
-                "documents.signals.handlers.update_filename_and_move_files",
+                "documents.file_handling.reconcile_document_files",
             ),
             mock.patch.object(Document, "refresh_from_db"),
         ):

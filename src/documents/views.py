@@ -1925,7 +1925,8 @@ class DocumentViewSet(
                     )
 
                 doc.modified = timezone.now()
-                doc.save(update_fields=["modified"])
+                with document_metadata_update(doc):
+                    doc.save(update_fields=["modified"])
 
                 from documents.search import get_backend
 
@@ -1969,7 +1970,8 @@ class DocumentViewSet(
             note.delete()
 
             doc.modified = timezone.now()
-            doc.save(update_fields=["modified"])
+            with document_metadata_update(doc):
+                doc.save(update_fields=["modified"])
 
             from documents.search import get_backend
 

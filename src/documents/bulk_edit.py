@@ -29,8 +29,6 @@ from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import DocumentSource
 from documents.models import Correspondent
-from documents.models import CustomField
-from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import DocumentType
 from documents.models import PaperlessTask
@@ -43,6 +41,7 @@ from documents.tasks import bulk_update_documents
 from documents.tasks import consume_file
 from documents.tasks import remove_document_from_index
 from documents.tasks import update_document_content_maybe_archive_file
+from documents.updates import modify_document_custom_fields
 from documents.versioning import get_latest_version_for_root
 from documents.versioning import get_root_document
 from documents.versioning import versions_newest_first
@@ -312,66 +311,11 @@ def modify_custom_fields(
     add_custom_fields: list[int] | dict,
     remove_custom_fields: list[int],
 ) -> Literal["OK"]:
-    qs = Document.objects.filter(id__in=doc_ids).only("pk")
-    affected_docs = list(qs.values_list("pk", flat=True))
-    # Ensure add_custom_fields is a list of (int, value) tuples, supports old API
-    add_custom_fields = (
-        [(int(field), value) for field, value in add_custom_fields.items()]
-        if isinstance(add_custom_fields, dict)
-        else [(int(field), None) for field in add_custom_fields]
+    affected_docs = modify_document_custom_fields(
+        doc_ids,
+        add_custom_fields,
+        remove_custom_fields,
     )
-
-    # Resolved once, instead of re-querying the same field for every document
-    custom_fields_by_id: dict[int, CustomField] = CustomField.objects.in_bulk(
-        [field_id for field_id, _ in add_custom_fields],
-    )
-    # Passed to update_or_create() below rather than a bare id, so the FK is
-    # cached on the created instance and auditlog's post_save receiver does
-    # not reload it per row. Only needed for additions. content is deferred:
-    # the one field here that is both large and unused.
-    docs_by_id: dict[int, Document] = (
-        Document.objects.defer("content").in_bulk(affected_docs)
-        if add_custom_fields
-        else {}
-    )
-    for field_id, value in add_custom_fields:
-        custom_field = custom_fields_by_id[field_id]
-        value_field = CustomFieldInstance.TYPE_TO_DATA_STORE_NAME_MAP[
-            custom_field.data_type
-        ]
-        is_doclink = custom_field.data_type == CustomField.FieldDataType.DOCUMENTLINK
-        for doc_id in affected_docs:
-            if is_doclink and value and doc_id in value:
-                # Prevent self-linking
-                continue
-            CustomFieldInstance.objects.update_or_create(
-                document=docs_by_id[doc_id],
-                field=custom_field,
-                defaults={value_field: value},
-            )
-            if is_doclink:
-                reflect_doclinks(docs_by_id[doc_id], custom_field, value)
-
-    # For doc link fields that are being removed, remove symmetrical links.
-    # select_related avoids a per-instance reload of the document and field.
-    for doclink_being_removed_instance in CustomFieldInstance.objects.filter(
-        document_id__in=affected_docs,
-        field__id__in=remove_custom_fields,
-        field__data_type=CustomField.FieldDataType.DOCUMENTLINK,
-        value_document_ids__isnull=False,
-    ).select_related("field", "document"):
-        for target_doc_id in doclink_being_removed_instance.value:
-            remove_doclink(
-                document=doclink_being_removed_instance.document,
-                field=doclink_being_removed_instance.field,
-                target_doc_id=target_doc_id,
-            )
-
-    # Finally, remove the custom fields
-    CustomFieldInstance.objects.filter(
-        document_id__in=affected_docs,
-        field_id__in=remove_custom_fields,
-    ).hard_delete()
 
     bulk_update_documents.apply_async(
         kwargs={"document_ids": affected_docs},
@@ -1110,90 +1054,3 @@ def remove_password(
             ) from e
 
     return "OK"
-
-
-def reflect_doclinks(
-    document: Document,
-    field: CustomField,
-    target_doc_ids: list[int],
-) -> None:
-    """
-    Add or remove 'symmetrical' links to `document` on all `target_doc_ids`
-    """
-
-    if target_doc_ids is None:
-        target_doc_ids = []
-
-    # Check if any documents are going to be removed from the current list of links and remove the symmetrical links
-    current_field_instance = CustomFieldInstance.objects.filter(
-        field=field,
-        document=document,
-    ).first()
-    if current_field_instance is not None and current_field_instance.value is not None:
-        for doc_id in current_field_instance.value:
-            if doc_id not in target_doc_ids:
-                remove_doclink(
-                    document=document,
-                    field=field,
-                    target_doc_id=doc_id,
-                )
-
-    # Create an instance if target doc doesn't have this field or append it to an existing one
-    existing_custom_field_instances = {
-        custom_field.document_id: custom_field
-        for custom_field in CustomFieldInstance.objects.filter(
-            field=field,
-            document_id__in=target_doc_ids,
-        )
-    }
-    custom_field_instances_to_create = []
-    custom_field_instances_to_update = []
-    for target_doc_id in target_doc_ids:
-        target_doc_field_instance = existing_custom_field_instances.get(
-            target_doc_id,
-        )
-        if target_doc_field_instance is None:
-            custom_field_instances_to_create.append(
-                CustomFieldInstance(
-                    document_id=target_doc_id,
-                    field=field,
-                    value_document_ids=[document.id],
-                ),
-            )
-        elif target_doc_field_instance.value is None:
-            target_doc_field_instance.value_document_ids = [document.id]
-            custom_field_instances_to_update.append(target_doc_field_instance)
-        elif document.id not in target_doc_field_instance.value:
-            target_doc_field_instance.value_document_ids.append(document.id)
-            custom_field_instances_to_update.append(target_doc_field_instance)
-
-    CustomFieldInstance.objects.bulk_create(custom_field_instances_to_create)
-    CustomFieldInstance.objects.bulk_update(
-        custom_field_instances_to_update,
-        ["value_document_ids"],
-    )
-    Document.objects.filter(id__in=target_doc_ids).update(modified=timezone.now())
-
-
-def remove_doclink(
-    document: Document,
-    field: CustomField,
-    target_doc_id: int,
-) -> None:
-    """
-    Removes a 'symmetrical' link to `document` from the target document's existing custom field instance
-    """
-    # select_related: a signal receiver (auditlog) touches .document/.field on
-    # the save() below, without this that is a per-call reload query
-    target_doc_field_instance = (
-        CustomFieldInstance.objects.filter(document_id=target_doc_id, field=field)
-        .select_related("document", "field")
-        .first()
-    )
-    if (
-        target_doc_field_instance is not None
-        and document.id in target_doc_field_instance.value
-    ):
-        target_doc_field_instance.value.remove(document.id)
-        target_doc_field_instance.save()
-    Document.objects.filter(id=target_doc_id).update(modified=timezone.now())

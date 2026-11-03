@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from contextlib import contextmanager
 from contextlib import nullcontext
 from contextvars import ContextVar
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django.conf import settings
+from django.utils import timezone
 from django.utils.translation import gettext as _
 from rest_framework.exceptions import PermissionDenied
 
@@ -39,23 +41,26 @@ def file_updates_deferred(document_id: int) -> bool:
 
 
 @contextmanager
-def document_metadata_update(document: Document) -> Iterator[None]:
+def document_metadata_update(*documents: Document) -> Iterator[None]:
     """Persist related changes before reconciling filenames, without recursive workflows.
 
     The scope is per document and execution context; other requests and linked
     documents retain their own file handling. No database transaction is added:
     rollback cannot undo a published file move.
     """
-    token = _deferred_file_updates.set(_deferred_file_updates.get() | {document.pk})
+    token = _deferred_file_updates.set(
+        _deferred_file_updates.get() | {document.pk for document in documents},
+    )
     try:
         yield
     finally:
         _deferred_file_updates.reset(token)
 
-    if not file_updates_deferred(document.pk):
-        from documents.signals.handlers import update_filename_and_move_files
+    from documents.file_handling import reconcile_document_files
 
-        update_filename_and_move_files(Document, document)
+    for document in documents:
+        if not file_updates_deferred(document.pk):
+            reconcile_document_files(document)
 
 
 @contextmanager
@@ -122,8 +127,6 @@ def save_document_metadata(
     checked here before any mutation, including reciprocal document links.
     Filename columns are never copied from a possibly stale caller instance.
     """
-    from documents import bulk_edit
-
     if (
         ("owner" in validated_data and validated_data["owner"] != instance.owner)
         or "set_permissions" in validated_data
@@ -160,7 +163,7 @@ def save_document_metadata(
                 ):
                     # Doc link field is being removed entirely
                     for doc_id in custom_field_instance.value:
-                        bulk_edit.remove_doclink(
+                        remove_doclink(
                             instance,
                             custom_field_instance.field,
                             doc_id,
@@ -260,13 +263,229 @@ def save_custom_field_value(
     value: Any,
 ) -> CustomFieldInstance:
     """Store a validated field value and maintain reciprocal document links."""
-    from documents import bulk_edit
-
     if field.data_type == CustomField.FieldDataType.DOCUMENTLINK:
-        bulk_edit.reflect_doclinks(document, field, value)
+        reflect_doclinks(document, field, value)
     instance, _created = CustomFieldInstance.objects.update_or_create(
         document=document,
         field=field,
         defaults={CustomFieldInstance.get_value_field_name(field.data_type): value},
     )
     return instance
+
+
+def complete_document_updates(document_ids: list[int]) -> None:
+    """Complete persisted bulk edits with workflows and batched search updates.
+
+    The Celery task is the execution adapter; this operation keeps the existing
+    cache invalidation, file reconciliation and one AI batch update policy.
+    """
+    from documents.caching import clear_document_caches
+    from documents.search import get_backend
+    from documents.versioning import annotate_effective_content
+    from paperless.config import AIConfig
+
+    document_ids = list(document_ids)
+    # Workflows match effective version content; the batch index reads the
+    # final state again after all workflows have run.
+    documents = annotate_effective_content(
+        Document.objects.filter(id__in=document_ids),
+    )
+
+    for doc in documents:
+        clear_document_caches(doc.pk)
+        with document_update(
+            doc,
+            logging_group=uuid.uuid4(),
+            skip_ai_index=True,  # bulk path calls update_llm_index once below
+            index=False,
+            reconcile_files=True,
+        ):
+            pass
+
+    with get_backend().batch_update() as batch:
+        batch.add_or_update_ids(document_ids)
+
+    ai_config = AIConfig()
+    if ai_config.llm_index_enabled:
+        from paperless_ai.indexing import update_llm_index
+
+        update_llm_index(
+            rebuild=False,
+            document_ids=document_ids,
+        )
+
+
+def modify_document_custom_fields(
+    doc_ids: list[int],
+    add_custom_fields: list[int] | dict,
+    remove_custom_fields: list[int],
+) -> list[int]:
+    """Apply bulk custom-field changes before reconciling each affected file.
+
+    Inputs have already passed API validation. Keep additions before removals,
+    including reciprocal links between documents in the same batch. Return the
+    affected IDs for asynchronous workflow completion by the caller.
+    """
+    from documents.file_handling import filename_uses_custom_fields
+
+    qs = Document.objects.filter(id__in=doc_ids).only("pk")
+    affected_docs = list(qs.values_list("pk", flat=True))
+    # Ensure add_custom_fields is a list of (int, value) tuples, supports old API
+    add_custom_fields = (
+        [(int(field), value) for field, value in add_custom_fields.items()]
+        if isinstance(add_custom_fields, dict)
+        else [(int(field), None) for field in add_custom_fields]
+    )
+
+    # Resolved once, instead of re-querying the same field for every document
+    custom_fields_by_id: dict[int, CustomField] = CustomField.objects.in_bulk(
+        [field_id for field_id, _ in add_custom_fields],
+    )
+    docs_by_id = Document.objects.defer("content").in_bulk(affected_docs)
+    with document_metadata_update(
+        *(doc for doc in docs_by_id.values() if filename_uses_custom_fields(doc)),
+    ):
+        for field_id, value in add_custom_fields:
+            custom_field = custom_fields_by_id[field_id]
+            is_doclink = (
+                custom_field.data_type == CustomField.FieldDataType.DOCUMENTLINK
+            )
+            for doc_id in affected_docs:
+                if is_doclink and value and doc_id in value:
+                    # Prevent self-linking
+                    continue
+                save_custom_field_value(docs_by_id[doc_id], custom_field, value)
+
+        # For doc link fields that are being removed, remove symmetrical links.
+        # select_related avoids a per-instance reload of the document and field.
+        for doclink_being_removed_instance in CustomFieldInstance.objects.filter(
+            document_id__in=affected_docs,
+            field__id__in=remove_custom_fields,
+            field__data_type=CustomField.FieldDataType.DOCUMENTLINK,
+            value_document_ids__isnull=False,
+        ).select_related("field", "document"):
+            for target_doc_id in doclink_being_removed_instance.value:
+                remove_doclink(
+                    document=doclink_being_removed_instance.document,
+                    field=doclink_being_removed_instance.field,
+                    target_doc_id=target_doc_id,
+                )
+
+        # Finally, remove the custom fields
+        CustomFieldInstance.objects.filter(
+            document_id__in=affected_docs,
+            field_id__in=remove_custom_fields,
+        ).hard_delete()
+
+    return affected_docs
+
+
+def reflect_doclinks(
+    document: Document,
+    field: CustomField,
+    target_doc_ids: list[int],
+) -> None:
+    """
+    Add or remove 'symmetrical' links to `document` on all `target_doc_ids`
+    """
+
+    if target_doc_ids is None:
+        target_doc_ids = []
+
+    # Check if any documents are going to be removed from the current list of links and remove the symmetrical links
+    current_field_instance = CustomFieldInstance.objects.filter(
+        field=field,
+        document=document,
+    ).first()
+    if current_field_instance is not None and current_field_instance.value is not None:
+        for doc_id in current_field_instance.value:
+            if doc_id not in target_doc_ids:
+                remove_doclink(
+                    document=document,
+                    field=field,
+                    target_doc_id=doc_id,
+                )
+
+    # Create an instance if target doc doesn't have this field or append it to an existing one
+    existing_custom_field_instances = {
+        custom_field.document_id: custom_field
+        for custom_field in CustomFieldInstance.objects.filter(
+            field=field,
+            document_id__in=target_doc_ids,
+        )
+    }
+    custom_field_instances_to_create = []
+    custom_field_instances_to_update = []
+    for target_doc_id in target_doc_ids:
+        target_doc_field_instance = existing_custom_field_instances.get(
+            target_doc_id,
+        )
+        if target_doc_field_instance is None:
+            custom_field_instances_to_create.append(
+                CustomFieldInstance(
+                    document_id=target_doc_id,
+                    field=field,
+                    value_document_ids=[document.id],
+                ),
+            )
+        elif target_doc_field_instance.value is None:
+            target_doc_field_instance.value_document_ids = [document.id]
+            custom_field_instances_to_update.append(target_doc_field_instance)
+        elif document.id not in target_doc_field_instance.value:
+            target_doc_field_instance.value_document_ids.append(document.id)
+            custom_field_instances_to_update.append(target_doc_field_instance)
+
+    CustomFieldInstance.objects.bulk_create(custom_field_instances_to_create)
+    CustomFieldInstance.objects.bulk_update(
+        custom_field_instances_to_update,
+        ["value_document_ids"],
+    )
+    Document.objects.filter(id__in=target_doc_ids).update(modified=timezone.now())
+
+
+def remove_doclink(
+    document: Document,
+    field: CustomField,
+    target_doc_id: int,
+) -> None:
+    """
+    Removes a 'symmetrical' link to `document` from the target document's existing custom field instance
+    """
+    # select_related: a signal receiver (auditlog) touches .document/.field on
+    # the save() below, without this that is a per-call reload query
+    target_doc_field_instance = (
+        CustomFieldInstance.objects.filter(document_id=target_doc_id, field=field)
+        .select_related("document", "field")
+        .first()
+    )
+    if (
+        target_doc_field_instance is not None
+        and document.id in target_doc_field_instance.value
+    ):
+        from documents.file_handling import filename_uses_custom_fields
+
+        target = target_doc_field_instance.document
+        with (
+            document_metadata_update(target)
+            if filename_uses_custom_fields(target)
+            else nullcontext()
+        ):
+            target_doc_field_instance.value.remove(document.id)
+            target_doc_field_instance.save()
+    Document.objects.filter(id=target_doc_id).update(modified=timezone.now())
+
+
+def update_select_custom_field_documents(
+    custom_field_id: int,
+    select_options: list[dict[str, str]],
+) -> None:
+    """Clear removed select values and reconcile files that use their labels."""
+    from documents.file_handling import filename_uses_custom_fields
+
+    option_labels = {option["id"]: option["label"] for option in select_options}
+    fields = CustomFieldInstance.objects.filter(field_id=custom_field_id)
+    fields.exclude(value_select__in=option_labels.keys()).update(value_select=None)
+    for field in fields.select_related("document").iterator():
+        if filename_uses_custom_fields(field.document):
+            with document_metadata_update(field.document):
+                pass

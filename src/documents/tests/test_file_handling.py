@@ -657,7 +657,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
     @override_settings(FILENAME_FORMAT="{title}")
     @mock.patch("documents.signals.handlers.Document.objects.filter")
-    @mock.patch("documents.signals.handlers.shutil.move")
+    @mock.patch("documents.file_handling.shutil.move")
     def test_no_move_only_save(self, mock_move, mock_filter) -> None:
         """
         GIVEN:
@@ -694,7 +694,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         FILENAME_FORMAT="{{title}}_{{custom_fields|get_cf_value('test')}}",
         CELERY_TASK_ALWAYS_EAGER=True,
     )
-    @mock.patch("documents.signals.handlers.update_filename_and_move_files")
+    @mock.patch("documents.file_handling.reconcile_document_files")
     def test_select_cf_updated(self, m) -> None:
         """
         GIVEN:
@@ -884,7 +884,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
         self.assertIsFile(doc.archive_path)
 
     @override_settings(FILENAME_FORMAT="{correspondent}/{title}")
-    @mock.patch("documents.signals.handlers.shutil.move")
+    @mock.patch("documents.file_handling.shutil.move")
     def test_move_archive_error(self, m) -> None:
         def fake_rename(src, dst) -> None:
             if "archive" in str(src):
@@ -935,7 +935,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
         self.assertIsFile(doc.archive_path)
 
     @override_settings(FILENAME_FORMAT="{correspondent}/{title}")
-    @mock.patch("documents.signals.handlers.shutil.move")
+    @mock.patch("documents.file_handling.shutil.move")
     def test_move_file_error(self, m) -> None:
         def fake_rename(src, dst) -> None:
             if "original" in str(src):
@@ -2046,7 +2046,7 @@ class TestCustomFieldFilenameUpdates(
         Path(self.doc.source_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.doc.source_path).touch()
 
-        with mock.patch("documents.signals.handlers.generate_unique_filename") as m:
+        with mock.patch("documents.file_handling.generate_unique_filename") as m:
             m.side_effect = generate_unique_filename
             self.cfi.value_text = "updated"
             self.cfi.save()
@@ -2068,7 +2068,7 @@ class TestCustomFieldFilenameUpdates(
         Path(self.doc.source_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.doc.source_path).touch()
 
-        with mock.patch("documents.signals.handlers.generate_unique_filename") as m:
+        with mock.patch("documents.file_handling.generate_unique_filename") as m:
             m.side_effect = generate_unique_filename
             self.cfi.value_text = "updated"
             self.cfi.save()

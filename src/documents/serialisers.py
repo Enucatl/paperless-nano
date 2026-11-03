@@ -2431,13 +2431,14 @@ class StoragePathSerializer(MatchingModelSerializer, OwnedObjectSerializer):
         using it require a rename/move
         """
         doc_ids = [doc.id for doc in instance.documents.all()]
+        instance = super().update(instance, validated_data)
         if doc_ids:
             bulk_edit.bulk_update_documents.apply_async(
                 kwargs={"document_ids": doc_ids},
                 headers={"trigger_source": PaperlessTask.TriggerSource.SYSTEM},
             )
 
-        return super().update(instance, validated_data)
+        return instance
 
 
 class UiSettingsViewSerializer(serializers.ModelSerializer[UiSettings]):

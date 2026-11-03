@@ -64,6 +64,9 @@ class TestDocumentAdmin(DirectoriesMixin, TestCase):
 
         doc.title = "new title"
         self.doc_admin.save_model(None, doc, None, None)
+        self.assertIsNone(self.get_document_from_index(doc))
+        form = types.SimpleNamespace(instance=doc, save_m2m=lambda: None)
+        self.doc_admin.save_related(None, form, [], change=True)
 
         self.assertEqual(self.get_document_from_index(doc)["id"], [doc.id])
 

@@ -1,7 +1,6 @@
 import datetime
 import logging
 import shutil
-import uuid
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
@@ -48,11 +47,9 @@ from documents.plugins.helpers import ProgressStatusOptions
 from documents.signals.handlers import cleanup_document_deletion
 from documents.signals.handlers import run_workflows
 from documents.signals.handlers import send_websocket_document_updated
-from documents.updates import document_update
 from documents.utils import IterWrapper
 from documents.utils import compute_checksum
 from documents.utils import identity
-from documents.versioning import annotate_effective_content
 from documents.workflows.utils import get_workflows_for_trigger
 from paperless.config import AIConfig
 from paperless.config import BarcodeConfig
@@ -319,37 +316,9 @@ def sanity_check(*, raise_on_error: bool = True) -> str:
 
 @shared_task
 def bulk_update_documents(document_ids) -> None:
-    from documents.search import get_backend
+    from documents.updates import complete_document_updates
 
-    document_ids = list(document_ids)
-    # Workflows match effective version content; the batch index reads the
-    # final state again after all workflows have run.
-    documents = annotate_effective_content(
-        Document.objects.filter(id__in=document_ids),
-    )
-
-    for doc in documents:
-        clear_document_caches(doc.pk)
-        with document_update(
-            doc,
-            logging_group=uuid.uuid4(),
-            skip_ai_index=True,  # bulk path calls update_llm_index once below
-            index=False,
-            reconcile_files=True,
-        ):
-            pass
-
-    with get_backend().batch_update() as batch:
-        batch.add_or_update_ids(document_ids)
-
-    ai_config = AIConfig()
-    if ai_config.llm_index_enabled:
-        from paperless_ai.indexing import update_llm_index
-
-        update_llm_index(
-            rebuild=False,
-            document_ids=document_ids,
-        )
+    complete_document_updates(document_ids)
 
 
 def _read_barcodes_for_reprocess(document: Document) -> list[StoredBarcode] | None:

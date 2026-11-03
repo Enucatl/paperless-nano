@@ -1,11 +1,17 @@
 import logging
 import os
+import shutil
 from pathlib import Path
 
 from django.conf import settings
+from django.db import DatabaseError
+from django.utils import timezone
+from filelock import FileLock
 
+from documents.caching import clear_document_caches
 from documents.models import Document
 from documents.templating.utils import convert_format_str_to_template_format
+from documents.utils import compute_checksum
 
 logger = logging.getLogger("paperless.filehandling")
 
@@ -215,3 +221,259 @@ def generate_filename(
         full_path = Path(final_filename)
 
     return full_path
+
+
+class CannotMoveFilesException(Exception):
+    """A file move cannot preserve the document's existing storage guarantees."""
+
+
+def _path_matches_checksum(path: Path, checksum: str | None) -> bool:
+    if checksum is None or not path.is_file():
+        return False
+
+    return compute_checksum(path) == checksum
+
+
+def filename_uses_custom_fields(doc: Document) -> bool:
+    """Return whether the effective filename template references custom fields."""
+    template = None
+    if doc.storage_path is not None:
+        template = doc.storage_path.path
+    elif settings.FILENAME_FORMAT is not None:
+        template = convert_format_str_to_template_format(settings.FILENAME_FORMAT)
+
+    if not template:
+        return False
+
+    return "custom_fields" in template
+
+
+def reconcile_document_files(instance: Document) -> None:
+    """Reconcile stored filenames under the media lock, recovering failed moves.
+
+    Call after metadata persistence. Existing path checks, collision handling,
+    checksum recovery and rollback preserve original and archive files. Handled
+    failures leave metadata saved and keep the previous filenames.
+    """
+
+    def validate_move(instance, old_path: Path, new_path: Path, root: Path) -> None:
+        if not new_path.is_relative_to(root):
+            msg = (
+                f"Document {instance!s}: Refusing to move file outside root {root}: "
+                f"{new_path}."
+            )
+            logger.warning(msg)
+            raise CannotMoveFilesException(msg)
+
+        if not old_path.is_file():
+            # Can't do anything if the old file does not exist anymore.
+            msg = f"Document {instance!s}: File {old_path} doesn't exist."
+            logger.fatal(msg)
+            raise CannotMoveFilesException(msg)
+
+        if new_path.is_file():
+            # Can't do anything if the new file already exists. Skip updating file.
+            msg = f"Document {instance!s}: Cannot rename file since target path {new_path} already exists."
+            logger.warning(msg)
+            raise CannotMoveFilesException(msg)
+
+    if not instance.filename:
+        # Can't update the filename if there is no filename to begin with
+        # This happens when the consumer creates a new document.
+        # The document is modified and saved multiple times, and only after
+        # everything is done (i.e., the generated filename is final),
+        # filename will be set to the location where the consumer has put
+        # the file.
+        #
+        # This will in turn cause this logic to move the file where it belongs.
+        return
+
+    with FileLock(settings.MEDIA_LOCK):
+        # If this was waiting for the lock, the filename or archive_filename
+        # of this document may have been updated.  This happens if multiple updates
+        # get queued from the UI for the same document
+        # So freshen up the data before doing anything
+        instance.refresh_from_db()
+
+        try:
+            old_filename = instance.filename
+            old_source_path = instance.source_path
+            move_original = False
+            original_already_moved = False
+
+            old_archive_filename = instance.archive_filename
+            old_archive_path = instance.archive_path
+            move_archive = False
+            archive_already_moved = False
+
+            candidate_filename = generate_filename(instance)
+            if len(str(candidate_filename)) > Document.MAX_STORED_FILENAME_LENGTH:
+                msg = (
+                    f"Document {instance!s}: Generated filename exceeds db path "
+                    f"limit ({len(str(candidate_filename))} > "
+                    f"{Document.MAX_STORED_FILENAME_LENGTH}): {candidate_filename!s}"
+                )
+                logger.warning(msg)
+                raise CannotMoveFilesException(msg)
+
+            candidate_source_path = (
+                settings.ORIGINALS_DIR / candidate_filename
+            ).resolve()
+            if candidate_filename == Path(old_filename):
+                new_filename = Path(old_filename)
+            elif (
+                candidate_source_path.exists()
+                and candidate_source_path != old_source_path
+            ):
+                if not old_source_path.is_file() and _path_matches_checksum(
+                    candidate_source_path,
+                    instance.checksum,
+                ):
+                    new_filename = candidate_filename
+                    original_already_moved = True
+                else:
+                    # Only fall back to unique search when there is an actual conflict
+                    new_filename = generate_unique_filename(instance)
+            else:
+                new_filename = candidate_filename
+
+            # Need to convert to string to be able to save it to the db
+            instance.filename = str(new_filename)
+            move_original = (
+                old_filename != instance.filename and not original_already_moved
+            )
+
+            if instance.has_archive_version:
+                archive_candidate = generate_filename(instance, archive_filename=True)
+                if len(str(archive_candidate)) > Document.MAX_STORED_FILENAME_LENGTH:
+                    msg = (
+                        f"Document {instance!s}: Generated archive filename exceeds "
+                        f"db path limit ({len(str(archive_candidate))} > "
+                        f"{Document.MAX_STORED_FILENAME_LENGTH}): {archive_candidate!s}"
+                    )
+                    logger.warning(msg)
+                    raise CannotMoveFilesException(msg)
+                archive_candidate_path = (
+                    settings.ARCHIVE_DIR / archive_candidate
+                ).resolve()
+                if archive_candidate == Path(old_archive_filename):
+                    new_archive_filename = Path(old_archive_filename)
+                elif (
+                    archive_candidate_path.exists()
+                    and archive_candidate_path != old_archive_path
+                ):
+                    if not old_archive_path.is_file() and _path_matches_checksum(
+                        archive_candidate_path,
+                        instance.archive_checksum,
+                    ):
+                        new_archive_filename = archive_candidate
+                        archive_already_moved = True
+                    else:
+                        new_archive_filename = generate_unique_filename(
+                            instance,
+                            archive_filename=True,
+                        )
+                else:
+                    new_archive_filename = archive_candidate
+
+                instance.archive_filename = str(new_archive_filename)
+
+                move_archive = (
+                    old_archive_filename != instance.archive_filename
+                    and not archive_already_moved
+                )
+            else:
+                move_archive = False
+
+            if not move_original and not move_archive:
+                updates = {"modified": timezone.now()}
+                if old_filename != instance.filename:
+                    updates["filename"] = instance.filename
+                if old_archive_filename != instance.archive_filename:
+                    updates["archive_filename"] = instance.archive_filename
+
+                # Don't save() here to prevent infinite recursion.
+                Document.objects.filter(pk=instance.pk).update(**updates)
+                return
+
+            if move_original:
+                validate_move(
+                    instance,
+                    old_source_path,
+                    instance.source_path,
+                    settings.ORIGINALS_DIR,
+                )
+                create_source_path_directory(instance.source_path)
+                shutil.move(old_source_path, instance.source_path)
+
+            if move_archive:
+                validate_move(
+                    instance,
+                    old_archive_path,
+                    instance.archive_path,
+                    settings.ARCHIVE_DIR,
+                )
+                create_source_path_directory(instance.archive_path)
+                shutil.move(old_archive_path, instance.archive_path)
+
+            # Don't save() here to prevent infinite recursion.
+            Document.global_objects.filter(pk=instance.pk).update(
+                filename=instance.filename,
+                archive_filename=instance.archive_filename,
+                modified=timezone.now(),
+            )
+            # Clear any caching for this document.  Slightly overkill, but not terrible
+            clear_document_caches(instance.pk)
+
+        except (OSError, DatabaseError, CannotMoveFilesException) as e:
+            logger.warning(f"Exception during file handling: {e}")
+            # This happens when either:
+            #  - moving the files failed due to file system errors
+            #  - saving to the database failed due to database errors
+            # In both cases, we need to revert to the original state.
+
+            # Try to move files to their original location.
+            try:
+                if move_original and instance.source_path.is_file():
+                    logger.info("Restoring previous original path")
+                    shutil.move(instance.source_path, old_source_path)
+
+                if move_archive and instance.archive_path.is_file():
+                    logger.info("Restoring previous archive path")
+                    shutil.move(instance.archive_path, old_archive_path)
+
+            except Exception:
+                # This is fine, since:
+                # A: if we managed to move source from A to B, we will also
+                #  manage to move it from B to A. If not, we have a serious
+                #  issue that's going to get caught by the santiy checker.
+                #  All files remain in place and will never be overwritten,
+                #  so this is not the end of the world.
+                # B: if moving the original file failed, nothing has changed
+                #  anyway.
+                pass
+
+            # restore old values on the instance
+            instance.filename = old_filename
+            instance.archive_filename = old_archive_filename
+
+        # finally, remove any empty sub folders. This will do nothing if
+        # something has failed above.
+        if not old_source_path.is_file():
+            delete_empty_directories(
+                Path(old_source_path).parent,
+                root=settings.ORIGINALS_DIR,
+            )
+
+        if instance.has_archive_version and not old_archive_path.is_file():
+            delete_empty_directories(
+                Path(old_archive_path).parent,
+                root=settings.ARCHIVE_DIR,
+            )
+
+    # Keep version files in sync with root
+    if instance.root_document_id is None:
+        for version_doc in Document.objects.filter(root_document_id=instance.pk).only(
+            "pk",
+        ):
+            reconcile_document_files(version_doc)

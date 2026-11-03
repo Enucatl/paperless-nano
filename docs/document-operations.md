@@ -8,14 +8,14 @@ stale-result rejection, or process isolation already exist.
 
 ## Owners and dependencies
 
-| Concern | Current entry points and dependencies | Smallest useful ownership boundary |
-| --- | --- | --- |
-| Document updates | `documents.views.DocumentViewSet`, `serialisers.DocumentSerializer`, `bulk_edit`, `tasks.bulk_update_documents`, workflow mutations, Django signals | A document-update operation owns persistence, file reconciliation, workflow ordering, and final follow-up work; HTTP decoding and authorization remain at the API boundary. |
-| Ingestion | `PostDocumentView`, consumer API, folder watcher, mail; `tasks.consume_file`, consumer plugins, ORM, scratch paths | An ingestion operation accepts a durable input reference and metadata; it owns publication and completion. Extend ownership after updates. |
-| Classification | `classifier.DocumentClassifier`, ORM training queries, matching functions, model file and Django cache | Explicit content/candidate snapshot in, proposed assignments and model identity out; core retains permissions, rules, and application. Training and model activation are separate operations. |
-| OCR and rendition | Parser registry/protocol, Django configuration, parser context managers, temporary output paths | Extend the existing parser contract with effective configuration, capabilities, durable input/output references, and provider identity. Core owns permanent files. |
-| Search | `search._backend`, ORM records/relations, Tantivy, Celery retry dispatch | Map final document state to plain index records; keep persistence and retry scheduling outside the engine. |
-| Job execution | Celery tasks/signals, `PaperlessTask`, local paths and dataclasses | Durable serializable job input/result and revision contract; retain Celery as the adapter. |
+| Concern           | Current entry points and dependencies                                                                                                               | Smallest useful ownership boundary                                                                                                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Document updates  | `documents.views.DocumentViewSet`, `serialisers.DocumentSerializer`, `bulk_edit`, `tasks.bulk_update_documents`, workflow mutations, Django signals | A document-update operation owns persistence, file reconciliation, workflow ordering, and final follow-up work; HTTP decoding and authorization remain at the API boundary.                   |
+| Ingestion         | `PostDocumentView`, consumer API, folder watcher, mail; `tasks.consume_file`, consumer plugins, ORM, scratch paths                                  | An ingestion operation accepts a durable input reference and metadata; it owns publication and completion. Extend ownership after updates.                                                    |
+| Classification    | `classifier.DocumentClassifier`, ORM training queries, matching functions, model file and Django cache                                              | Explicit content/candidate snapshot in, proposed assignments and model identity out; core retains permissions, rules, and application. Training and model activation are separate operations. |
+| OCR and rendition | Parser registry/protocol, Django configuration, parser context managers, temporary output paths                                                     | Extend the existing parser contract with effective configuration, capabilities, durable input/output references, and provider identity. Core owns permanent files.                            |
+| Search            | `search._backend`, ORM records/relations, Tantivy, Celery retry dispatch                                                                            | Map final document state to plain index records; keep persistence and retry scheduling outside the engine.                                                                                    |
+| Job execution     | Celery tasks/signals, `PaperlessTask`, local paths and dataclasses                                                                                  | Durable serializable job input/result and revision contract; retain Celery as the adapter.                                                                                                    |
 
 No database replacement or generic repository layer is needed for these boundaries.
 Notifications can remain events; required state changes need explicit owners.
@@ -157,14 +157,35 @@ file failure. Do not broaden extraction to durable OCR jobs in the same change.
    indexing. Version-label/deletion and version-consumption completion also enter
    the operation. Version deletion now indexes the root after workflows, once.
 
-The signal guard is local to the document and execution context, resets on
-exceptions, and permits nested metadata scopes. It does not globally disconnect
-receivers or suppress other requests. The old filesystem receivers remain for
-out-of-scope ingestion/reprocessing, direct ORM/admin/CLI writes, and custom-field
-maintenance. The importer still disconnects its existing receivers deliberately.
-Notifications and cache invalidation remain event-driven. Scheduled workflows
-use the workflow metadata scope and keep their existing notification behavior;
-AI result tasks retain their nonrecursive index follow-up.
+The signal guard is local to the selected documents and execution context,
+resets on exceptions, and permits nested metadata scopes. It does not globally
+disconnect receivers or suppress other requests. The locked algorithm now lives
+in `file_handling.reconcile_document_files`; legacy filesystem receivers are
+thin adapters for out-of-scope ingestion/reprocessing and raw ORM writes. The
+importer still disconnects its existing receivers deliberately. Notifications
+and cache invalidation remain event-driven.
+
+The follow-up caller audit established these explicit policies:
+
+| Caller                                            | Persistence and file owner                                                                                                  | Follow-up policy                                                                                         |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| API document update                               | `save_document_metadata` and metadata scope                                                                                 | `document_update` runs updated workflows, notifications, final full-text index.                          |
+| Bulk scalar/tag/permission commands               | Existing concrete queryset operations in `bulk_edit`; no per-row serializer saves                                           | Dispatch after writes; task delegates to `complete_document_updates`, preserving batched search/AI work. |
+| Bulk custom fields                                | `modify_document_custom_fields`; all additions, then removals, then one file reconciliation per affected template           | Same asynchronous completion. Reciprocal links use the same pre-replacement logic as ordinary updates.   |
+| Workflow actions and AI results                   | Metadata scopes preserve selective scalar writes and additive tags                                                          | Existing trigger policies; AI results do not rerun their originating workflows.                          |
+| Admin                                             | Separate model/related metadata scopes                                                                                      | Index after related fields have been saved; no updated workflows.                                        |
+| Notes API                                         | Metadata scope around modified timestamp save                                                                               | Existing immediate index update; no updated workflows/notifications.                                     |
+| Renamer                                           | Explicit locked file reconciliation and suggestion invalidation                                                             | No synthetic `post_save`, workflows, or indexing.                                                        |
+| Retagger                                          | Shared matching helpers enter metadata scopes only when saving an assignment; suggest/no-match paths do not reconcile files | No new workflows/indexing. Classification providers remain #24.                                          |
+| Custom-field select maintenance                   | `update_select_custom_field_documents` clears invalid values and reconciles templates referencing custom fields             | Existing task name and dispatch preserved; no updated workflows.                                         |
+| Storage-path edit/deletion and tag-parent changes | Save/change relations first, then dispatch affected document IDs                                                            | Existing bulk completion; template edits can no longer dispatch before persistence.                      |
+
+Three ordering corrections accompany consolidation: admin search records now
+include final related fields; storage-path dispatch observes the saved template;
+and bulk document-link replacement removes old reciprocal links before writing
+new values. Bulk custom-field changes no longer move files through intermediate
+combinations of field values. Queryset scalar/tag/permission edits retain their
+existing audit/authorization adapters and synchronous write semantics.
 
 There is no new transaction spanning database and filesystem writes and no move
 of required persistence into post-commit callbacks. File locks, path validation,
@@ -182,7 +203,25 @@ content matching. Existing suites cover versions, nested tags, custom-field
 relationships, file recovery, bulk behavior, and import boundaries. No RAM
 reduction is claimed for this extraction.
 
-### Extraction verification (2026-11-03)
+### Bounded #22 acceptance
+
+The update caller audit is complete for API metadata and notes, versions, bulk
+metadata/completion, workflow actions, AI results, admin, renaming, retagging,
+select-field maintenance, storage-path changes, and tag-parent propagation.
+The shared update operation owns updated-workflow ordering and completion;
+metadata scopes own reconciliation for callers whose established policy does
+not run updated workflows. The file algorithm has one implementation, with
+legacy receivers serving only as compatibility adapters. Reciprocal-link removal
+also enters the target's metadata scope and retains the template guard.
+
+Ingestion, reprocessing, importer restoration, and arbitrary raw ORM writes keep
+the compatibility receivers until their own operation boundaries are extracted.
+This does not imply durable dispatch, a document revision check, or end-to-end
+crash recovery. Those are #23 acceptance requirements, not unfinished #22 work.
+The next implementation is the shared durable input/result and publication
+contract in #23; classification and OCR providers follow that contract.
+
+### Initial extraction verification (2026-11-03)
 
 The final selection passed **896 tests**, plus Ruff lint and formatting checks
 for all changed Python files. Tests ran as an unprivileged user in disposable
@@ -210,6 +249,26 @@ with these files under `src/documents/tests/`: `test_document_updates.py`,
 The full repository suite and PostgreSQL/MariaDB were not run. No deployment or
 RAM comparison was performed. Existing PDF form-copy/static-directory warnings
 remain; this work does not change those paths.
+
+### Caller consolidation verification (2026-11-03)
+
+The follow-up passed **1,038 tests** in the same disposable Docker environment.
+The selection above additionally included `test_admin.py`, `test_management.py`,
+`test_management_retagger.py`, `test_matchables.py`, and the new
+`test_bulk_document_updates.py`, `test_document_maintenance_updates.py`, and
+`test_storage_path_updates.py`, all under `src/documents/tests/`.
+
+Focused additions cover one final filename move for multi-field bulk edits,
+asynchronous workflow completion, reciprocal-link replacement/removal,
+add-before-remove ordering across linked documents, admin final-state indexing,
+notes/renamer trigger policies, retagger suggest/no-match safety, and storage-path
+save-before-dispatch ordering. All configured changed-file lint hooks passed,
+including documentation formatting, spelling, and Ruff. Temporary test volumes,
+containers, and the downloaded test image were removed.
+
+Full-suite, PostgreSQL/MariaDB, deployment, and RAM testing remain unperformed.
+The existing PDF form-copy/static-directory warnings remain. The bounded #22
+caller consolidation is implemented and verified; #23 remains the next task.
 
 ## Request suggestions with an empty cache
 
