@@ -238,3 +238,80 @@ def test_reciprocal_link_removal_reconciles_target_without_legacy_receiver(
     assert target.filename == "0/target.pdf"
     assert target.source_path.read_bytes() == b"keep the target"
     assert not original.exists()
+
+
+@pytest.mark.parametrize("workflow_failure", [False, True])
+def test_bulk_completion_reconciles_after_workflows_before_batched_indexes(
+    paperless_dirs: PaperlessDirs,
+    settings,
+    *,
+    workflow_failure: bool,
+) -> None:
+    """Bulk writes survive workflow failure; later stages observe final filenames."""
+    from documents.file_handling import reconcile_document_files
+    from documents.signals import document_updated
+    from documents.updates import complete_document_updates
+
+    settings.AI_ENABLED = True
+    settings.LLM_EMBEDDING_BACKEND = "huggingface"
+    document = DocumentFactory(title="before", mime_type="application/pdf")
+    original = paperless_dirs.originals_dir / "before.pdf"
+    original.write_bytes(b"original")
+    Document.objects.filter(pk=document.pk).update(filename=original.name)
+    storage = StoragePathFactory(path="after/{{ title }}")
+    with mock.patch("documents.bulk_edit.bulk_update_documents.apply_async"):
+        bulk_edit.set_storage_path([document.pk], storage.pk)
+    document.refresh_from_db()
+    assert document.storage_path == storage
+    assert document.filename == "before.pdf"
+    events = []
+
+    def workflow(**kwargs) -> None:
+        """Record the filename visible when completion starts."""
+        events.append(("workflow", kwargs["document"].filename))
+        if workflow_failure:
+            raise RuntimeError("workflow failed")
+        Document.objects.filter(pk=document.pk).update(title="final")
+
+    def reconcile(instance: Document) -> None:
+        """Run real file reconciliation at the observed boundary."""
+        reconcile_document_files(instance)
+        events.append(("files", instance.filename))
+
+    def notification(**kwargs) -> None:
+        """Observe filenames delivered by the notification event."""
+        events.append(("notification", kwargs["document"].filename))
+        assert kwargs["skip_ai_index"] is True
+
+    with (
+        mock.patch("documents.signals.handlers.run_workflows", side_effect=workflow),
+        mock.patch(
+            "documents.file_handling.reconcile_document_files", side_effect=reconcile
+        ),
+        mock.patch.object(document_updated, "send", side_effect=notification),
+        mock.patch("documents.search.get_backend") as backend,
+        mock.patch("paperless_ai.indexing.update_llm_index") as ai,
+    ):
+        batch = backend.return_value.batch_update.return_value.__enter__.return_value
+        batch.add_or_update_ids.side_effect = lambda ids: events.append(("search", ids))
+        ai.side_effect = lambda **kwargs: events.append(("ai", kwargs["document_ids"]))
+        if workflow_failure:
+            with pytest.raises(RuntimeError, match="workflow failed"):
+                complete_document_updates([document.pk])
+        else:
+            complete_document_updates([document.pk])
+
+    document.refresh_from_db()
+    assert document.storage_path == storage
+    assert events == (
+        [("workflow", "before.pdf")]
+        if workflow_failure
+        else [
+            ("workflow", "before.pdf"),
+            ("files", "after/final.pdf"),
+            ("notification", "after/final.pdf"),
+            ("search", [document.pk]),
+            ("ai", [document.pk]),
+        ]
+    )
+    assert document.source_path.read_bytes() == b"original"

@@ -134,6 +134,107 @@ For #22, add narrow tests that assert exactly one execution sequence for a
 combined metadata/tag/custom-field update, workflow final-state indexing, and a
 file failure. Do not broaden extraction to durable OCR jobs in the same change.
 
+## Current document-update completion contract (#30)
+
+This is the behavior after #22 and #28, before the structural changes in
+#31–#34. The earlier “Change tags or custom fields” section describes the
+pre-extraction flow. “Completed” has several meanings: metadata persistence,
+synchronous follow-up completion, and eventual search/AI visibility are distinct.
+No update-wide database/filesystem transaction or durable completion receipt is
+created by `document_update` or `document_metadata_update`.
+
+### Caller and sequence map
+
+| Entry point | Persistence and files | Workflows, notification, indexes, and response |
+| --- | --- | --- |
+| `DocumentViewSet.update` (PUT/PATCH) | Root serializer validation and `save_document_metadata`; root metadata scope reconciles files after related writes. Selected/latest version content is saved in its own metadata scope when required. | Capture the response **before workflows**. On scope exit, reload root/effective content → updated workflows → `document_updated` → final full-text write/removal. Return the captured response only if these synchronous stages return successfully. |
+| `bulk_edit` scalar/tag/permission operations | Queryset/through-table writes happen synchronously, then enqueue `bulk_update_documents`. Those writes bypass filename signals. Custom-field operations already reconcile affected templates before enqueueing. | The API's “OK” means writes and dispatch succeeded, not workflow completion. The task calls `complete_document_updates`: clear each document's caches → updated workflows → **post-workflow file reconciliation** → notification with per-document AI disabled. After all documents: one full-text batch, then one AI batch if enabled. |
+| `DocumentViewSet.update_version_label` | Validate input/root access/version membership; save label in the version's metadata scope; update root modified time; record changed-label audit entry against the root. | Complete the root with updated workflows → notification → final full-text index. Then return the selected version instance's fields. This is not a freshly serialized post-workflow document. |
+| `DocumentViewSet.delete_version` | Validate root access/version membership and forbid root deletion; remove version search entry; delete the version; update root modified time and audit. Compute the remaining current version. | Complete the root with updated workflows → notification → final full-text index. Return the previously computed current-version ID; it is not recomputed after workflows. |
+| `ConsumerPlugin` adding a version | Creation/publication and the consumer's transaction own the new version; save it before entering root completion. | Root updated workflows and notification run inside the surrounding consumer transaction. Skip per-document AI; durable ingestion also skips this immediate full-text write because ingestion completion owns indexing. This is not the standalone HTTP update guarantee. |
+| `run_workflows` on persisted documents | Refresh before each workflow, match effective content, execute actions in order inside one metadata scope per matched workflow; save selective scalar fields, then reconcile files. Record `WorkflowRun` afterward; a trash action runs after the workflow's other actions. | Nested assignment/removal scopes do not recursively trigger updated workflows. Later workflows see earlier mutations. A failure stops remaining actions/workflows. Direct scheduled workflows notify through their existing adapter; callers do not all enter `document_update`. |
+| Workflow consumption overrides | Mutate the override value object before a document exists; no metadata scope or document file reconciliation. | The consumer applies overrides later. This is preparation, not a completed document update. |
+| AI assignment, admin, notes, maintenance | Use explicit metadata scopes or the existing file reconciler; each adapter retains its own indexing/cache policy. | They do not automatically invoke updated workflows. See the #22 caller inventory below; metadata persistence alone is not full update completion. |
+
+`document_metadata_update` restores its document-local deferral guard even on
+failure, but reconciles only after its body returns normally. Nested scopes for
+the same document reconcile at the outer boundary; reciprocal linked documents
+have their own scope. Raw ORM saves still have the legacy filename receiver at
+this stage. File reconciliation refreshes metadata under `MEDIA_LOCK`, protects
+paths/collisions, and reconciles version paths. It can move files before the API
+response snapshot and again after a workflow changes filename-dependent fields.
+
+`documents.apps.DocumentsConfig.ready` connects `document_updated` receivers in
+this order: websocket notification, then AI scheduling. It does **not** connect
+updated workflows or full-text indexing to that event. The websocket receiver
+refreshes the document and sends current modified/access information. The AI
+receiver, when enabled and not explicitly suppressed, registers
+`update_document_in_llm_index` with `apply_async_on_commit`. Without an outer
+transaction, registration dispatches immediately; inside one it waits for commit.
+A successful response therefore does not promise an updated AI index or client
+receipt of the websocket message. An AI dispatch error can occur after websocket
+notification and, with an outer transaction, after database commit.
+
+Full-text writes read final committed/visible document state rather than the API
+snapshot. Trashed/missing documents are removed. A single-document Tantivy write
+may exhaust its bounded lock retries and enqueue a fresh-state write/removal for
+later; that path returns successfully once dispatch succeeds. Bulk batch lock
+failure propagates instead of being silently accepted. Search visibility is
+therefore not an unconditional guarantee of HTTP success.
+
+### Failure and retry boundary
+
+| Failure point | Durable/visible result and later work |
+| --- | --- |
+| Validation/access rejection before mutation | No update completion runs. Existing permission and malformed-custom-field tests assert no metadata change. |
+| Exception during a metadata scope | Earlier writes may already be persisted. The guard resets; that scope does not reconcile files. Neither context manager adds rollback. |
+| Handled file move/path/database error inside reconciliation | Log the failure, attempt to restore moved files, retain old filename fields. Saved metadata remains; workflows/notification/indexing may continue and the HTTP request may succeed. Failed restoration is not proof that files are at their old paths; sanity checks and logs are needed. Errors outside the reconciler's handled block still propagate. |
+| Workflow failure | Earlier metadata, file moves, workflow actions, and external effects may remain. No subsequent update notification or final index write is attempted. The prepared API response is not returned as success. Version label/deletion mutations and root timestamps also survive standalone endpoint completion failure. |
+| Notification receiver failure | Workflows and prior persistence remain. Django's ordinary `Signal.send` stops at the failing receiver; subsequent receivers and final full-text indexing do not run. A preceding websocket send may already have happened. |
+| Full-text write or deferred-dispatch failure | Notification/AI scheduling may already have happened; metadata and workflow results remain. The error propagates. Lock exhaustion with successful single-write dispatch is the exception described above. |
+| Bulk enqueue failure | Synchronous metadata writes remain, but completion may never run. There is no update outbox for discovering that missing dispatch. |
+| Failure during bulk completion | Earlier documents may already have completed workflows, moves, and notifications; later ones may be untouched. A failure before the batch prevents the final full-text and AI batches; an AI-batch failure occurs after full-text completion. |
+
+There is no automatic whole-update replay guarantee. The plain
+`bulk_update_documents` task has no explicit automatic retry policy, and manually
+rerunning completion reruns workflows, including externally effectful actions.
+Reconciliation can repair a filename using current metadata without replaying
+workflows, but it cannot undo an email or webhook. Ingestion/reprocessing durable
+job recovery is a separate contract; it must not be assumed to cover ordinary
+metadata updates. An enclosing caller transaction can roll back its database
+writes, but cannot roll back published file moves, notifications, or external
+workflow effects.
+
+### Verification and subsequent decisions
+
+`test_document_updates.py` establishes the pre-workflow API snapshot, final search
+state, effective-version matching, ordered workflow mutations, permission and
+validation rejection, handled move failure, guard restoration, and workflow
+failure. Added cases distinguish notification/search failure from HTTP success
+and show that version label/deletion persists when root completion fails.
+`test_bulk_document_updates.py` additionally records the workflow → file →
+notification → search batch → AI batch order and verifies that workflow failure
+leaves synchronous bulk writes intact while preventing later completion stages.
+Existing version tests cover permission, selection, response fields, audit, and
+root reindexing; workflow/file suites retain action ordering and file safety.
+
+Verification: **310 passed** across `test_document_updates.py`,
+`test_bulk_document_updates.py`, `test_api_document_versions.py`,
+`test_workflows.py`, `test_file_handling.py`, and `test_tasks.py`. The run used
+Python 3.14.10, Django 5.2.17, SQLite, frozen uv dependencies, and
+`pytest -o addopts="" --tb=short -n 4 --dist=loadscope --randomly-seed=1` in a
+non-root disposable `docker run --rm --userns=host` container. Ruff formatting
+ran on the disposable source copy; Ruff checks and `git diff --check` passed.
+No production code changed; the full suite and other database engines were not
+run for this characterization step.
+
+No production behavior changes in #30. #31 and #32 should relocate ownership
+without changing this contract. #33 must finish write-path migration before
+removing the filename receiver. #34 must explicitly decide how operators detect
+and repair partial updates, whether any durable mechanism is justified, and
+which actions may safely repeat. Changing response timing, delivery guarantees,
+or replay semantics is a separate decision, not an incidental extraction.
+
 ## Implemented update boundary (#22)
 
 `documents.updates` now owns metadata application and ordered update completion:

@@ -360,3 +360,71 @@ def test_workflows_match_new_latest_version_content_after_update(
     assert version.content == "newversionneedle"
     assert document.title == "matched new content"
     assert WorkflowRun.objects.filter(document=document, workflow=workflow).count() == 1
+
+
+@pytest.mark.parametrize("failure", ["notification", "search"])
+def test_completion_failure_does_not_return_the_prepared_api_response(
+    admin_client: APIClient,
+    admin_user: User,
+    paperless_dirs: PaperlessDirs,
+    failure: str,
+) -> None:
+    """Saved metadata survives failure after workflows; HTTP success does not."""
+    document = DocumentFactory(owner=admin_user, title="before")
+    backend = get_backend()
+    backend.add_or_update(document)
+    with (
+        mock.patch("documents.signals.handlers.run_workflows") as workflows,
+        mock.patch.object(document_updated, "send") as notification,
+        mock.patch.object(backend, "add_or_update") as index,
+    ):
+        failed_step = notification if failure == "notification" else index
+        failed_step.side_effect = RuntimeError(f"{failure} failed")
+        with pytest.raises(RuntimeError, match=f"{failure} failed"):
+            admin_client.patch(
+                f"/api/documents/{document.pk}/",
+                {"title": "after"},
+                format="json",
+            )
+
+    document.refresh_from_db()
+    assert document.title == "after"
+    workflows.assert_called_once()
+    notification.assert_called_once()
+    assert index.call_count == (failure == "search")
+    assert list(backend.search_ids("title:before", user=None)) == [document.pk]
+
+
+@pytest.mark.parametrize("operation", ["label", "delete"])
+def test_version_mutation_survives_completion_failure(
+    admin_client: APIClient,
+    admin_user: User,
+    paperless_dirs: PaperlessDirs,
+    operation: str,
+) -> None:
+    """Version endpoints persist mutations before invoking root completion."""
+    root = DocumentFactory(owner=admin_user)
+    version = DocumentFactory(root_document=root, version_label="before")
+    original_modified = root.modified
+    with (
+        mock.patch(
+            "documents.signals.handlers.run_workflows",
+            side_effect=RuntimeError("workflow failed"),
+        ),
+        mock.patch.object(document_updated, "send") as notification,
+        pytest.raises(RuntimeError, match="workflow failed"),
+    ):
+        url = f"/api/documents/{root.pk}/versions/{version.pk}/"
+        if operation == "label":
+            admin_client.patch(url, {"version_label": "after"}, format="json")
+        else:
+            admin_client.delete(url)
+
+    root.refresh_from_db()
+    assert root.modified > original_modified
+    notification.assert_not_called()
+    if operation == "label":
+        version.refresh_from_db()
+        assert version.version_label == "after"
+    else:
+        assert not Document.objects.filter(pk=version.pk).exists()
