@@ -63,7 +63,7 @@ def parser(
             pass
 
     mocker.patch(
-        "documents.jobs.get_parser_registry",
+        "paperless.parsers.providers.get_parser_registry",
     ).return_value.get_parser_for_file.return_value = Parser
     mocker.patch("documents.search.get_backend")
     return Parser
@@ -105,8 +105,8 @@ def test_staged_input_survives_loss_of_original(
     json.dumps(job.configuration)
     json.dumps(job.provider)
     json.dumps(job.result)
-    assert job.provider["version"] == "1.0"
-    assert "remote_ocr_api_key" not in job.configuration["remote"]
+    assert job.provider["implementation"]["version"] == "1.0"
+    assert "remote_ocr_api_key" not in job.configuration["settings"]["remote"]
 
 
 def test_parser_settings_snapshot_is_not_replaced_with_later_configuration(
@@ -123,7 +123,7 @@ def test_parser_settings_snapshot_is_not_replaced_with_later_configuration(
 
     job.refresh_from_db()
     sample_doc.refresh_from_db()
-    assert job.configuration["ocr"]["language"] == "fra"
+    assert job.configuration["settings"]["ocr"]["language"] != "fra"
     assert sample_doc.content == "test content"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).is_file()
 
@@ -632,3 +632,30 @@ def test_legacy_delivery_reuses_admission_id(
     assert DocumentJob.objects.count() == 1
     assert DocumentJob.objects.get().pk == UUID(task_id)
     parser.parse.assert_called_once()
+
+
+@pytest.mark.parametrize("removed", [False, True])
+def test_default_parser_rechecks_selected_instance_before_publication(
+    sample_doc: Document,
+    parser: type,
+    mocker: MockerFixture,
+    *,
+    removed: bool,
+) -> None:
+    """The stable default wrapper cannot hide a changed underlying parser."""
+    job = jobs.stage_reprocess(sample_doc.pk)
+    stopped = mocker.patch("documents.jobs._apply", side_effect=WorkerStopped)
+    with pytest.raises(WorkerStopped):
+        jobs.run_reprocess(job.pk)
+    mocker.stop(stopped)
+    if removed:
+        mocker.patch(
+            "paperless.parsers.providers.get_parser_registry"
+        ).return_value.get_parser_for_file.return_value = None
+    else:
+        parser.version = "2.0"
+    with pytest.raises(jobs.RejectedResult, match="Selected parser changed"):
+        jobs.run_reprocess(job.pk)
+    parser.parse.assert_called_once()
+    sample_doc.refresh_from_db()
+    assert sample_doc.content == "test content"

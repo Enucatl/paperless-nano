@@ -47,7 +47,7 @@ class TestRemoteOCRConfig:
         """Deployment limits for local OCR and built-in AI leave remote OCR intact."""
         cfg = make_remote_ocr_config(
             null_app_config,
-            LOCAL_OCR_ENABLED=False,
+            PARSER="paperless.parsers.providers.PlainTextProvider",
             AI_ALLOWED=False,
             REMOTE_OCR_ENGINE="azureai",
             REMOTE_OCR_ENDPOINT="https://ocr.example.com",

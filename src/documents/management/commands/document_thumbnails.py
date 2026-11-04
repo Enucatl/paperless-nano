@@ -13,7 +13,7 @@ from documents.jobs import job_directory
 from documents.management.commands.base import PaperlessCommand
 from documents.models import Document
 from documents.parser_operations import configured_parser
-from documents.parser_operations import effective_configuration
+from documents.parser_operations import default_configuration
 from documents.parser_operations import run_parser
 from documents.utils import compute_checksum
 from paperless.parsers.contract import resolve_reference
@@ -44,7 +44,7 @@ def _process_document(doc_id: int) -> None:
     revision = _revision(document)
     source = document.source_path
     checksum = compute_checksum(source)
-    configuration = effective_configuration()
+    configuration = default_configuration()
     directory = job_directory(uuid4())
     try:
         with configured_parser(parser_class, configuration) as parser:
@@ -53,16 +53,20 @@ def _process_document(doc_id: int) -> None:
                 source,
                 document.mime_type,
                 document.original_filename or source.name,
-                configuration,
+                {
+                    "settings": configuration,
+                    "archive_policy": configuration["ocr"]["archive_file_generation"],
+                    "output_type": configuration["ocr"]["output_type"],
+                },
                 directory,
-                required_outputs=["thumbnail"],
+                operation="thumbnail",
             )
         with FileLock(settings.MEDIA_LOCK, timeout=0):
             document.refresh_from_db()
             if (
                 _revision(document) != revision
                 or compute_checksum(source) != checksum
-                or effective_configuration() != configuration
+                or default_configuration() != configuration
             ):
                 raise RejectedResult(
                     "Document or configuration changed during thumbnail generation"

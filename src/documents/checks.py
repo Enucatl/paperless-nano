@@ -9,6 +9,11 @@ from paperless.parsers.registry import get_parser_registry
 
 @register()
 def parser_check(app_configs, **kwargs):
+    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
+        from documents.parser_operations import parser_class
+
+        parser_class()
+        return []
     if not get_parser_registry().all_parsers():
         return [
             Error(

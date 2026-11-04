@@ -1,24 +1,26 @@
 # Idle memory reduction analysis
 
 For deployments using external OCR and AI services, set
-`PAPERLESS_LOCAL_OCR_ENABLED=false` and `PAPERLESS_AI_ALLOWED=false`. These
-deployment limits override saved application preferences without deleting them.
-The first disables local OCR and local archive generation while preserving
-remote OCR; the second disables Paperless AI suggestions, chat, embeddings and
-vector indexing. Implementations remain unloaded on disabled paths. Existing
+`PAPERLESS_OCR_MODE=off`, `PAPERLESS_ARCHIVE_FILE_GENERATION=never` and
+`PAPERLESS_AI_ALLOWED=false`. Match any saved OCR/archive preferences to these
+values, since saved preferences take precedence. To replace default processing
+entirely, select an implementation with `PAPERLESS_PARSER`. Remote OCR permission
+remains separate. The AI deployment limit disables Paperless AI suggestions,
+chat, embeddings and vector indexing. Implementations remain unloaded on disabled paths. Existing
 text extraction, thumbnails and ordinary document operations still run.
 
 For deployments that delegate OCR and matching to external services, use:
 
 ```ini
-PAPERLESS_LOCAL_OCR_ENABLED=false
+PAPERLESS_OCR_MODE=off
+PAPERLESS_ARCHIVE_FILE_GENERATION=never
 PAPERLESS_CLASSIFIER_ENABLED=false
 PAPERLESS_TRAIN_TASK_CRON=disable
 PAPERLESS_AI_ALLOWED=false
 ```
 
-The WebUI cannot override these deployment restrictions. Saved preferences are
-retained and take effect again if the deployment permits the feature.
+The WebUI can change the default parser's OCR/archive preferences; it cannot
+override the AI deployment restriction. Saved AI preferences remain retained.
 Restart existing processes after changing these settings to release libraries
 or models loaded earlier. These settings prevent local OCR, ML matching (including
 storage paths), and built-in AI engines from loading during ordinary document

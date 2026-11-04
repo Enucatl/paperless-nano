@@ -199,7 +199,7 @@ class TestConsumer(
     def setUp(self) -> None:
         super().setUp()
 
-        patcher = mock.patch("documents.consumer.get_parser_registry")
+        patcher = mock.patch("paperless.parsers.providers.get_parser_registry")
         mock_registry = patcher.start()
         mock_registry.return_value.get_parser_for_file.return_value = DummyParser
         self.addCleanup(patcher.stop)
@@ -639,20 +639,20 @@ class TestConsumer(
             ) as consumer:
                 consumer.run()
 
-    @mock.patch("documents.consumer.get_parser_registry")
+    @mock.patch("paperless.parsers.providers.get_parser_registry")
     def testNoParsers(self, m) -> None:
         m.return_value.get_parser_for_file.return_value = None
 
         with self.assertRaisesMessage(
             ConsumerError,
-            "sample.pdf: Unsupported mime type application/pdf",
+            "sample.pdf: Unexpected error while consuming document sample.pdf: No parser for application/pdf",
         ):
             with self.get_consumer(self.get_test_file()) as consumer:
                 consumer.run()
 
         self._assert_first_last_send_progress(last_status="FAILED")
 
-    @mock.patch("documents.consumer.get_parser_registry")
+    @mock.patch("paperless.parsers.providers.get_parser_registry")
     def testFaultyParser(self, m) -> None:
         m.return_value.get_parser_for_file.return_value = FaultyParser
 
@@ -665,7 +665,7 @@ class TestConsumer(
 
         self._assert_first_last_send_progress(last_status="FAILED")
 
-    @mock.patch("documents.consumer.get_parser_registry")
+    @mock.patch("paperless.parsers.providers.get_parser_registry")
     def testGenericParserException(self, m) -> None:
         m.return_value.get_parser_for_file.return_value = FaultyGenericExceptionParser
 
@@ -1109,7 +1109,7 @@ class TestConsumer(
         self._assert_first_last_send_progress()
 
     @override_settings(FILENAME_FORMAT="{title}", ARCHIVE_FILE_GENERATION="always")
-    @mock.patch("documents.consumer.get_parser_registry")
+    @mock.patch("paperless.parsers.providers.get_parser_registry")
     def test_similar_filenames(self, m) -> None:
         shutil.copy(
             SIMPLE_DIGITAL_PDF,
@@ -1151,7 +1151,7 @@ class TestConsumer(
 
         sanity_check()
 
-    @mock.patch("documents.consumer.get_parser_registry")
+    @mock.patch("paperless.parsers.providers.get_parser_registry")
     @mock.patch("documents.consumer.run_subprocess")
     def test_try_to_clean_invalid_pdf(self, m, mock_registry) -> None:
         mock_registry.return_value.get_parser_for_file.return_value = None
@@ -1177,7 +1177,7 @@ class TestConsumer(
     @mock.patch("paperless_mail.models.MailRule.objects.get")
     @mock.patch("paperless.parsers.mail.MailDocumentParser.get_thumbnail")
     @mock.patch("paperless.parsers.mail.MailDocumentParser.parse")
-    @mock.patch("documents.consumer.get_parser_registry")
+    @mock.patch("paperless.parsers.providers.get_parser_registry")
     def test_mail_parser_receives_mailrule(
         self,
         mock_get_parser_registry: mock.Mock,
@@ -1648,7 +1648,7 @@ class TestConsumerRemoteOCR(
     def setUp(self) -> None:
         super().setUp()
 
-        patcher = mock.patch("documents.consumer.get_parser_registry")
+        patcher = mock.patch("paperless.parsers.providers.get_parser_registry")
         self.mock_registry = patcher.start()
         self.mock_registry.return_value.get_parser_for_file.return_value = DummyParser
         self.addCleanup(patcher.stop)

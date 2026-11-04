@@ -17,12 +17,14 @@ from documents.data_models import DocumentSource
 from documents.exceptions import ConsumerError
 from documents.models import Document
 from documents.models import DocumentJob
+from paperless.parsers.contract import ParserProvider
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import resolve_reference
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from pytest import MonkeyPatch
     from pytest_django.fixtures import Settings
     from pytest_mock import MockerFixture
 
@@ -33,39 +35,32 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
+def _thumbnail(request: ParserRequest, root: Path, source: Path) -> dict:
+    """Return a valid private thumbnail without touching a default parser."""
+    thumbnail = root / request["output_dir"] / "thumbnail.webp"
+    thumbnail.parent.mkdir(exist_ok=True)
+    shutil.copyfile(source, thumbnail)
+    return file_reference(root, thumbnail)
+
+
 @pytest.fixture
 def provider(
     mocker: MockerFixture,
+    monkeypatch: MonkeyPatch,
     settings: Settings,
     thumbnail_webp_file: Path,
 ) -> type:
     """Register a text-only provider without any legacy parser or ORM methods."""
 
-    class Provider:
+    class Provider(ParserProvider):
         """Supply explicit serializable results from a private input reference."""
 
-        name = "Text-only test provider"
-        version = "1.0"
-        author = "Tests"
-        url = "https://example.invalid/parser"
         identity = "test.text-only:1"
         uses_remote_service = False
-        capabilities = {
-            "text": True,
-            "searchable_pdf": False,
-            "pdfa": False,
-            "thumbnail": False,
-        }
 
-        @classmethod
-        def supported_mime_types(cls) -> dict[str, str]:
-            """Advertise PDF input through the existing parser registry."""
-            return {"application/pdf": ".pdf"}
-
-        @classmethod
-        def score(cls, mime_type: str, filename: str, path: Path | None = None) -> int:
-            """Prefer this explicitly installed provider for supported inputs."""
-            return 1000
+        def configuration_snapshot(self) -> dict:
+            """Snapshot this implementation's configured language."""
+            return {"language": settings.OCR_LANGUAGE}
 
         @staticmethod
         def output(request: ParserRequest, root: Path) -> ParserResult:
@@ -87,12 +82,13 @@ def provider(
         process = Mock(side_effect=output)
 
     settings.ARCHIVE_FILE_GENERATION = "never"
-    mocker.patch(
-        "documents.jobs.get_parser_registry",
-    ).return_value.get_parser_for_file.return_value = Provider
-    mocker.patch(
-        "documents.consumer.get_parser_registry",
-    ).return_value.get_parser_for_file.return_value = Provider
+    settings.PARSER = "paperless_testing.explicit_parser.Provider"
+    import sys
+    import types
+
+    module = types.ModuleType("paperless_testing.explicit_parser")
+    module.Provider = Provider
+    monkeypatch.setitem(sys.modules, module.__name__, module)
     mocker.patch(
         "paperless.parsers.tesseract.RasterisedDocumentParser.get_thumbnail",
         return_value=thumbnail_webp_file,
@@ -128,14 +124,14 @@ def test_text_only_reprocessing_keeps_original_and_existing_archive(
 
 
 @pytest.mark.parametrize("policy", ["always", "auto"])
-def test_required_archive_is_not_silently_dropped(
+def test_archive_preference_is_advisory(
     sample_doc: Document,
     provider: type,
     settings: Settings,
     policy: str,
     multi_page_images_pdf_file: Path,
 ) -> None:
-    """A provider cannot run when it cannot satisfy this document's archive policy."""
+    """A replacement can omit an archive under either archive preference."""
     from documents.utils import compute_checksum
 
     settings.ARCHIVE_FILE_GENERATION = policy
@@ -145,15 +141,12 @@ def test_required_archive_is_not_silently_dropped(
         sample_doc.save(update_fields=["checksum"])
     job = jobs.stage_reprocess(sample_doc.pk)
 
-    with pytest.raises(jobs.RejectedResult):
-        jobs.run_reprocess(job.pk)
-
+    assert jobs.run_reprocess(job.pk)
     job.refresh_from_db()
     sample_doc.refresh_from_db()
-    assert job.status == DocumentJob.Status.REJECTED
-    assert sample_doc.content == "test content"
-    assert (jobs.job_directory(job.pk) / job.input["staged_name"]).is_file()
-    provider.process.assert_not_called()
+    assert job.status == DocumentJob.Status.SUCCEEDED
+    assert sample_doc.content == "replacement provider content"
+    provider.process.assert_called_once()
 
 
 def test_auto_policy_accepts_text_only_for_born_digital_pdf(
@@ -178,23 +171,24 @@ def test_auto_policy_accepts_text_only_for_born_digital_pdf(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ],
 )
-def test_text_only_provider_cannot_omit_required_display_rendition(
+def test_text_only_provider_can_omit_display_rendition(
     sample_doc: Document,
     provider: type,
     mime_type: str,
 ) -> None:
-    """The never archive policy still requires a PDF for non-displayable formats."""
+    """A replacement owns whether unsupported original formats have previews."""
     sample_doc.mime_type = mime_type
     sample_doc.save(update_fields=["mime_type"])
     job = jobs.stage_reprocess(sample_doc.pk)
 
-    with pytest.raises(jobs.RejectedResult, match="required"):
-        jobs.run_reprocess(job.pk)
-
-    provider.process.assert_not_called()
+    provider.process.side_effect = lambda request, root: {
+        **provider.output(request, root),
+        "thumbnail": _thumbnail(request, root, sample_doc.thumbnail_path),
+    }
+    assert jobs.run_reprocess(job.pk)
+    provider.process.assert_called_once()
     sample_doc.refresh_from_db()
-    assert sample_doc.content == "test content"
-    assert (jobs.job_directory(job.pk) / job.input["staged_name"]).is_file()
+    assert sample_doc.content == "replacement provider content"
 
 
 def test_remote_provider_cannot_bypass_processing_permission(
@@ -230,9 +224,8 @@ def test_remote_provider_credentials_stay_out_of_durable_snapshots(
 
     request = provider.process.call_args.args[0]
     assert request["allow_remote"] is True
-    assert request["configuration"]["remote"]["remote_ocr_api_key"] == (
-        settings.REMOTE_OCR_API_KEY
-    )
+    assert "configuration" not in request
+    assert settings.REMOTE_OCR_API_KEY not in json.dumps(request)
     job.refresh_from_db()
     for snapshot in (job.configuration, job.result["parser_request"]):
         serialized = json.dumps(snapshot)
@@ -253,21 +246,15 @@ def test_thumbnail_fallback_cannot_launder_mutated_input(
         """Attempt to legitimize a rewritten source through a nested mutation."""
 
         identity = "test.thumbnail:1"
-        capabilities = {**provider.capabilities, "thumbnail": True}
+        version = "1"
 
-        def process(self, request: ParserRequest, root: Path) -> ParserResult:
-            """Return a valid thumbnail after replacing the supplied source bytes."""
-            result = provider.output(request, root)
-            result["provider"] = self.identity
-            source = resolve_reference(root, request["source"])
+        def get_thumbnail(self, source: Path, mime_type: str) -> Path:
+            """Modify an admitted source while returning a valid thumbnail."""
             source.write_bytes(b"fallback replaced input")
-            request["source"].update(file_reference(root, source))
-            request["configuration"]["ocr"]["language"] = "deu"
-            thumbnail = root / request["output_dir"] / "thumbnail.webp"
-            thumbnail.parent.mkdir()
-            shutil.copyfile(thumbnail_webp_file, thumbnail)
-            result["thumbnail"] = file_reference(root, thumbnail)
-            return result
+            return thumbnail_webp_file
+
+        def configure(self, context: object) -> None:
+            """Accept legacy auxiliary configuration."""
 
     mocker.patch(
         "documents.parser_operations.get_parser_registry",
@@ -315,7 +302,7 @@ def test_timeout_can_retry_without_publishing_partial_output(
     assert job.cleaned
 
 
-@pytest.mark.parametrize("change", ["text", "revision", "provider", "thumbnail"])
+@pytest.mark.parametrize("change", ["text", "revision", "provider"])
 def test_invalid_provider_output_retains_input_and_permanent_files(
     sample_doc: Document,
     provider: type,
@@ -325,8 +312,6 @@ def test_invalid_provider_output_retains_input_and_permanent_files(
     original = sample_doc.source_path.read_bytes()
     archive = sample_doc.archive_path.read_bytes()
     thumbnail = sample_doc.thumbnail_path.read_bytes()
-    if change == "thumbnail":
-        provider.capabilities["thumbnail"] = True
 
     def invalid(request: ParserRequest, root: Path) -> ParserResult:
         """Corrupt one provider claim after otherwise valid processing."""
@@ -394,7 +379,6 @@ def test_output_cannot_alias_permanent_document_files(
 ) -> None:
     """A provider-supplied symlink cannot turn cleanup into permanent-file deletion."""
     original = sample_doc.source_path.read_bytes()
-    provider.capabilities["thumbnail"] = True
 
     def outside(request: ParserRequest, root: Path) -> ParserResult:
         """Return an output reference outside the private provider directory."""
@@ -443,7 +427,7 @@ def test_provider_cannot_rewrite_its_source_reference(
     ).read_bytes() == original
 
 
-@pytest.mark.parametrize("change", ["configuration", "provider"])
+@pytest.mark.parametrize("change", ["configuration", "provider", "source"])
 def test_prepared_result_rechecks_configuration_and_provider_before_publication(
     sample_doc: Document,
     provider: type,
@@ -465,6 +449,10 @@ def test_prepared_result_rechecks_configuration_and_provider_before_publication(
     assert job.status == DocumentJob.Status.PREPARED
     if change == "configuration":
         settings.OCR_LANGUAGE = "deu"
+    elif change == "source":
+        resolve_reference(
+            jobs.job_directory(job.pk), job.result["parser_request"]["source"]
+        ).write_bytes(b"changed prepared input")
     else:
         provider.identity = "test.text-only:2"
 
@@ -484,7 +472,6 @@ def test_output_references_require_real_decodable_files(
     output: str,
 ) -> None:
     """Correct reference metadata alone cannot authorize invalid rendition bytes."""
-    provider.capabilities["thumbnail"] = True
 
     def invalid(request: ParserRequest, root: Path) -> ParserResult:
         """Return a referenced rendition whose content cannot be published."""
@@ -510,21 +497,29 @@ def test_output_references_require_real_decodable_files(
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).is_file()
 
 
+@pytest.mark.parametrize("explicit", [False, True])
 def test_installed_text_provider_uses_real_registry_and_local_thumbnail_fallback(
     paperless_dirs: PaperlessDirs,
     settings: Settings,
     mocker: MockerFixture,
     fake_progress_manager: type,
+    *,
+    explicit: bool,
 ) -> None:
     """A real modern entrypoint replaces extraction through unchanged ingestion."""
     from paperless.parsers.providers import PlainTextProvider
     from paperless.parsers.registry import reset_parser_registry
 
     settings.ARCHIVE_FILE_GENERATION = "never"
-    entrypoint = Mock()
-    entrypoint.name = "plain-text"
-    entrypoint.load.return_value = PlainTextProvider
-    mocker.patch("paperless.parsers.registry.entry_points", return_value=[entrypoint])
+    if explicit:
+        settings.PARSER = "paperless.parsers.providers.PlainTextProvider"
+    else:
+        entrypoint = Mock()
+        entrypoint.name = "plain-text"
+        entrypoint.load.return_value = PlainTextProvider
+        mocker.patch(
+            "paperless.parsers.registry.entry_points", return_value=[entrypoint]
+        )
     mocker.patch("documents.consumer.load_classifier", return_value=None)
     mocker.patch("documents.search.get_backend")
     source = paperless_dirs.scratch_dir / "plain.txt"
@@ -545,7 +540,9 @@ def test_installed_text_provider_uses_real_registry_and_local_thumbnail_fallback
     assert document.source_path.read_text() == text
     assert document.thumbnail_path.is_file()
     assert document.archive_filename is None
-    assert job.provider["identity"] == PlainTextProvider.identity
+    assert (job.provider if explicit else job.provider["implementation"])[
+        "identity"
+    ] == PlainTextProvider.identity
     assert "TextDocumentParser" in job.result["parser_result"]["thumbnail_provider"]
     assert job.cleaned
 
@@ -608,3 +605,105 @@ def test_retry_keeps_the_selected_configuration_and_provider(
     sample_doc.refresh_from_db()
     assert sample_doc.content == "test content"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).is_file()
+
+
+@pytest.mark.parametrize("policy", ["auto", "always", "never"])
+@pytest.mark.parametrize("archive_type", ["searchable_pdf", "pdfa"])
+def test_replacement_archive_is_validated_without_policy_negotiation(
+    sample_doc: Document,
+    provider: type,
+    settings: Settings,
+    policy: str,
+    archive_type: str,
+) -> None:
+    """Supported archives can differ from preferences, including never."""
+    settings.ARCHIVE_FILE_GENERATION = policy
+    settings.OCR_OUTPUT_TYPE = "pdfa"
+
+    def output(request: ParserRequest, root: Path) -> ParserResult:
+        result = provider.output(request, root)
+        target = root / request["output_dir"] / "archive.pdf"
+        target.parent.mkdir()
+        shutil.copyfile(sample_doc.source_path, target)
+        return {
+            **result,
+            "archive": file_reference(root, target),
+            "archive_type": archive_type,
+        }
+
+    provider.process.side_effect = output
+    job = jobs.stage_reprocess(sample_doc.pk)
+    assert jobs.run_reprocess(job.pk)
+    sample_doc.refresh_from_db()
+    assert sample_doc.archive_path.read_bytes() == sample_doc.source_path.read_bytes()
+
+
+def test_returned_thumbnail_avoids_registry_in_ingestion_and_reprocessing(
+    paperless_dirs: PaperlessDirs,
+    simple_digital_pdf_file: Path,
+    thumbnail_webp_file: Path,
+    provider: type,
+    mocker: MockerFixture,
+    fake_progress_manager: type,
+) -> None:
+    """An explicit class without registry metadata owns the complete normal path."""
+    mocker.patch(
+        "paperless.parsers.registry.get_parser_registry",
+        side_effect=AssertionError("default registry loaded"),
+    )
+    mocker.patch(
+        "documents.parsers.get_parser_registry",
+        side_effect=AssertionError("default registry loaded"),
+    )
+    mocker.patch(
+        "documents.parser_operations.get_parser_registry",
+        side_effect=AssertionError("default registry loaded"),
+    )
+    provider.process.side_effect = lambda request, root: {
+        **provider.output(request, root),
+        "thumbnail": _thumbnail(request, root, thumbnail_webp_file),
+    }
+    source = paperless_dirs.scratch_dir / "explicit.pdf"
+    shutil.copyfile(simple_digital_pdf_file, source)
+    job = ingestion_jobs.stage_consumption(
+        ConsumableDocument(DocumentSource.ApiUpload, original_file=source)
+    )
+    result = ingestion_jobs.run_consumption(job.pk)
+    reprocess = jobs.stage_reprocess(result["document_id"])
+    assert jobs.run_reprocess(reprocess.pk)
+    assert provider.process.call_count == 2
+
+
+def test_missing_local_thumbnail_fails_without_publishing(
+    sample_doc: Document,
+    provider: type,
+    mocker: MockerFixture,
+) -> None:
+    """Optional provider thumbnails do not weaken final publication requirements."""
+    mocker.patch(
+        "documents.parser_operations.get_parser_registry"
+    ).return_value.get_parser_for_file.return_value = None
+    job = jobs.stage_reprocess(sample_doc.pk)
+    with pytest.raises(jobs.RejectedResult, match="No local thumbnail"):
+        jobs.run_reprocess(job.pk)
+    sample_doc.refresh_from_db()
+    assert sample_doc.content == "test content"
+
+
+def test_metadata_inspection_never_authorizes_remote_processing(
+    sample_doc: Document,
+    mocker: MockerFixture,
+) -> None:
+    """Metadata inspection cannot send document content to a remote plugin."""
+    from documents.views import DocumentViewSet
+
+    select = mocker.patch(
+        "documents.views.get_parser_registry"
+    ).return_value.get_parser_for_file
+    select.return_value = None
+    assert (
+        DocumentViewSet().get_metadata(sample_doc.source_path, sample_doc.mime_type)
+        == []
+    )
+    assert select.call_args.kwargs["allow_remote"] is False
+    assert select.call_args.kwargs["required_capabilities"] == ("metadata",)

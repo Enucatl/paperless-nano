@@ -29,6 +29,7 @@ from documents.models import DocumentJob
 from documents.models import PaperlessTask
 from documents.parser_operations import configured_parser
 from documents.parser_operations import effective_configuration as _configuration
+from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
 from documents.parser_operations import validate_parser_job
 from documents.permissions import permitted_document_ids
@@ -36,7 +37,6 @@ from documents.utils import compute_checksum
 from documents.versioning import latest_version
 from paperless.config import RemoteOCRConfig
 from paperless.parsers.contract import resolve_reference
-from paperless.parsers.registry import get_parser_registry
 
 logger = logging.getLogger("paperless.jobs")
 MAX_ATTEMPTS = 3
@@ -287,14 +287,7 @@ def _prepare(job: DocumentJob) -> None:
     started = job.updated
     if compute_checksum(source) != job.input["checksum"]:
         raise RejectedResult("Staged input has changed")
-    parser_class = get_parser_registry().get_parser_for_file(
-        document.mime_type,
-        job.input["filename"],
-        source,
-        allow_remote=job.input["remote_ocr"] or RemoteOCRConfig().remote_ocr_by_default,
-    )
-    if parser_class is None:
-        raise RejectedResult(f"No parser for {document.mime_type}")
+    parser_class = configured_parser_class()
     with configured_parser(parser_class, configuration) as parser:
         parsed = run_parser(
             parser,
@@ -304,6 +297,7 @@ def _prepare(job: DocumentJob) -> None:
             configuration,
             directory,
             job_id=str(job.pk),
+            operation="reprocess",
             allow_remote=job.input["remote_ocr"]
             or RemoteOCRConfig().remote_ocr_by_default,
         )
@@ -335,7 +329,6 @@ def _prepare(job: DocumentJob) -> None:
     if job.timeout and (timezone.now() - started).total_seconds() > job.timeout:
         raise TimeoutError("Reprocessing exceeded its recorded timeout")
     configuration = dict(job.configuration)
-    configuration.pop("produce_archive")
     if _configuration() != configuration:
         raise RejectedResult("Processing configuration changed during execution")
     job.result = result
@@ -347,7 +340,7 @@ def _prepare(job: DocumentJob) -> None:
 
 def _apply(job: DocumentJob) -> None:
     """Publish a new archive generation and atomically commit result ownership."""
-    validate_parser_job(job, registry=get_parser_registry())
+    validate_parser_job(job)
     directory = job_directory(job.pk)
     _validate_file(directory, job.result["thumbnail"], "image/webp")
     archive = job.result["archive"]

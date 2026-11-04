@@ -15,6 +15,7 @@ from paperless.parsers.registry import get_parser_registry
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from pytest_django.fixtures import Settings
     from pytest_mock import MockerFixture
 
     from paperless_testing.dirs import PaperlessDirs
@@ -23,12 +24,14 @@ pytestmark = pytest.mark.django_db
 
 
 def test_thumbnail_regeneration_never_parses(
+    settings: Settings,
     sample_doc: Document,
     thumbnail_webp_file: Path,
     paperless_dirs: PaperlessDirs,
     mocker: MockerFixture,
 ) -> None:
     """The shared provider boundary preserves thumbnail-only CLI behavior."""
+    settings.PARSER = "uninstalled.replacement.Parser"
     parse = mocker.patch("paperless.parsers.tesseract.RasterisedDocumentParser.parse")
     mocker.patch(
         "paperless.parsers.tesseract.RasterisedDocumentParser.get_thumbnail",

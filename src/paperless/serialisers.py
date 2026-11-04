@@ -248,8 +248,6 @@ class ApplicationConfigurationSerializer(
     def get_deployment_disabled_fields(self, instance) -> list[str]:
         """Expose deployment restrictions without changing saved preferences."""
         fields = []
-        if not settings.LOCAL_OCR_ENABLED:
-            fields.extend(["mode", "archive_file_generation"])
         if not settings.AI_ALLOWED:
             fields.append("ai_enabled")
         return fields

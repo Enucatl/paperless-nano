@@ -48,18 +48,15 @@ def make_ocr_config(mocker, null_app_config):
 
 
 class TestOcrConfigArchiveFileGeneration:
-    def test_deployment_disable_overrides_saved_preferences(
+    def test_parser_selection_preserves_default_engine_preferences(
         self,
         make_ocr_config,
         null_app_config,
     ) -> None:
-        """Keep local processing off without changing saved preferences."""
+        """Selecting an implementation does not rewrite default engine preferences."""
         null_app_config.mode = "force"
         null_app_config.archive_file_generation = "always"
-        cfg = make_ocr_config(LOCAL_OCR_ENABLED=False)
-        assert cfg.mode == "off"
-        assert cfg.archive_file_generation == "never"
-        cfg = make_ocr_config(LOCAL_OCR_ENABLED=True)
+        cfg = make_ocr_config(PARSER="paperless.parsers.providers.PlainTextProvider")
         assert cfg.mode == "force"
         assert cfg.archive_file_generation == "always"
 

@@ -847,69 +847,90 @@ The full suite, PostgreSQL/MariaDB, deployment and RAM checks were not performed
 The #23 recovery limitation remains: ambiguous external effects retain their
 inputs and require explicit operator reconciliation.
 
-## Replaceable OCR providers (#25)
+## Explicit parser replacement (#28)
 
-The existing `paperless.parsers` boundary now accepts version 1 JSON-compatible
-requests and results through `paperless.parsers.contract`. Providers implement
-`process(request, root)` and expose a stable `identity`, separate `text`,
-`searchable_pdf`, `pdfa` and `thumbnail` capability flags, and the registry's
-existing identity, MIME and score attributes. The request contains a content
-revision, MIME type, filename, effective configuration, remote permission,
-required outputs, and private input/output references. Each reference contains a
-relative path, SHA-256 digest and byte count. Results return text, page count,
-optional ISO date, provider identity, archive kind and rendition references.
-Providers receive no ORM documents, users, HTTP requests or Celery objects.
+`PAPERLESS_PARSER` selects an installed Python class, defaulting to
+`paperless.parsers.providers.DefaultParser`. The default dispatches to the existing
+built-ins and `paperless_ngx.parsers` entry-point plugins, preserving MIME scoring,
+archive decisions, OCR overrides, mail layout and plugin precedence. Explicit
+replacements need no entry-point registration, score or capability declarations.
+They own computation and format decisions; core owns admission, permissions,
+source identity, durable jobs, validation and publication.
 
-`documents.parser_operations` owns effective configuration, required renditions,
-validation and the explicit thumbnail fallback. `LegacyParserProvider` adapts
-existing built-in and third-party parsers, including context cleanup. Built-ins
-receive resolved OCR settings, endpoints, timeouts, concurrency and mail layout
-before execution. Old plugins keep their no-argument construction and existing
-methods; `ParserContext.configuration` additionally exposes the snapshot. Plugins
-with extra configuration must incorporate it in their provider identity. Remote
-credentials are supplied only during execution and are omitted from durable
-requests and configuration records.
+The class has a no-argument constructor, a stable `identity`, a boolean
+`uses_remote_service`, `configuration_snapshot()` and `process(request, root)`.
+The snapshot must be JSON-compatible and contain implementation-owned settings
+without credentials. Core records it and rejects changes before retry or publication.
+Credentials are read by the implementation at execution time. Subclassing
+`ParserProvider` supplies an empty snapshot for implementations with no settings.
+Bump the identity when changing processing semantics. Installed code is trusted,
+not sandboxed; plugins must accurately declare remote processing and honor the
+request's permission. Core independently rejects a remote replacement when that
+permission is absent. Selection never silently falls back to another OCR service.
 
-Ingestion and durable reprocessing call this same operation. Thumbnail
-regeneration requests only a thumbnail and does not run OCR. Metadata inspection
-continues to use `extract_metadata`, filtering out providers that do not supply
-metadata. Parser registry scoring and external-plugin precedence remain intact;
-there is no competing discovery system or provider setting. Remote processing
-still requires the document/workflow choice or the configured default, and the
-operation checks permission again before execution. Thumbnail fallback selects
-only a capable local parser and records its identity. An OCR failure never
-silently reroutes document content to another service.
+Requests in `paperless.parsers.contract.ParserRequest` include contract version,
+revision, immutable source reference, MIME type, original filename, private output
+directory, operation intent, archive preference (`auto`, `always`, `never`),
+preferred PDF output type, remote permission, and the implementation's own `settings`
+snapshot. They do not expose Django models or permanent file paths. Results contain
+version, revision, provider identity, text (possibly empty), positive page count or
+null, ISO date/datetime or null, optional archive and thumbnail references, and
+`archive_type` (`searchable_pdf`, `pdfa`, or null). File references contain a relative
+path, SHA-256 digest and byte size. Use `resolve_reference` and `file_reference` to
+read the input and describe output files inside the supplied output directory.
 
-### Archive capability and replacement policy
+### Installation and minimal replacement
 
-For explicit providers, `always` requires the configured PDF or PDF/A output;
-`auto` requires it for images and scanned/textless PDFs. `never` permits text-only
-results for formats the viewer can display directly. Email, Office and other
-formats that need a display PDF still require that rendition under `never`.
-A provider cannot substitute a searchable PDF when PDF/A is required. A missing,
-unadvertised or unrequested archive is rejected before permanent publication.
-There is no automatic archive-engine fallback. Existing legacy parser behavior
-is preserved: incapable parsers skip optional archives, required display PDFs
-win over `never`, and remote searchable PDFs are not relabeled as PDF/A. Existing
-Mail output-type and OCR user-argument overrides retain their effective behavior.
+Install the package in the same Python environment as the web process and workers
+(for Docker, include it in a derived image), then set its dotted class path:
 
-`paperless.parsers.providers.PlainTextProvider` is a concrete replacement that
-reads plain text without importing Django and produces no renditions. An
-installed plugin can select it using the existing entrypoint mechanism:
+```python
+# example/parsers.py
+from paperless.parsers.providers import PlainTextProvider
 
-```toml
-[project.entry-points."paperless_ngx.parsers"]
-plain_text = "paperless.parsers.providers:PlainTextProvider"
+class CustomParser(PlainTextProvider):
+    """A minimal text-only replacement using the explicit contract."""
+    identity = "example.text:1"
 ```
 
-With `PAPERLESS_ARCHIVE_FILE_GENERATION=never`, this provider supplies text and
-the core explicitly selects the existing local text thumbnail implementation.
-The same contract supports a PDF text-only provider under `never`, or under
-`auto` for a born-digital PDF; integration tests exercise that replacement in
-both ingestion and reprocessing. Providers must honor the request's remote
-permission and execution limits. They are trusted installed code, not sandboxed
-extensions; the contract does not prevent arbitrary filesystem access by a
-malicious plugin.
+```ini
+PAPERLESS_PARSER=example.parsers.CustomParser
+```
+
+`PlainTextProvider.process` is a complete, framework-free reference implementation.
+A replacement should raise an error for formats it cannot process. Upload admission
+accepts detected MIME types and folder consumption uses system-known extensions;
+format acceptance belongs to the selected replacement, without loading the default
+registry. Restart services after changing the implementation. Finish or resolve
+pending jobs first: prepared results from a different provider/configuration are
+rejected rather than published under a new selection.
+
+### Advisory archives and separate auxiliary operations
+
+Archive preferences are advisory for replacements: omitted archives, supported
+format differences and archives returned under `never` are accepted. The default
+implementation preserves its existing `auto`/`always`/`never` behavior, including
+Office display PDFs taking precedence over `never`, OCR user-argument output-type
+overrides and mail output settings. A replacement may omit a display PDF, accepting
+that a browser may be unable to preview its original format. Reprocessing without
+a returned archive preserves an existing archive.
+
+A returned thumbnail is optional. If omitted, core lazily selects a local legacy
+thumbnail implementation and calls only its thumbnail operation. No suitable local
+implementation or no valid thumbnail fails the job. A valid returned thumbnail
+avoids loading default engines. Thumbnail regeneration always uses the separate
+local thumbnail path and never calls replacement `process` or reruns OCR. Metadata
+inspection likewise uses local legacy `extract_metadata`, returning the existing
+empty result when unsupported. These auxiliary calls may load their relevant
+legacy parsers; ordinary replacement execution and recovery do not.
+
+`PAPERLESS_LOCAL_OCR_ENABLED` is removed. To preserve the default parser's former
+OCR-off behavior, use `PAPERLESS_OCR_MODE=off` and
+`PAPERLESS_ARCHIVE_FILE_GENERATION=never` (also update any saved application
+preferences, which retain precedence). To remove default engine execution, select
+a replacement that owns that strategy. Remote-processing authorization remains
+separate. The removed switch no longer locks OCR preferences in the configuration
+API; AI deployment restrictions are unchanged.
 
 ### File ownership, failures and execution
 
@@ -918,7 +939,7 @@ private job directory, keeping the admitted input intact even if a provider
 modifies its own copy. It records the request before execution and validates
 results against a separate snapshot. It rejects changed input, changed provider
 identity, malformed text/page/date values, escaped paths, symlinks, input aliases,
-missing required outputs and invalid PDF/WebP files. Output bytes and directories
+missing or invalid PDF/WebP files. Output bytes and directories
 are synced before recording successful results. PDF validation establishes a
 readable, nonempty PDF; full standards certification of PDF/A remains the
 provider's responsibility.
@@ -939,17 +960,29 @@ place. A provider may raise `TimeoutError`; reprocessing retains its existing
 three-attempt policy, while interrupted or failed ingestion retains the #23
 attention/reconciliation rules. A retry rejects a changed configuration or
 provider instead of silently selecting another implementation. No custom process
-supervisor, new queue or memory cap is introduced. Jobs prepared before this contract retain their
-existing completion path. The recovery command's acknowledgment semantics are
+supervisor, new queue or memory cap is introduced. Jobs predating parser-request
+journaling retain their existing completion path; jobs with an older request/configuration
+snapshot are rejected after the selection migration. The recovery command's acknowledgment semantics are
 unchanged; this work never blindly replays ingestion or uncertain effects.
 
 To allow a provider to import the contract without Django, `paperless` public
 framework exports resolve on access; normal Django startup explicitly initializes
 Celery and checks. Startup, check registration and lean-worker compatibility are
 covered by tests. This is required for the standalone contract and makes no
-idle-memory claim. #26 search separation and #27 measured residency work remain
-later tasks; the reported 300 MB baseline and provisional active/peak goals have
-not been remeasured or enforced.
+idle-memory claim. This change does not remeasure or enforce residency goals.
+
+### Parser-selection verification (2026-11-04)
+
+The #28 regression selection passed **796 cases** covering explicit and default
+providers, ingestion, reprocessing/recovery, archives, thumbnails, metadata,
+configuration, remote permission, consumer tasks, registry plugins and import
+boundaries. A final focused run passed **39 cases**, including the default archive
+policy suite and legacy mail-rule context; these overlap the larger selection.
+Tests used Python 3.14.10, Django 5.2.17 and SQLite in disposable
+`docker run --rm --userns=host` containers as an unprivileged user. Frozen uv
+settings supplied testing/lint dependencies; `uv run --no-sync ruff format .`
+and changed-file Ruff checks passed. Temporary test storage was removed.
+The full suite, live OCR services and other database engines were not run.
 
 ### OCR provider verification (2026-11-03)
 

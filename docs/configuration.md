@@ -892,21 +892,20 @@ Parser plugins may implement the explicit request/result interface described in
 [Replaceable OCR providers](document-operations.md#replaceable-ocr-providers-25).
 They use the existing `paperless_ngx.parsers` entrypoint registry and scoring;
 there is no separate provider setting. Existing parser plugins remain supported.
-Replacement providers declare text, searchable PDF, PDF/A and thumbnail
-capabilities independently. A missing required PDF rendition fails the job before
-publication. Text-only providers work with `never`, or with `auto` for a
-born-digital PDF; formats that require a PDF for display still require one.
-Missing thumbnail capability uses a local, capability-filtered parser fallback.
-Provider failures do not silently select another OCR engine.
+#### [`PAPERLESS_PARSER=<class>`](#PAPERLESS_PARSER) {#PAPERLESS_PARSER}
 
-#### [`PAPERLESS_LOCAL_OCR_ENABLED=<bool>`](#PAPERLESS_LOCAL_OCR_ENABLED) {#PAPERLESS_LOCAL_OCR_ENABLED}
+: Select an installed Python implementation class for ingestion and reprocessing.
+Defaults to `paperless.parsers.providers.DefaultParser`, which preserves built-in
+parsers and existing entry-point plugins. Replacements implement the explicit
+[parser contract](document-operations.md#explicit-parser-replacement-28) without
+registry scores or capability metadata. Archive preferences are advisory for
+replacements; valid returned thumbnails avoid default-engine loading.
 
-: Set to false to prohibit local OCR and local archive generation for this
-deployment, even when application settings request them. Saved preferences are
-retained. Remote OCR remains available. Documents without existing text need an
-external OCR service to become searchable.
-
-    Defaults to true.
+    `PAPERLESS_LOCAL_OCR_ENABLED` has been removed. For equivalent default-parser
+    behavior set `PAPERLESS_OCR_MODE=off` and
+    `PAPERLESS_ARCHIVE_FILE_GENERATION=never`, including any saved application
+    preferences. Select a replacement to own processing strategy and dependencies.
+    Remote-processing permission remains separately enforced.
 
 #### [`PAPERLESS_OCR_LANGUAGE=<lang>`](#PAPERLESS_OCR_LANGUAGE) {#PAPERLESS_OCR_LANGUAGE}
 

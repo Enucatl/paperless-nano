@@ -945,7 +945,7 @@ OCR_PAGES = get_int_from_env("PAPERLESS_OCR_PAGES")
 # documents.  It should be a 3-letter language code consistent with ISO 639.
 OCR_LANGUAGE = os.getenv("PAPERLESS_OCR_LANGUAGE", "eng")
 
-LOCAL_OCR_ENABLED = get_bool_from_env("PAPERLESS_LOCAL_OCR_ENABLED", "true")
+PARSER = os.getenv("PAPERLESS_PARSER", "paperless.parsers.providers.DefaultParser")
 # OCRmyPDF --output-type options are available.
 OCR_OUTPUT_TYPE = os.getenv("PAPERLESS_OCR_OUTPUT_TYPE", "pdfa")
 

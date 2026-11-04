@@ -610,13 +610,13 @@ class TestV3MinimumUpgradeVersionCheck:
 
 
 class TestTesseractChecks:
-    def test_local_ocr_disabled(
+    def test_replacement_does_not_require_tesseract(
         self,
         settings: Settings,
         mocker: MockerFixture,
     ) -> None:
         """Do not start Tesseract when this deployment prohibits local OCR."""
-        settings.LOCAL_OCR_ENABLED = False
+        settings.PARSER = "paperless.parsers.providers.PlainTextProvider"
         settings.OCR_LANGUAGE = "unavailable"
         get_languages = mocker.patch("paperless.checks.get_tesseract_langs")
         assert check_default_language_available(None) == []

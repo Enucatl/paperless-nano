@@ -26,9 +26,11 @@ def request_data(tmp_path):
         "source": file_reference(tmp_path, source),
         "mime_type": "text/plain",
         "filename": "invoice.txt",
-        "configuration": {"ocr": {"archive_file_generation": "never"}},
+        "settings": {"ocr": {"archive_file_generation": "never"}},
+        "archive_policy": "never",
+        "output_type": "pdfa",
+        "operation": "process",
         "output_dir": "attempt-1",
-        "required_outputs": ["text"],
         "allow_remote": False,
     }
 
@@ -44,14 +46,13 @@ def test_text_only_provider_roundtrip(request_data, tmp_path):
     assert result["thumbnail"] is None
 
 
-@pytest.mark.parametrize("required", ["searchable_pdf", "pdfa", "thumbnail"])
-def test_required_rendition_cannot_be_omitted(request_data, tmp_path, required):
-    """Text-only processing cannot silently satisfy a required rendition."""
+@pytest.mark.parametrize("policy", ["auto", "always", "never"])
+def test_archive_preferences_are_advisory(request_data, tmp_path, policy):
+    """Every archive preference permits a text-only replacement."""
     provider = PlainTextProvider()
-    request_data["required_outputs"].append(required)
+    request_data["archive_policy"] = policy
     result = provider.process(request_data, tmp_path)
-    with pytest.raises(InvalidParserResult, match="required"):
-        validate_result(request_data, result, tmp_path, provider.identity)
+    validate_result(request_data, result, tmp_path, provider.identity)
 
 
 @pytest.mark.parametrize(
@@ -119,7 +120,7 @@ def test_output_cannot_alias_input(request_data, tmp_path):
 
 
 def test_pdfa_is_distinct_from_searchable_pdf(request_data, tmp_path):
-    """A searchable PDF is insufficient when the request explicitly needs PDF/A."""
+    """A supported archive format may differ from the requested preference."""
     output = tmp_path / request_data["output_dir"]
     output.mkdir()
     archive = output / "archive.pdf"
@@ -129,9 +130,8 @@ def test_pdfa_is_distinct_from_searchable_pdf(request_data, tmp_path):
     result.update(
         archive=file_reference(tmp_path, archive), archive_type="searchable_pdf"
     )
-    request_data["required_outputs"].append("pdfa")
-    with pytest.raises(InvalidParserResult, match="required pdfa"):
-        validate_result(request_data, result, tmp_path, provider.identity)
+    request_data["output_type"] = "pdfa"
+    validate_result(request_data, result, tmp_path, provider.identity)
 
 
 def test_contract_and_replacement_do_not_import_django():
@@ -197,7 +197,6 @@ def test_legacy_adapter_retains_outputs_and_identity(request_data, tmp_path):
             return thumbnail
 
     provider = LegacyParserProvider(Parser())
-    request_data["required_outputs"].append("thumbnail")
     result = provider.process(request_data, tmp_path)
     (tmp_path / "scratch.webp").unlink()
     validate_result(request_data, result, tmp_path, provider.identity)
@@ -271,3 +270,50 @@ def test_failed_client_startup_cleans_scratch_and_open_clients(mocker):
         parser.__enter__()
     assert not parser._tempdir.exists()
     tika.return_value.__exit__.assert_called_once()
+
+
+def test_explicit_selection_startup_does_not_load_default_engines():
+    """Startup, checks and file naming do not initialize unselected parsers."""
+    import os
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import django
+django.setup()
+from paperless.celery import on_worker_process_init
+from documents.checks import parser_check
+from documents.parsers import get_default_file_extension, is_mime_type_supported, get_supported_file_extensions
+on_worker_process_init()
+assert parser_check(None) == []
+assert get_default_file_extension('application/pdf') == '.pdf'
+assert is_mime_type_supported('application/pdf')
+assert '.pdf' in get_supported_file_extensions()
+import sys
+assert not any(name in sys.modules for name in (
+    'paperless.parsers.tesseract', 'paperless.parsers.remote',
+    'paperless.parsers.mail', 'paperless.parsers.tika', 'ocrmypdf',
+))
+""",
+        ],
+        check=True,
+        env={
+            **os.environ,
+            "PAPERLESS_PARSER": "paperless.parsers.providers.PlainTextProvider",
+        },
+        cwd=Path(__file__).parents[3],
+    )
+
+
+def test_legacy_configuration_preserves_mailrule_context():
+    """Default dispatch preserves the context supplied to existing mail plugins."""
+    from paperless.parsers.providers import configured_parser
+
+    class Parser:
+        def configure(self, context):
+            self.context = context
+
+    with configured_parser(Parser, {"mailrule_id": 42}) as parser:
+        assert parser.context.mailrule_id == 42

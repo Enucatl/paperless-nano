@@ -356,7 +356,7 @@ class TestUpdateContentRemoteOCR(DirectoriesMixin, TestCase):
     def setUp(self) -> None:
         super().setUp()
 
-        patcher = mock.patch("documents.jobs.get_parser_registry")
+        patcher = mock.patch("paperless.parsers.providers.get_parser_registry")
         self.mock_registry = patcher.start()
         self.mock_registry.return_value.get_parser_for_file.return_value = None
         self.addCleanup(patcher.stop)

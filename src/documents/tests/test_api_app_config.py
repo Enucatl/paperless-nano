@@ -121,13 +121,15 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
         self.assertNotContains(response, "future-value")
         self.assertNotContains(response, "UNRELATED_SETTING")
 
-    @override_settings(LOCAL_OCR_ENABLED=False, AI_ALLOWED=False)
+    @override_settings(
+        PARSER="paperless.parsers.providers.PlainTextProvider", AI_ALLOWED=False
+    )
     def test_deployment_restrictions_reject_enabling_preferences(self) -> None:
         """API clients cannot enable prohibited features or change restrictions."""
         response = self.client.get(self.ENDPOINT, format="json")
         self.assertCountEqual(
             response.data[0]["deployment_disabled_fields"],
-            ["mode", "archive_file_generation", "ai_enabled"],
+            ["ai_enabled"],
         )
         response = self.client.patch(
             f"{self.ENDPOINT}1/",
@@ -142,7 +144,7 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertCountEqual(
             response.data,
-            ["mode", "archive_file_generation", "ai_enabled"],
+            ["ai_enabled"],
         )
         response = self.client.patch(
             f"{self.ENDPOINT}1/",
@@ -151,7 +153,9 @@ class TestApiAppConfig(DirectoriesMixin, APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    @override_settings(LOCAL_OCR_ENABLED=False, AI_ALLOWED=False)
+    @override_settings(
+        PARSER="paperless.parsers.providers.PlainTextProvider", AI_ALLOWED=False
+    )
     def test_deployment_restrictions_preserve_existing_preferences(self) -> None:
         """Round trips and unrelated edits preserve dormant enabled preferences."""
         config = ApplicationConfiguration.objects.get(pk=1)

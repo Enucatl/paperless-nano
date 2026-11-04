@@ -350,7 +350,7 @@ def get_tesseract_langs():
 
 @register()
 def check_default_language_available(app_configs: Any, **kwargs: Any) -> list[Error]:
-    if not settings.LOCAL_OCR_ENABLED:
+    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
         return []
     errs = []
 

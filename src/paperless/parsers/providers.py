@@ -2,20 +2,104 @@
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
+from contextlib import contextmanager
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from paperless.parsers.contract import InvalidParserResult
-from paperless.parsers.contract import ParserCapabilities
+from paperless.parsers.contract import ParserProvider
 from paperless.parsers.contract import ParserRequest
 from paperless.parsers.contract import ParserResult
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import relative_path
 from paperless.parsers.contract import resolve_reference
+from paperless.parsers.registry import get_parser_registry
 
 if TYPE_CHECKING:
     from paperless.parsers import ParserProtocol
+
+
+def default_configuration(*, mailrule_id: int | None = None) -> dict:
+    """Snapshot effective processing values without storing service credentials."""
+    from django.conf import settings
+
+    from paperless.config import BarcodeConfig
+    from paperless.config import OcrConfig
+    from paperless.config import RemoteOCRConfig
+
+    remote = dataclasses.asdict(RemoteOCRConfig())
+    remote.pop("remote_ocr_api_key")
+    configuration = {
+        "ocr": dataclasses.asdict(OcrConfig()),
+        "barcodes": dataclasses.asdict(BarcodeConfig()),
+        "remote": remote,
+        "execution": {
+            name: getattr(settings, name)
+            for name in (
+                "THREADS_PER_WORKER",
+                "THUMBNAIL_FONT_NAME",
+                "TIKA_ENDPOINT",
+                "TIKA_GOTENBERG_ENDPOINT",
+                "REMOTE_OCR_ALLOW_INTERNAL_ENDPOINTS",
+                "EMAIL_PARSE_DEFAULT_LAYOUT",
+                "OCR_OUTPUT_TYPE",
+                "CELERY_TASK_TIME_LIMIT",
+            )
+        },
+    }
+    if mailrule_id:
+        from paperless_mail.models import MailRule
+
+        configuration["mailrule_id"] = mailrule_id
+        configuration["mail_layout"] = (
+            MailRule.objects.filter(pk=mailrule_id)
+            .values_list("pdf_layout", flat=True)
+            .first()
+        )
+    return configuration
+
+
+@contextmanager
+def configured_parser(
+    parser_class: type, configuration: dict, *, mailrule_id: int | None = None
+):
+    """Keep old plugin construction while supplying snapshots to built-in parsers."""
+    from paperless.config import RemoteOCRConfig
+    from paperless.parsers import ParserContext
+
+    if f"{parser_class.__module__}.{parser_class.__qualname__}" in {
+        "paperless.parsers.tesseract.RasterisedDocumentParser",
+        "paperless.parsers.remote.RemoteDocumentParser",
+        "paperless.parsers.text.TextDocumentParser",
+        "paperless.parsers.mail.MailDocumentParser",
+        "paperless.parsers.tika.TikaDocumentParser",
+    }:
+        runtime = {
+            **configuration,
+            "remote": {
+                **configuration["remote"],
+                "remote_ocr_api_key": RemoteOCRConfig().remote_ocr_api_key,
+            },
+        }
+        parser = parser_class(configuration=runtime)
+    else:
+        parser = parser_class()
+    with (
+        parser
+        if hasattr(type(parser), "__enter__")
+        else nullcontext(parser) as instance
+    ):
+        if not hasattr(type(instance), "process"):
+            instance.configure(
+                ParserContext(
+                    mailrule_id=mailrule_id or configuration.get("mailrule_id"),
+                    configuration=configuration,
+                )
+            )
+        yield instance
 
 
 class LegacyParserProvider:
@@ -27,20 +111,6 @@ class LegacyParserProvider:
         cls = type(parser)
         self.identity = f"{cls.__module__}.{cls.__qualname__}:{parser.version}"
         self.uses_remote_service = bool(getattr(parser, "uses_remote_service", False))
-        # Old plugins promise searchable PDFs, not PDF/A conformance.
-        self.capabilities: ParserCapabilities = {
-            "text": True,
-            "searchable_pdf": bool(
-                parser.can_produce_archive or parser.requires_pdf_rendition,
-            ),
-            "pdfa": cls.__module__
-            in {
-                "paperless.parsers.tesseract",
-                "paperless.parsers.mail",
-                "paperless.parsers.tika",
-            },
-            "thumbnail": True,
-        }
 
     def archive_type(self, configuration: dict) -> str:
         """Describe the rendition format selected by the existing implementation."""
@@ -52,7 +122,13 @@ class LegacyParserProvider:
             output_type = user_args.get("output_type", output_type)
         return (
             "pdfa"
-            if self.capabilities["pdfa"] and output_type.startswith("pdfa")
+            if type(self.parser).__module__
+            in {
+                "paperless.parsers.tesseract",
+                "paperless.parsers.mail",
+                "paperless.parsers.tika",
+            }
+            and output_type.startswith("pdfa")
             else "searchable_pdf"
         )
 
@@ -63,10 +139,15 @@ class LegacyParserProvider:
         source = resolve_reference(root, request["source"])
         output_dir = relative_path(root, request["output_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        produce_archive = bool(
-            {"searchable_pdf", "pdfa"} & set(request["required_outputs"]),
+        from documents.consumer import should_produce_archive
+
+        thumbnail_only = request["operation"] == "thumbnail"
+        produce_archive = not thumbnail_only and should_produce_archive(
+            self.parser,
+            request["mime_type"],
+            source,
+            configuration=request["settings"],
         )
-        thumbnail_only = request["required_outputs"] == ["thumbnail"]
         if not thumbnail_only:
             self.parser.parse(
                 source,
@@ -110,15 +191,92 @@ class LegacyParserProvider:
             key = "thumbnail" if name == "thumbnail.webp" else "archive"
             result[key] = file_reference(root, target)
         if archive is not None:
-            result["archive_type"] = self.archive_type(request["configuration"])
+            result["archive_type"] = self.archive_type(request["settings"])
         return result
 
 
-class PlainTextProvider:
+class DefaultParser(ParserProvider):
+    """Dispatch to the existing built-in and entry-point parser implementations."""
+
+    identity = "paperless.default:1"
+    uses_remote_service = False
+
+    def configuration_snapshot(self) -> dict:
+        """Snapshot the default implementation's effective engine settings."""
+        return default_configuration()
+
+    def selected_class(self, request: ParserRequest, root: Path) -> type:
+        """Resolve only the default implementation's legacy dispatch."""
+        cls = get_parser_registry().get_parser_for_file(
+            request["mime_type"],
+            request["filename"],
+            resolve_reference(root, request["source"]),
+            allow_remote=request["allow_remote"],
+        )
+        if cls is None:
+            raise InvalidParserResult(f"No parser for {request['mime_type']}")
+        return cls
+
+    def selection(self, request: ParserRequest, root: Path) -> dict:
+        """Describe the selected instance for retry and publication checks."""
+        cls = self.selected_class(request, root)
+        with configured_parser(cls, request["settings"]) as parser:
+            provider = (
+                parser
+                if hasattr(type(parser), "process")
+                else LegacyParserProvider(parser)
+            )
+            return {
+                "class": f"{cls.__module__}.{cls.__qualname__}",
+                "version": parser.version,
+                "identity": provider.identity,
+            }
+
+    def process(self, request: ParserRequest, root: Path) -> ParserResult:
+        """Select and invoke the legacy implementation behind the default boundary."""
+        from paperless.config import OcrConfig
+        from paperless.config import RemoteOCRConfig
+        from paperless.parsers.contract import validate_result
+
+        cls = self.selected_class(request, root)
+        with configured_parser(cls, request["settings"]) as parser:
+            provider = (
+                parser
+                if hasattr(type(parser), "process")
+                else LegacyParserProvider(parser)
+            )
+            if (
+                isinstance(getattr(parser, "settings", None), OcrConfig)
+                and dataclasses.asdict(parser.settings) != request["settings"]["ocr"]
+            ):
+                raise InvalidParserResult(
+                    "Processing configuration changed during parser construction"
+                )
+            identity = provider.identity
+            if provider.uses_remote_service and not request["allow_remote"]:
+                raise InvalidParserResult("Remote processing was not permitted")
+            # Existing entry-point providers retain their original request shape.
+            if not isinstance(provider, LegacyParserProvider):
+                request = {
+                    **request,
+                    "configuration": request["settings"],
+                    "required_outputs": ["text"],
+                }
+                if provider.uses_remote_service:
+                    request["configuration"]["remote"]["remote_ocr_api_key"] = (
+                        RemoteOCRConfig().remote_ocr_api_key
+                    )
+            result = provider.process(request, root)
+            validate_result(request, result, root, identity)
+            if provider.identity != identity:
+                raise InvalidParserResult("Parser identity changed during execution")
+            return {**result, "provider": self.identity, "implementation": identity}
+
+
+class PlainTextProvider(ParserProvider):
     """A framework-free replacement that extracts text and creates no rendition.
 
-    The core supplies a thumbnail fallback and permits this provider only when
-    archive policy does not require a searchable PDF or PDF/A rendition.
+    The core supplies a local thumbnail fallback when one is available.
     """
 
     identity = "paperless.plain-text:1"
@@ -127,12 +285,6 @@ class PlainTextProvider:
     author = "Paperless-ngx Contributors"
     url = "https://github.com/paperless-ngx/paperless-ngx"
     uses_remote_service = False
-    capabilities: ParserCapabilities = {
-        "text": True,
-        "searchable_pdf": False,
-        "pdfa": False,
-        "thumbnail": False,
-    }
 
     @classmethod
     def supported_mime_types(cls) -> dict[str, str]:

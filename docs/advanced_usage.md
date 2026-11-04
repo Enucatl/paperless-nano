@@ -815,6 +815,11 @@ services:
 
 ## Installing third-party parser plugins {#parser-plugins}
 
+To replace processing for all documents, install an implementation and set
+`PAPERLESS_PARSER` to its dotted class path. See the
+[explicit parser contract and example](document-operations.md#explicit-parser-replacement-28).
+No entry-point registration or scoring is needed for explicit selection.
+
 Third-party parser plugins extend Paperless-ngx to support additional file
 formats. A plugin is a Python package that advertises itself under the
 `paperless_ngx.parsers` entry point group. Refer to the

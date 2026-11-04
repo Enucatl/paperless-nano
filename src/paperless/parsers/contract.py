@@ -18,15 +18,6 @@ class FileReference(TypedDict):
     size: int
 
 
-class ParserCapabilities(TypedDict):
-    """Outputs the provider can produce, independently of archive policy."""
-
-    text: bool
-    searchable_pdf: bool
-    pdfa: bool
-    thumbnail: bool
-
-
 class ParserRequest(TypedDict):
     """An immutable-by-convention source and effective configuration snapshot."""
 
@@ -35,9 +26,11 @@ class ParserRequest(TypedDict):
     source: FileReference
     mime_type: str
     filename: str
-    configuration: dict
+    settings: dict
+    operation: str
+    archive_policy: str
+    output_type: str
     output_dir: str
-    required_outputs: list[str]
     allow_remote: bool
 
 
@@ -59,8 +52,11 @@ class ParserProvider(Protocol):
     """Processing interface without database objects or permanent file paths."""
 
     identity: str
-    capabilities: ParserCapabilities
     uses_remote_service: bool
+
+    def configuration_snapshot(self) -> dict:
+        """Return JSON settings without secrets, checked on retry and publication."""
+        return {}
 
     def process(self, request: ParserRequest, root: Path) -> ParserResult:
         """Return output references within this operation's private directory."""
@@ -124,7 +120,7 @@ def validate_result(
     root: Path,
     identity: str,
 ) -> None:
-    """Reject malformed results, changed sources, and missing required outputs."""
+    """Reject malformed results and changed or unsafe files."""
     if (
         request["version"] != 1
         or not isinstance(result, dict)
@@ -164,14 +160,4 @@ def validate_result(
     if (result["archive"] is None and archive_type is not None) or (
         result["archive"] is not None and archive_type not in {"searchable_pdf", "pdfa"}
     ):
-        raise InvalidParserResult("Parser archive capability is invalid")
-    for required in request["required_outputs"]:
-        if required == "text":
-            continue
-        if required == "thumbnail" and result["thumbnail"] is not None:
-            continue
-        if required == "searchable_pdf" and result["archive"] is not None:
-            continue
-        if required == "pdfa" and archive_type == "pdfa":
-            continue
-        raise InvalidParserResult(f"Parser did not return required {required}")
+        raise InvalidParserResult("Parser archive type is invalid")

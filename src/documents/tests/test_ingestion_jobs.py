@@ -87,7 +87,7 @@ def parser(
     mocker.patch("documents.tasks.ProgressManager", FakeProgressManager)
     mocker.patch("documents.consumer.load_classifier", return_value=None)
     mocker.patch(
-        "documents.consumer.get_parser_registry",
+        "paperless.parsers.providers.get_parser_registry",
     ).return_value.get_parser_for_file.return_value = Parser
     mocker.patch("documents.search.get_backend")
     return Parser
@@ -171,7 +171,9 @@ def test_changed_execution_configuration_retains_input_without_publication(
         ingestion_jobs.run_consumption(job.pk)
 
     job.refresh_from_db()
-    assert job.configuration["execution"]["TIKA_ENDPOINT"] == original_endpoint
+    assert (
+        job.configuration["settings"]["execution"]["TIKA_ENDPOINT"] == original_endpoint
+    )
     assert not Document.objects.exists()
     assert (job_directory(job.pk) / "input").is_file()
 

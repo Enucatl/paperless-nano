@@ -1457,6 +1457,7 @@ class DocumentViewSet(
             mime_type,
             Path(file).name,
             Path(file),
+            allow_remote=False,
             required_capabilities=("metadata",),
         )
         if parser_class:

@@ -79,9 +79,6 @@ class OcrConfig(OutputTypeConfig):
             app_config.archive_file_generation
             or ArchiveFileGenerationChoices(settings.ARCHIVE_FILE_GENERATION)
         )
-        if not settings.LOCAL_OCR_ENABLED:
-            self.mode = ModeChoices.OFF
-            self.archive_file_generation = ArchiveFileGenerationChoices.NEVER
         self.image_dpi = app_config.image_dpi or settings.OCR_IMAGE_DPI
         self.clean = app_config.unpaper_clean or CleanChoices(settings.OCR_CLEAN)
         self.deskew = (

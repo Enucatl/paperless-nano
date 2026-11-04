@@ -26,6 +26,8 @@ def is_mime_type_supported(mime_type: str) -> bool:
     """
     Returns True if the mime type is supported, False otherwise
     """
+    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
+        return bool(mime_type)
     return get_parser_registry().get_parser_for_file(mime_type, "") is not None
 
 
@@ -34,7 +36,11 @@ def get_default_file_extension(mime_type: str) -> str:
     Returns the default file extension for a mimetype, or
     an empty string if it could not be determined
     """
-    parser_class = get_parser_registry().get_parser_for_file(mime_type, "")
+    parser_class = (
+        get_parser_registry().get_parser_for_file(mime_type, "")
+        if settings.PARSER == "paperless.parsers.providers.DefaultParser"
+        else None
+    )
     if parser_class is not None:
         supported = parser_class.supported_mime_types()
         if mime_type in supported:
@@ -56,6 +62,9 @@ def is_file_ext_supported(ext: str) -> bool:
 
 
 def get_supported_file_extensions() -> set[str]:
+    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
+        mimetypes.init()
+        return set(mimetypes.types_map)
     extensions = set()
     for parser_class in get_parser_registry().all_parsers():
         for mime_type, ext in parser_class.supported_mime_types().items():

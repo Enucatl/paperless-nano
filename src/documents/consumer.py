@@ -42,6 +42,7 @@ from documents.models import Tag
 from documents.models import WorkflowTrigger
 from documents.parser_operations import configured_parser
 from documents.parser_operations import effective_configuration
+from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
 from documents.parsers import ParseError
 from documents.permissions import PermissionsSpec
@@ -67,7 +68,6 @@ from paperless.config import OcrConfig
 from paperless.config import RemoteOCRConfig
 from paperless.models import ArchiveFileGenerationChoices
 from paperless.parsers.contract import resolve_reference
-from paperless.parsers.registry import get_parser_registry
 from paperless.parsers.utils import pdf_born_digital_text
 
 if TYPE_CHECKING:
@@ -473,30 +473,7 @@ class ConsumerPlugin(
                 self.metadata.remote_ocr or RemoteOCRConfig().remote_ocr_by_default
             )
 
-            # Based on the mime type, get the parser for that type
-            parser_class: type[ParserProtocol] | None = (
-                get_parser_registry().get_parser_for_file(
-                    mime_type,
-                    self.filename,
-                    self.working_copy,
-                    allow_remote=allow_remote,
-                )
-            )
-            if not parser_class:
-                self._fail(
-                    ConsumerStatusShortMessage.UNSUPPORTED_TYPE,
-                    f"Unsupported mime type {mime_type}",
-                )
-
-            if self.metadata.remote_ocr and not getattr(
-                parser_class,
-                "uses_remote_service",
-                False,
-            ):
-                self.log.warning(
-                    "Remote OCR was requested for this document but no remote "
-                    "parser is available for it, processing locally instead.",
-                )
+            parser_class = configured_parser_class()
 
             # Notify all listeners that we're going to do some work.
 
@@ -518,7 +495,7 @@ class ConsumerPlugin(
                 mailrule_id=self.input_doc.mailrule_id,
             ) as document_parser:
                 self.log.debug(
-                    f"Parser: {document_parser.name} v{document_parser.version}",
+                    f"Parser: {document_parser.identity}",
                 )
 
                 # New versions skip the barcode plugin, so read their barcodes here
@@ -560,6 +537,7 @@ class ConsumerPlugin(
                         directory,
                         job_id=self.input_doc.job_id,
                         allow_remote=allow_remote,
+                        operation="consume",
                     )
                     self._send_progress(
                         70,
@@ -638,9 +616,7 @@ class ConsumerPlugin(
                         if self.input_doc.job_id:
                             from documents.ingestion_jobs import validate_application
 
-                            validate_application(
-                                self.input_doc.job_id, registry=get_parser_registry()
-                            )
+                            validate_application(self.input_doc.job_id)
                         # store the document.
                         if self.input_doc.root_document_id:
                             # If this is a new version of an existing document, we need

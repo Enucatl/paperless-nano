@@ -397,15 +397,11 @@ class ParserRegistry:
             ):
                 continue
 
-            capabilities = getattr(parser_class, "capabilities", None)
-            if capabilities is None:
-                capabilities = {
-                    "text": callable(getattr(parser_class, "get_text", None)),
-                    "thumbnail": callable(getattr(parser_class, "get_thumbnail", None)),
-                    "metadata": callable(
-                        getattr(parser_class, "extract_metadata", None)
-                    ),
-                }
+            capabilities = {
+                "text": callable(getattr(parser_class, "get_text", None)),
+                "thumbnail": callable(getattr(parser_class, "get_thumbnail", None)),
+                "metadata": callable(getattr(parser_class, "extract_metadata", None)),
+            }
             if any(not capabilities.get(name, False) for name in required_capabilities):
                 continue
 

@@ -143,12 +143,12 @@ def stage_consumption(
         return job
 
 
-def validate_application(job_id: str | UUID, *, registry: object = None) -> None:
+def validate_application(job_id: str | UUID) -> None:
     """Recheck the original actor, version revision, and deadline before storing."""
     job = DocumentJob.objects.get(pk=job_id)
     from documents.parser_operations import validate_parser_job
 
-    validate_parser_job(job, registry=registry)
+    validate_parser_job(job)
     if (
         job.status == DocumentJob.Status.RUNNING
         and job.timeout
@@ -192,8 +192,6 @@ def stage_outputs(
     directory = job_directory(job.pk)
     if not isinstance(text, str):
         raise RejectedResult("Parser text must be a string")
-    if job.configuration["produce_archive"] and archive is None:
-        raise RejectedResult("Parser omitted the required archive")
     result = {
         "original": _file_result(directory, original, "original"),
         "thumbnail": _file_result(directory, thumbnail, "thumbnail.webp"),
