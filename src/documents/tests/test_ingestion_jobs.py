@@ -333,7 +333,7 @@ def test_publication_crash_keeps_input_and_does_not_create_a_second_document(
         assert target.is_file()
         raise WorkerStopped
 
-    mocker.patch(
+    interrupted = mocker.patch(
         "documents.ingestion_jobs.publish_file",
         side_effect=stop_after_publication,
     )
@@ -342,10 +342,14 @@ def test_publication_crash_keeps_input_and_does_not_create_a_second_document(
 
     assert not Document.objects.exists()
     assert _retained_bytes(job, original_bytes)
-    with pytest.raises(ingestion_jobs.NeedsAttention):
-        ingestion_jobs.run_consumption(job.pk)
+    mocker.stop(interrupted)
+    result = ingestion_jobs.run_consumption(job.pk)
     parser.parse.assert_called_once()
-    assert not Document.objects.exists()
+    assert Document.objects.count() == 1
+    assert (
+        Document.objects.get(pk=result["document_id"]).source_path.read_bytes()
+        == original_bytes
+    )
 
 
 def test_version_upload_rejects_changed_root_before_creating_version(

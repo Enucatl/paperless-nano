@@ -406,7 +406,6 @@ def reconcile_document_files(instance: Document) -> None:
                     settings.ORIGINALS_DIR,
                 )
                 create_source_path_directory(instance.source_path)
-                _journal_ingestion_move(old_source_path, instance.source_path)
                 shutil.move(old_source_path, instance.source_path)
                 original_moved = True
 
@@ -418,7 +417,6 @@ def reconcile_document_files(instance: Document) -> None:
                     settings.ARCHIVE_DIR,
                 )
                 create_source_path_directory(instance.archive_path)
-                _journal_ingestion_move(old_archive_path, instance.archive_path)
                 shutil.move(old_archive_path, instance.archive_path)
                 archive_moved = True
 
@@ -481,21 +479,3 @@ def reconcile_document_files(instance: Document) -> None:
             "pk",
         ):
             reconcile_document_files(version_doc)
-
-
-def _journal_ingestion_move(source: Path, target: Path) -> None:
-    """Keep workflow-induced moves recoverable if ingestion rolls back."""
-    from documents.job_context import active_ingestion_job
-
-    if job_id := active_ingestion_job.get():
-        from documents.ingestion_jobs import record_publication
-
-        record_publication(
-            job_id,
-            {
-                "source": str(source),
-                "target": str(target),
-                "checksum": compute_checksum(source),
-                "operation": "move",
-            },
-        )

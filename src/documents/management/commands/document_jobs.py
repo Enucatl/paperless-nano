@@ -61,6 +61,18 @@ class Command(PaperlessCommand):
                         )
                     if (
                         job.kind == "consume"
+                        and job.result.get("lifecycle")
+                        and job.status == DocumentJob.Status.ATTENTION
+                        and job.result.get("phase") == "preparing"
+                    ):
+                        if options["acknowledge_effects"]:
+                            raise CommandError(
+                                "Preparation requires a validated plugin reconciliation result, not acknowledgment"
+                            )
+                        job.status = DocumentJob.Status.RUNNING
+                        job.save(update_fields=["status"])
+                    elif (
+                        job.kind == "consume"
                         and job.status == DocumentJob.Status.ATTENTION
                     ):
                         payload = job.result.get("payload")
@@ -88,6 +100,11 @@ class Command(PaperlessCommand):
                             }:
                                 job.result[effect] = "done"
                         job.result["callbacks_acknowledged"] = True
+                        for entry in job.result.get("invocations", {}).values():
+                            if entry["status"] in {"running", "unknown", "failed"}:
+                                entry.update(
+                                    status="succeeded", result=None, acknowledged=True
+                                )
                         followup_ids = [
                             followup["id"]
                             for followup in job.result.get("workflow_followups", [])
@@ -123,10 +140,7 @@ class Command(PaperlessCommand):
                         DocumentJob.Status.PREPARED,
                         DocumentJob.Status.COMMITTED,
                         DocumentJob.Status.SUCCEEDED,
-                    } or (
-                        job.kind == "consume"
-                        and job.status == DocumentJob.Status.PREPARED
-                    ):
+                    }:
                         raise CommandError(
                             f"Job status {job.status!r} cannot be resumed by this command; "
                             "its recovery inputs remain retained."
@@ -157,6 +171,8 @@ class Command(PaperlessCommand):
             "followup": job.result.get("followup", []),
             "workflow_followups": job.result.get("workflow_followups", []),
             "progress": job.result.get("progress", job.status),
+            "phase": job.result.get("phase"),
+            "invocations": job.result.get("invocations", {}),
             "dispatched": options["resume"],
         }
         self.stdout.write(json.dumps(report, indent=2))

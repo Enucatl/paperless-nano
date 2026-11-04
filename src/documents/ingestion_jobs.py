@@ -26,7 +26,7 @@ from kombu.utils.json import loads as transport_loads
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import DocumentSource
-from documents.file_handling import validate_path_in_root
+from documents.ingestion_storage import publish_file  # noqa: F401
 from documents.job_context import active_ingestion_job
 from documents.jobs import RejectedResult
 from documents.jobs import _check_permission
@@ -85,6 +85,13 @@ def stage_consumption(
             status=DocumentJob.Status.STAGING,
             timeout=settings.CELERY_TASK_TIME_LIMIT,
             dispatch_options=json.loads(transport_dumps(dispatch_options or {})),
+            result={
+                "lifecycle": 1,
+                "scripts": {
+                    "pre": settings.PRE_CONSUME_SCRIPT,
+                    "post": settings.POST_CONSUME_SCRIPT,
+                },
+            },
             input={
                 "source": int(input_doc.source),
                 "source_path": str(source),
@@ -134,7 +141,8 @@ def stage_consumption(
             ] != job.input["source_identity"]:
                 raise RejectedResult("Input changed during admission")
             job.status = DocumentJob.Status.QUEUED
-            job.save(update_fields=["input", "status"])
+            job.result["phase"] = "accepted"
+            job.save(update_fields=["input", "status", "result"])
         except Exception as error:
             job.status = DocumentJob.Status.REJECTED
             job.error = str(error)
@@ -215,39 +223,6 @@ def stage_outputs(
     )
 
 
-def publish_file(job_id: str, source: Path, target: Path) -> None:
-    """Journal every permanent write outside database rollback before copying."""
-    directory = job_directory(job_id)
-    validate_path_in_root(source, directory)
-    if not any(
-        target.resolve().is_relative_to(root.resolve())
-        for root in (
-            settings.ORIGINALS_DIR,
-            settings.ARCHIVE_DIR,
-            settings.THUMBNAIL_DIR,
-        )
-    ):
-        raise RejectedResult("Publication target is outside document storage")
-    checksum = compute_checksum(source)
-    job = DocumentJob.objects.get(pk=job_id)
-    reference = next(
-        (
-            value
-            for value in job.result.values()
-            if isinstance(value, dict) and value.get("name") == source.name
-        ),
-        None,
-    )
-    if reference is None or reference["checksum"] != checksum:
-        raise RejectedResult("Staged publication output changed after validation")
-    if target.exists():
-        raise RejectedResult("Publication would overwrite an existing file")
-    record_publication(
-        job_id, {"source": source.name, "target": str(target), "checksum": checksum}
-    )
-    _copy(source, target)
-
-
 def record_publication(job_id: str, entry: dict) -> None:
     """Persist file publication or relocation intent independently of DB rollback."""
     import os
@@ -288,14 +263,31 @@ def commit_consumption(job_id: str, document: Document) -> None:
             "remove_source": True,
             "progress": "completion",
             "root_id": document.root_document_id or document.pk,
-            "followup": ["post_consume", "index", "cache", "delivery", "cleanup"],
+            "followup": [
+                "metadata",
+                "workflows",
+                "extensions",
+                "post_consume",
+                "index",
+                "cache",
+                "delivery",
+                "cleanup",
+            ],
             "post_consume": "pending"
-            if job.configuration.get("post_consume_script")
+            if job.result.get("scripts", {}).get(
+                "post", job.configuration.get("post_consume_script")
+            )
             else "done",
         }
     )
-    job.status = DocumentJob.Status.COMMITTED
-    job.save(update_fields=["status", "result"])
+    if job.result.get("lifecycle"):
+        from documents.ingestion_state import transition
+
+        job.save(update_fields=["result"])
+        transition(job, "committed")
+    else:
+        job.status = DocumentJob.Status.COMMITTED
+        job.save(update_fields=["status", "result"])
 
 
 def run_post_consume(job_id: str, callback: Callable[[], None]) -> None:
@@ -306,13 +298,36 @@ def run_post_consume(job_id: str, callback: Callable[[], None]) -> None:
         return
     if state == "started":
         raise NeedsAttention("Post-consume script may already have run")
-    if job.configuration.get("post_consume_script") != settings.POST_CONSUME_SCRIPT:
+    if (
+        job.result.get("scripts", {}).get(
+            "post", job.configuration.get("post_consume_script")
+        )
+        != settings.POST_CONSUME_SCRIPT
+    ):
         raise NeedsAttention("Post-consume script configuration changed")
-    job.result["post_consume"] = "started"
-    job.save(update_fields=["result"])
-    callback()
-    job.result["post_consume"] = "done"
-    job.save(update_fields=["result"])
+
+    def execute(_identifier: str) -> None:
+        """Retain the legacy marker alongside the identified hook outcome."""
+        job.refresh_from_db()
+        job.result["post_consume"] = "started"
+        job.save(update_fields=["result"])
+        callback()
+        job.refresh_from_db()
+        job.result["post_consume"] = "done"
+        job.save(update_fields=["result"])
+
+    if job.result.get("lifecycle"):
+        from documents.ingestion_state import invoke
+
+        invoke(
+            job,
+            "complete:post_consume",
+            "paperless.post_consume",
+            {"script": settings.POST_CONSUME_SCRIPT},
+            execute,
+        )
+    else:
+        execute(str(job.pk))
 
 
 def _input(job: DocumentJob) -> tuple[ConsumableDocument, DocumentMetadataOverrides]:
@@ -349,10 +364,22 @@ def finish_consumption(job: DocumentJob) -> None:
     from documents.search import get_backend
     from paperless.config import AIConfig
 
+    modern = bool(job.result.get("lifecycle"))
+    if modern:
+        from documents.ingestion import complete_document
+        from documents.ingestion_state import transition
+
+        transition(job, "completing")
+        token = active_ingestion_job.set(str(job.pk))
+        try:
+            complete_document(job)
+        finally:
+            active_ingestion_job.reset(token)
+        job.refresh_from_db()
     payload = job.result["payload"]
     if isinstance(payload, dict) and "document_id" in payload:
         document = Document.objects.filter(pk=payload["document_id"]).first()
-        if document and job.result.get("post_consume") != "done":
+        if document:
             input_doc, overrides = _input(job)
             with ProgressManager(
                 overrides.filename or job.input["filename"], str(job.pk)
@@ -360,6 +387,9 @@ def finish_consumption(job: DocumentJob) -> None:
                 plugin = ConsumerPlugin(
                     input_doc, overrides, progress, job_directory(job.pk), str(job.pk)
                 )
+                from uuid import uuid5
+
+                plugin.invocation_id = str(uuid5(job.pk, "complete:post_consume"))
                 run_post_consume(
                     str(job.pk), lambda: plugin.run_post_consume_script(document)
                 )
@@ -371,7 +401,9 @@ def finish_consumption(job: DocumentJob) -> None:
             raise NeedsAttention("Post-consume script may already have run")
     finish_ingestion_followups(job)
     job.refresh_from_db()
-    if isinstance(payload, dict) and "document_id" in payload:
+
+    def index_and_cache(_identifier: str) -> None:
+        """Repeat only derived-state writes from the current committed document."""
         with get_backend().batch_update() as batch:
             root = Document.objects.filter(pk=job.result["root_id"]).first()
             if root:
@@ -385,16 +417,67 @@ def finish_consumption(job: DocumentJob) -> None:
                 raise RuntimeError("AI indexing is waiting for migration")
         clear_document_caches(payload["document_id"])
         clear_document_caches(job.result["root_id"])
+
+    if isinstance(payload, dict) and "document_id" in payload:
+        if modern:
+            from documents.ingestion_state import invoke
+
+            invoke(
+                job,
+                "complete:index_cache",
+                "paperless.index_cache",
+                {"root_id": job.result["root_id"]},
+                index_and_cache,
+                replay_safe=True,
+            )
+        else:
+            index_and_cache(str(job.pk))
+    if modern and isinstance(payload, dict) and "document_id" in payload:
+        from documents import tasks
+        from documents.consumer import ConsumerStatusShortMessage
+        from documents.ingestion import metadata_from_json
+        from documents.plugins.helpers import ProgressStatusOptions
+
+        def notify(_identifier: str) -> None:
+            """Report completion after required effects and derived-state updates."""
+            input_doc, _ = _input(job)
+            overrides = metadata_from_json(job.result["metadata"])
+            with tasks.ProgressManager(
+                overrides.filename or job.input["filename"], str(job.pk)
+            ) as progress:
+                consumer = ConsumerPlugin(
+                    input_doc, overrides, progress, job_directory(job.pk), str(job.pk)
+                )
+                consumer._send_progress(
+                    100,
+                    100,
+                    ProgressStatusOptions.SUCCESS,
+                    ConsumerStatusShortMessage.FINISHED,
+                    payload["document_id"],
+                )
+
+        invoke(
+            job,
+            "complete:progress",
+            "paperless.progress",
+            {"document_id": payload["document_id"]},
+            notify,
+            replay_safe=True,
+        )
     job.refresh_from_db()
     job.status = DocumentJob.Status.SUCCEEDED
     job.result["followup"] = ["delivery", "cleanup"]
     job.result["progress"] = "delivery"
     job.error = ""
     job.save(update_fields=["status", "result", "error"])
+    if modern and not has_callbacks(job):
+        transition(job, "complete")
 
 
 def cleanup_consumption(job: DocumentJob) -> None:
     """Delete only the admitted source identity, after durable success."""
+    job.result["cleanup"] = "running"
+    job.save(update_fields=["result"])
     payload = job.result.get("payload")
     if isinstance(payload, dict) and payload.get("document_id"):
         document = Document.global_objects.filter(pk=payload["document_id"]).first()
@@ -437,11 +520,19 @@ def cleanup_consumption(job: DocumentJob) -> None:
             ] and compute_checksum(shadow) == reference["checksum"]:
                 shadow.unlink()
                 _sync_directory(shadow.parent)
+    from documents.ingestion_storage import cleanup_publication
+
+    cleanup_publication(job)
     directory = job_directory(job.pk)
     if directory.exists():
         shutil.rmtree(directory)
         _sync_directory(directory.parent)
+    if job.result.get("lifecycle"):
+        from documents.ingestion_state import transition
+
+        transition(job, "complete")
     job.cleaned = True
+    job.result["cleanup"] = "succeeded"
     job.result["followup"] = []
     job.result["progress"] = "done"
     job.save(update_fields=["cleaned", "result"])
@@ -458,13 +549,25 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     token = active_ingestion_job.set(str(job_id))
     try:
         job = DocumentJob.objects.get(pk=job_id)
-        if job.status in {
-            DocumentJob.Status.RUNNING,
-            DocumentJob.Status.STAGING,
-            DocumentJob.Status.ATTENTION,
-        }:
+        modern = job.result.get("lifecycle") == 1
+        if job.result.get("lifecycle") not in {None, 1} or (
+            job.status == DocumentJob.Status.PREPARED and not modern
+        ):
             raise NeedsAttention(
-                "Interrupted ingestion may have external effects; inspect its journal before recovery"
+                "Unknown or legacy preparation contract; inspect retained artifacts"
+            )
+        if (
+            modern
+            and job.status == DocumentJob.Status.ATTENTION
+            and job.result.get("phase") == "preparing"
+        ):
+            job.status = DocumentJob.Status.RUNNING
+            job.save(update_fields=["status"])
+        if job.status in {DocumentJob.Status.STAGING, DocumentJob.Status.ATTENTION} or (
+            job.status == DocumentJob.Status.RUNNING and not modern
+        ):
+            raise NeedsAttention(
+                "Interrupted legacy ingestion or unresolved effects require inspection"
             )
         if job.status in {DocumentJob.Status.FAILED, DocumentJob.Status.REJECTED}:
             raise RejectedResult(job.error)
@@ -474,24 +577,30 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
             validate_application(job.pk)
             if compute_checksum(directory / "input") != job.input["checksum"]:
                 raise RejectedResult("Staged input has changed")
-            job.status = DocumentJob.Status.RUNNING
-            job.updated = timezone.now()
-            job.attempts += 1
-            job.configuration = {"post_consume_script": settings.POST_CONSUME_SCRIPT}
-            job.save()
-            from documents.tasks import _consume_file_pipeline
-
-            input_doc, overrides = _input(job)
-            payload = _consume_file_pipeline(
-                input_doc, overrides, task_id=task_id or str(job.pk)
+            # Queued legacy jobs have never invoked plugins and can adopt the contract.
+            job.result.setdefault("lifecycle", 1)
+            job.result.setdefault("phase", "accepted")
+            job.result.setdefault(
+                "scripts",
+                {
+                    "pre": settings.PRE_CONSUME_SCRIPT,
+                    "post": settings.POST_CONSUME_SCRIPT,
+                },
             )
+            job.attempts += 1
+            job.save(update_fields=["result", "attempts"])
+            from documents.ingestion_state import transition
+
+            transition(job, "preparing")
+        if job.status == DocumentJob.Status.RUNNING:
+            from documents.ingestion import prepare
+
+            prepare(job, task_id or str(job.pk))
+        if job.status == DocumentJob.Status.PREPARED:
+            from documents.ingestion import publish
+
+            publish(job, task_id or str(job.pk))
             job.refresh_from_db()
-            if job.status == DocumentJob.Status.RUNNING:
-                job.result["payload"] = payload
-                job.result["remove_source"] = not input_doc.original_file.exists()
-                job.result["followup"] = ["delivery", "cleanup"]
-                job.status = DocumentJob.Status.COMMITTED
-                job.save(update_fields=["result", "status"])
         if job.status == DocumentJob.Status.COMMITTED:
             # Completion indexing is deliberately outside the deferral scope.
             active_ingestion_job.reset(token)
@@ -515,10 +624,16 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     except Exception as error:
         job = DocumentJob.objects.get(pk=job_id)
         job.error = str(error)
-        if isinstance(error, NeedsAttention) or job.status in {
-            DocumentJob.Status.RUNNING,
-            DocumentJob.Status.STAGING,
-        }:
+        if (
+            isinstance(error, NeedsAttention)
+            or job.status == DocumentJob.Status.STAGING
+            or (
+                any(
+                    entry["status"] == "unknown"
+                    for entry in job.result.get("invocations", {}).values()
+                )
+            )
+        ):
             job.status = DocumentJob.Status.ATTENTION
         elif (
             isinstance(error, RejectedResult)

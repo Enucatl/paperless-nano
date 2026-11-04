@@ -47,6 +47,38 @@ def effective_configuration(*, mailrule_id: int | None = None) -> dict:
     }
 
 
+def parser_replay_safe(
+    parser: type,
+    source: Path,
+    mime_type: str,
+    filename: str,
+    directory: Path,
+    *,
+    allow_remote: bool,
+) -> bool:
+    """Use an implementation's explicit replay promise, including the default adapter."""
+    if parser is DefaultParser:
+        try:
+            parser = parser().selected_class(
+                {
+                    "source": file_reference(directory, source),
+                    "mime_type": mime_type,
+                    "filename": filename,
+                    "allow_remote": allow_remote,
+                },
+                directory,
+            )
+        except InvalidParserResult as error:
+            from documents.jobs import RejectedResult
+
+            raise RejectedResult(str(error)) from error
+    return getattr(parser, "replay_safe", False) is True or parser.__module__ in {
+        "paperless.parsers.tesseract",
+        "paperless.parsers.text",
+        "paperless.parsers.mail",
+    }
+
+
 def run_parser(
     parser: object,
     source: Path,
@@ -58,6 +90,7 @@ def run_parser(
     job_id: str | None = None,
     allow_remote: bool = False,
     operation: str = "process",
+    invocation_id: str | None = None,
 ) -> dict:
     """Execute and validate a provider without granting it permanent-file ownership."""
     from documents.jobs import RejectedResult
@@ -97,6 +130,8 @@ def run_parser(
         "output_dir": output_dir,
         "allow_remote": allow_remote,
     }
+    if invocation_id or job_id:
+        request["invocation_id"] = invocation_id or str(job_id)
     request["revision"] = hashlib.sha256(
         json.dumps(request, sort_keys=True).encode()
     ).hexdigest()

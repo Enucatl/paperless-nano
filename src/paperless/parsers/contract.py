@@ -6,6 +6,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import NotRequired
 from typing import Protocol
 from typing import TypedDict
 
@@ -32,6 +33,7 @@ class ParserRequest(TypedDict):
     output_type: str
     output_dir: str
     allow_remote: bool
+    invocation_id: NotRequired[str]
 
 
 class ParserResult(TypedDict):

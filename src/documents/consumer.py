@@ -326,6 +326,7 @@ class ConsumerPlugin(
         script_env["DOCUMENT_SOURCE_PATH"] = original_file_path
         script_env["DOCUMENT_WORKING_PATH"] = working_file_path
         script_env["TASK_ID"] = self.task_id or ""
+        script_env["INVOCATION_ID"] = self.invocation_id or ""
 
         try:
             run_subprocess(
@@ -395,6 +396,7 @@ class ConsumerPlugin(
         )
         script_env["DOCUMENT_ORIGINAL_FILENAME"] = str(document.original_filename)
         script_env["TASK_ID"] = self.task_id or ""
+        script_env["INVOCATION_ID"] = self.invocation_id or ""
 
         try:
             run_subprocess(
@@ -413,9 +415,9 @@ class ConsumerPlugin(
                 exception=e,
             )
 
-    def run(self) -> "ConsumeFileSuccessResult":
+    def prepare(self) -> dict:
         """
-        Return the document object if it was successfully created.
+        Return retained preparation outputs without creating a document.
         """
 
         # Preflight has already run including progress update to 0%
@@ -478,13 +480,29 @@ class ConsumerPlugin(
 
             # Notify all listeners that we're going to do some work.
 
-            document_consumption_started.send(
-                sender=self.__class__,
-                filename=self.working_copy,
-                logging_group=self.logging_group,
+            def started() -> None:
+                """Notify extensions before processing, under a tracked invocation."""
+                document_consumption_started.send(
+                    sender=self.__class__,
+                    filename=self.working_copy,
+                    logging_group=self.logging_group,
+                )
+
+            invoke = getattr(self, "invoke", lambda _name, action, safe=False: action())
+            invoke(
+                "started_signal",
+                started,
+                not document_consumption_started.has_listeners(),
             )
 
-            self.run_pre_consume_script()
+            def pre_consume() -> None:
+                self.run_pre_consume_script()
+
+            invoke(
+                "pre_consume",
+                pre_consume,
+                not bool(settings.PRE_CONSUME_SCRIPT),
+            )
 
             # This doesn't parse the document yet, but gives us a parser.
             configuration = effective_configuration(
@@ -539,6 +557,7 @@ class ConsumerPlugin(
                         job_id=self.input_doc.job_id,
                         allow_remote=allow_remote,
                         operation="consume",
+                        invocation_id=self.invocation_id,
                     )
                     self._send_progress(
                         70,
@@ -596,251 +615,221 @@ class ConsumerPlugin(
                         text=text,
                     )
 
-                # Prepare the document classifier.
+                else:
+                    retained = self.base_tmp_dir / "prepared"
+                    retained.mkdir(exist_ok=True)
+                    for name, source in (
+                        ("original", publication_original),
+                        ("thumbnail.webp", thumbnail),
+                        ("archive.pdf", archive_path),
+                    ):
+                        if source:
+                            copy_file_with_basic_stats(source, retained / name)
+                    publication_original = retained / "original"
+                    thumbnail = retained / "thumbnail.webp"
+                    archive_path = retained / "archive.pdf" if archive_path else None
+                return {
+                    "original": str(publication_original),
+                    "thumbnail": str(thumbnail),
+                    "archive": str(archive_path) if archive_path else None,
+                    "text": text,
+                    "date": date.isoformat() if date else None,
+                    "page_count": page_count,
+                    "mime_type": mime_type,
+                }
 
-                # TODO: I don't really like to do this here, but this way we avoid
-                #   reloading the classifier multiple times, since there are multiple
-                #   post-consume hooks that all require the classifier.
+    def publish(self, prepared: dict) -> Document:
+        """Create the document and publish retained files in the caller's transaction."""
+        publication_original = Path(prepared["original"])
+        thumbnail = Path(prepared["thumbnail"])
+        archive_path = Path(prepared["archive"]) if prepared["archive"] else None
+        text, page_count, mime_type = (
+            prepared[key] for key in ("text", "page_count", "mime_type")
+        )
+        date = (
+            datetime.datetime.fromisoformat(prepared["date"])
+            if prepared["date"]
+            else None
+        )
+        self.working_copy = publication_original
+        self.unmodified_original = None
+        # store the document.
+        if self.input_doc.root_document_id:
+            # If this is a new version of an existing document, we need
+            # to make sure we're not creating a new document, but updating
+            # the existing one.
+            root_doc = Document.objects.get(
+                pk=self.input_doc.root_document_id,
+            )
+            original_document = self._create_version_from_root(
+                root_doc,
+                text=text,
+                page_count=page_count,
+                mime_type=mime_type,
+            )
+            actor = None
 
-                classifier = load_classifier()
-
-                self._send_progress(
-                    95,
-                    100,
-                    ProgressStatusOptions.WORKING,
-                    ConsumerStatusShortMessage.SAVE_DOCUMENT,
-                )
-                # now that everything is done, we can start to store the document
-                # in the system. This will be a transaction and reasonably fast.
-                try:
-                    with transaction.atomic():
-                        if self.input_doc.job_id:
-                            from documents.ingestion_jobs import validate_application
-
-                            validate_application(self.input_doc.job_id)
-                        # store the document.
-                        if self.input_doc.root_document_id:
-                            # If this is a new version of an existing document, we need
-                            # to make sure we're not creating a new document, but updating
-                            # the existing one.
-                            root_doc = Document.objects.get(
-                                pk=self.input_doc.root_document_id,
-                            )
-                            original_document = self._create_version_from_root(
-                                root_doc,
-                                text=text,
-                                page_count=page_count,
-                                mime_type=mime_type,
-                            )
-                            actor = None
-
-                            # Save the new version, potentially creating an audit log entry for the version addition if enabled.
-                            if (
-                                settings.AUDIT_LOG_ENABLED
-                                and self.metadata.actor_id is not None
-                            ):
-                                actor = User.objects.filter(
-                                    pk=self.metadata.actor_id,
-                                ).first()
-                                if actor is not None:
-                                    from auditlog.context import (  # type: ignore[import-untyped]
-                                        set_actor,
-                                    )
-
-                                    with set_actor(actor):
-                                        original_document.save()
-                                else:
-                                    original_document.save()
-                            else:
-                                original_document.save()
-
-                            self._store_barcodes(original_document)
-
-                            # Adding a version changes the effective document, so update root modified
-                            Document.objects.filter(pk=root_doc.pk).update(
-                                modified=timezone.now(),
-                            )
-
-                            # Create a log entry for the version addition, if enabled
-                            if settings.AUDIT_LOG_ENABLED:
-                                from auditlog.models import (  # type: ignore[import-untyped]
-                                    LogEntry,
-                                )
-
-                                LogEntry.objects.log_create(
-                                    instance=root_doc,
-                                    changes={
-                                        "Version Added": ["None", original_document.id],
-                                    },
-                                    action=LogEntry.Action.UPDATE,
-                                    actor=actor,
-                                    additional_data={
-                                        "reason": "Version added",
-                                        "version_id": original_document.id,
-                                    },
-                                )
-                            document = original_document
-                        else:
-                            document = self._store(
-                                text=text,
-                                date=date,
-                                page_count=page_count,
-                                mime_type=mime_type,
-                            )
-
-                        # If we get here, it was successful. Proceed with post-consume
-                        # hooks. If they fail, nothing will get changed.
-
-                        document = Document.objects.prefetch_related("versions").get(
-                            pk=document.pk,
-                        )
-
-                        document_consumption_finished.send(
-                            sender=self.__class__,
-                            document=document,
-                            logging_group=self.logging_group,
-                            classifier=classifier,
-                            original_file=publication_original,
-                        )
-
-                        # After everything is in the database, copy the files into
-                        # place. If this fails, we'll also rollback the transaction.
-                        with FileLock(settings.MEDIA_LOCK):
-                            generated_filename = generate_unique_filename(document)
-                            if (
-                                len(str(generated_filename))
-                                > Document.MAX_STORED_FILENAME_LENGTH
-                            ):
-                                self.log.warning(
-                                    "Generated source filename exceeds db path limit, falling back to default naming",
-                                )
-                                generated_filename = generate_filename(
-                                    document,
-                                    use_format=False,
-                                )
-                            document.filename = generated_filename
-                            validate_path_in_root(
-                                document.source_path,
-                                settings.ORIGINALS_DIR,
-                            )
-                            create_source_path_directory(document.source_path)
-
-                            self._write(
-                                publication_original,
-                                document.source_path,
-                            )
-
-                            self._write(
-                                thumbnail,
-                                document.thumbnail_path,
-                            )
-
-                            if archive_path and Path(archive_path).is_file():
-                                generated_archive_filename = generate_unique_filename(
-                                    document,
-                                    archive_filename=True,
-                                )
-                                if (
-                                    len(str(generated_archive_filename))
-                                    > Document.MAX_STORED_FILENAME_LENGTH
-                                ):
-                                    self.log.warning(
-                                        "Generated archive filename exceeds db path limit, falling back to default naming",
-                                    )
-                                    generated_archive_filename = generate_filename(
-                                        document,
-                                        archive_filename=True,
-                                        use_format=False,
-                                    )
-                                document.archive_filename = generated_archive_filename
-                                validate_path_in_root(
-                                    document.archive_path,
-                                    settings.ARCHIVE_DIR,
-                                )
-                                create_source_path_directory(document.archive_path)
-                                self._write(
-                                    archive_path,
-                                    document.archive_path,
-                                )
-
-                                document.archive_checksum = compute_checksum(
-                                    document.archive_path,
-                                )
-
-                        # Reconciliation takes the media lock after publication releases it.
-                        with document_metadata_update(document):
-                            document.save()
-
-                        if document.root_document_id:
-                            with document_update(
-                                document.root_document,
-                                sender=self.__class__,
-                                skip_ai_index=True,  # consumption owns AI completion
-                                index=not bool(self.input_doc.job_id),
-                            ):
-                                pass
-
-                        if self.input_doc.job_id:
-                            from documents.ingestion_jobs import commit_consumption
-
-                            commit_consumption(self.input_doc.job_id, document)
-
-                        # Delete the file only if it was successfully consumed
-                        if not self.input_doc.job_id:
-                            self.log.debug(
-                                f"Deleting original file {self.input_doc.original_file}",
-                            )
-                            self.input_doc.original_file.unlink()
-                        self.log.debug(f"Deleting working copy {self.working_copy}")
-                        self.working_copy.unlink()
-                        if self.unmodified_original is not None:  # pragma: no cover
-                            self.log.debug(
-                                f"Deleting unmodified original file {self.unmodified_original}",
-                            )
-                            self.unmodified_original.unlink()
-
-                        # https://github.com/jonaswinkler/paperless-ng/discussions/1037
-                        shadow_file = (
-                            Path(self.input_doc.original_file).parent
-                            / f"._{Path(self.input_doc.original_file).name}"
-                        )
-
-                        if not self.input_doc.job_id and Path(shadow_file).is_file():
-                            self.log.debug(f"Deleting shadow file {shadow_file}")
-                            Path(shadow_file).unlink()
-
-                except Exception as e:
-                    self._fail(
-                        str(e),
-                        f"The following error occurred while storing document "
-                        f"{self.filename} after parsing: {e}",
-                        exc_info=True,
-                        exception=e,
+            # Save the new version, potentially creating an audit log entry for the version addition if enabled.
+            if settings.AUDIT_LOG_ENABLED and self.metadata.actor_id is not None:
+                actor = User.objects.filter(
+                    pk=self.metadata.actor_id,
+                ).first()
+                if actor is not None:
+                    from auditlog.context import (  # type: ignore[import-untyped]
+                        set_actor,
                     )
 
-        if self.input_doc.job_id:
-            from documents.ingestion_jobs import run_post_consume
+                    with set_actor(actor):
+                        original_document.save()
+                else:
+                    original_document.save()
+            else:
+                original_document.save()
 
-            run_post_consume(
-                self.input_doc.job_id,
-                lambda: self.run_post_consume_script(document),
+            self._store_barcodes(original_document)
+
+            # Adding a version changes the effective document, so update root modified
+            Document.objects.filter(pk=root_doc.pk).update(
+                modified=timezone.now(),
             )
+
+            # Create a log entry for the version addition, if enabled
+            if settings.AUDIT_LOG_ENABLED:
+                from auditlog.models import LogEntry  # type: ignore[import-untyped]
+
+                LogEntry.objects.log_create(
+                    instance=root_doc,
+                    changes={
+                        "Version Added": ["None", original_document.id],
+                    },
+                    action=LogEntry.Action.UPDATE,
+                    actor=actor,
+                    additional_data={
+                        "reason": "Version added",
+                        "version_id": original_document.id,
+                    },
+                )
+            document = original_document
         else:
-            self.run_post_consume_script(document)
+            document = self._store(
+                text=text,
+                date=date,
+                page_count=page_count,
+                mime_type=mime_type,
+            )
 
-        self.log.info(f"Document {document} consumption finished")
+        if not self.input_doc.job_id:
+            document_consumption_finished.send(
+                sender=self.__class__,
+                document=document,
+                logging_group=self.logging_group,
+                classifier=load_classifier(),
+                original_file=publication_original,
+            )
 
+        # After everything is in the database, copy the files into
+        # place. If this fails, we'll also rollback the transaction.
+        with FileLock(settings.MEDIA_LOCK):
+            generated_filename = generate_unique_filename(document)
+            if len(str(generated_filename)) > Document.MAX_STORED_FILENAME_LENGTH:
+                self.log.warning(
+                    "Generated source filename exceeds db path limit, falling back to default naming",
+                )
+                generated_filename = generate_filename(
+                    document,
+                    use_format=False,
+                )
+            document.filename = generated_filename
+            validate_path_in_root(
+                document.source_path,
+                settings.ORIGINALS_DIR,
+            )
+            create_source_path_directory(document.source_path)
+
+            self._write(
+                publication_original,
+                document.source_path,
+            )
+
+            self._write(
+                thumbnail,
+                document.thumbnail_path,
+            )
+
+            if archive_path and Path(archive_path).is_file():
+                generated_archive_filename = generate_unique_filename(
+                    document,
+                    archive_filename=True,
+                )
+                if (
+                    len(str(generated_archive_filename))
+                    > Document.MAX_STORED_FILENAME_LENGTH
+                ):
+                    self.log.warning(
+                        "Generated archive filename exceeds db path limit, falling back to default naming",
+                    )
+                    generated_archive_filename = generate_filename(
+                        document,
+                        archive_filename=True,
+                        use_format=False,
+                    )
+                document.archive_filename = generated_archive_filename
+                validate_path_in_root(
+                    document.archive_path,
+                    settings.ARCHIVE_DIR,
+                )
+                create_source_path_directory(document.archive_path)
+                self._write(
+                    archive_path,
+                    document.archive_path,
+                )
+
+                document.archive_checksum = compute_checksum(
+                    document.archive_path,
+                )
+
+        # Reconciliation takes the media lock after publication releases it.
+        with document_metadata_update(document):
+            document.save()
+
+        if document.root_document_id and not self.input_doc.job_id:
+            with document_update(
+                document.root_document,
+                sender=self.__class__,
+                skip_ai_index=True,  # consumption owns AI completion
+                index=not bool(self.input_doc.job_id),
+            ):
+                pass
+
+        return document
+
+    def run(self) -> "ConsumeFileSuccessResult":
+        """Keep the execution-only plugin entry point for non-durable callers."""
+        prepared = self.prepare()
+        working_copy = self.working_copy
+        try:
+            with transaction.atomic():
+                document = self.publish(prepared)
+        except Exception as error:
+            self._fail(
+                str(error),
+                f"The following error occurred while storing document {self.filename} after parsing: {error}",
+                exc_info=True,
+                exception=error,
+            )
+        self.working_copy = working_copy
+        self.input_doc.original_file.unlink(missing_ok=True)
+        self.input_doc.original_file.with_name(
+            "._" + self.input_doc.original_file.name
+        ).unlink(missing_ok=True)
+        self.run_post_consume_script(document)
         self._send_progress(
             100,
             100,
             ProgressStatusOptions.SUCCESS,
             ConsumerStatusShortMessage.FINISHED,
-            document.id,
+            document.pk,
         )
-
-        # Return the most up to date fields
-        document.refresh_from_db()
-
         return ConsumeFileSuccessResult(document_id=document.pk)
 
     def _parse_title_placeholders(self, title: str) -> str:

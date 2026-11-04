@@ -167,6 +167,33 @@ def consume_file(
         raise
 
 
+def consumption_plugins(input_doc: ConsumableDocument) -> list[type[ConsumeTaskPlugin]]:
+    """Return the existing ordered ingestion extension points."""
+    from documents.barcodes import BarcodePlugin
+    from documents.consumer import AsnCheckPlugin
+    from documents.consumer import ConsumerPlugin
+    from documents.consumer import ConsumerPreflightPlugin
+    from documents.consumer import WorkflowTriggerPlugin
+    from documents.double_sided import CollatePlugin
+
+    return (
+        [
+            ConsumerPreflightPlugin,
+            ConsumerPlugin,
+        ]
+        if input_doc.root_document_id is not None
+        else [
+            ConsumerPreflightPlugin,
+            AsnCheckPlugin,
+            CollatePlugin,
+            BarcodePlugin,
+            AsnCheckPlugin,  # Re-run ASN check after barcode reading
+            WorkflowTriggerPlugin,
+            ConsumerPlugin,
+        ]
+    )
+
+
 def _consume_file_pipeline(
     input_doc: ConsumableDocument,
     overrides: DocumentMetadataOverrides | None = None,
@@ -178,13 +205,7 @@ def _consume_file_pipeline(
     | ConsumeFileDuplicateResult
     | None
 ):
-    from documents.barcodes import BarcodePlugin
-    from documents.consumer import AsnCheckPlugin
     from documents.consumer import ConsumeFileDuplicateError
-    from documents.consumer import ConsumerPlugin
-    from documents.consumer import ConsumerPreflightPlugin
-    from documents.consumer import WorkflowTriggerPlugin
-    from documents.double_sided import CollatePlugin
 
     token = consume_task_id.set((task_id or "")[:8])
     try:
@@ -199,22 +220,7 @@ def _consume_file_pipeline(
         if overrides is None:
             overrides = DocumentMetadataOverrides()
 
-        plugins: list[type[ConsumeTaskPlugin]] = (
-            [
-                ConsumerPreflightPlugin,
-                ConsumerPlugin,
-            ]
-            if input_doc.root_document_id is not None
-            else [
-                ConsumerPreflightPlugin,
-                AsnCheckPlugin,
-                CollatePlugin,
-                BarcodePlugin,
-                AsnCheckPlugin,  # Re-run ASN check after barcode reading
-                WorkflowTriggerPlugin,
-                ConsumerPlugin,
-            ]
-        )
+        plugins = consumption_plugins(input_doc)
 
         with (
             ProgressManager(

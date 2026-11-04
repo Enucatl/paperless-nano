@@ -282,6 +282,7 @@ def test_timeout_can_retry_without_publishing_partial_output(
     provider: type,
 ) -> None:
     """A failed provider attempt retains the input and the next attempt can succeed."""
+    provider.replay_safe = True
     job = jobs.stage_reprocess(sample_doc.pk)
     provider.process.side_effect = TimeoutError("provider deadline")
 
@@ -590,6 +591,7 @@ def test_retry_keeps_the_selected_configuration_and_provider(
     change: str,
 ) -> None:
     """A retry cannot silently replace the implementation of an admitted attempt."""
+    provider.replay_safe = True
     job = jobs.stage_reprocess(sample_doc.pk)
     provider.process.side_effect = TimeoutError("provider deadline")
     with pytest.raises(TimeoutError):

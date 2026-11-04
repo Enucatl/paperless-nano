@@ -46,6 +46,7 @@ def parser(
     class Parser:
         """The existing parser protocol backed by fixed, valid test outputs."""
 
+        replay_safe = True
         name = "Test parser"
         version = "1.0"
         requires_pdf_rendition = False
@@ -106,6 +107,10 @@ def test_staged_input_survives_loss_of_original(
     json.dumps(job.provider)
     json.dumps(job.result)
     assert job.provider["implementation"]["version"] == "1.0"
+    assert (
+        job.result["parser_request"]["invocation_id"]
+        == job.result["invocations"]["parser"]["id"]
+    )
     assert "remote_ocr_api_key" not in job.configuration["settings"]["remote"]
 
 
@@ -194,6 +199,7 @@ def test_new_version_during_parsing_rejects_result(
     """A result admitted for the root cannot replace a newly selected version."""
     job = jobs.stage_reprocess(sample_doc.pk)
     parser.parse.side_effect = lambda *args, **kwargs: DocumentFactory(
+        pk=sample_doc.pk + 1,
         root_document=sample_doc,
         version_index=1,
     )
@@ -659,3 +665,19 @@ def test_default_parser_rechecks_selected_instance_before_publication(
     parser.parse.assert_called_once()
     sample_doc.refresh_from_db()
     assert sample_doc.content == "test content"
+
+
+def test_opaque_parser_failure_is_not_replayed(sample_doc, parser) -> None:
+    """Reprocessing uses the same conservative invocation contract as ingestion."""
+    parser.replay_safe = False
+    parser.parse.side_effect = RuntimeError("external effect may have happened")
+    job = jobs.stage_reprocess(sample_doc.pk)
+    with pytest.raises(Exception):
+        jobs.run_reprocess(job.pk)
+    with pytest.raises(jobs.RejectedResult):
+        jobs.run_reprocess(job.pk)
+    parser.parse.assert_called_once()
+    job.refresh_from_db()
+    assert job.status == DocumentJob.Status.ATTENTION
+    assert job.result["invocations"]["parser"]["status"] == "unknown"
+    assert (jobs.job_directory(job.pk) / job.input["staged_name"]).exists()

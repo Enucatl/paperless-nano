@@ -146,6 +146,7 @@ def stage_reprocess(
         job = DocumentJob(
             id=job_id,
             status=DocumentJob.Status.STAGING,
+            result={"invocation_contract": 1},
             timeout=settings.CELERY_TASK_TIME_LIMIT,
             input={
                 "document_id": document.pk,
@@ -279,8 +280,13 @@ def _prepare(job: DocumentJob) -> None:
     job.status = DocumentJob.Status.RUNNING
     job.updated = timezone.now()
     configuration = _configuration()
+    if "parser_request" in job.result and job.configuration != configuration:
+        raise RejectedResult(
+            "Processing configuration or provider changed before retry"
+        )
     if "parser_request" not in job.result:
         job.configuration = configuration
+    job.result.setdefault("invocation_contract", 1)
     job.result["progress"] = "parsing"
     job.error = ""
     job.save()
@@ -289,24 +295,49 @@ def _prepare(job: DocumentJob) -> None:
         raise RejectedResult("Staged input has changed")
     parser_class = configured_parser_class()
     with configured_parser(parser_class, configuration) as parser:
-        parsed = run_parser(
-            parser,
-            source,
-            document.mime_type,
-            job.input["filename"],
-            configuration,
-            directory,
-            job_id=str(job.pk),
-            operation="reprocess",
-            allow_remote=job.input["remote_ocr"]
-            or RemoteOCRConfig().remote_ocr_by_default,
+        from documents.ingestion_state import invoke
+        from documents.parser_operations import parser_replay_safe
+
+        def execute(identifier: str) -> dict:
+            """Retain validated parser output before reprocessing publication."""
+            return run_parser(
+                parser,
+                source,
+                document.mime_type,
+                job.input["filename"],
+                configuration,
+                directory,
+                job_id=str(job.pk),
+                operation="reprocess",
+                invocation_id=identifier,
+                allow_remote=job.input["remote_ocr"]
+                or RemoteOCRConfig().remote_ocr_by_default,
+            )
+
+        parsed = invoke(
+            job,
+            "parser",
+            settings.PARSER,
+            {"configuration": configuration, "checksum": job.input["checksum"]},
+            execute,
+            replay_safe=parser_replay_safe(
+                parser_class,
+                source,
+                document.mime_type,
+                job.input["filename"],
+                directory,
+                allow_remote=job.input["remote_ocr"]
+                or RemoteOCRConfig().remote_ocr_by_default,
+            ),
         )
         job.refresh_from_db()
         result = {
+            "invocation_contract": 1,
             "content": parsed["text"],
             "page_count": parsed["page_count"],
             "parser_request": job.result["parser_request"],
             "parser_result": parsed,
+            "invocations": job.result["invocations"],
             "thumbnail": _file_result(
                 directory,
                 resolve_reference(directory, parsed["thumbnail"]),
@@ -522,7 +553,18 @@ def run_reprocess(job_id: UUID | str) -> bool:
         return False
     try:
         job = DocumentJob.objects.get(pk=job_id)
-        if job.status in {DocumentJob.Status.FAILED, DocumentJob.Status.REJECTED}:
+        if job.status in {
+            DocumentJob.Status.FAILED,
+            DocumentJob.Status.REJECTED,
+            DocumentJob.Status.ATTENTION,
+        }:
+            raise RejectedResult(job.error)
+        if job.status == DocumentJob.Status.RUNNING and not job.result.get(
+            "invocation_contract"
+        ):
+            job.status = DocumentJob.Status.ATTENTION
+            job.error = "Legacy parser execution was interrupted; reconcile external effects before recovery"
+            job.save(update_fields=["status", "error"])
             raise RejectedResult(job.error)
         try:
             if job.status in {
@@ -552,6 +594,11 @@ def run_reprocess(job_id: UUID | str) -> bool:
                 DocumentJob.Status.FAILED,
             }:
                 job.status = DocumentJob.Status.REJECTED
+            elif any(
+                entry["status"] in {"unknown", "running"} and not entry["replay_safe"]
+                for entry in job.result.get("invocations", {}).values()
+            ):
+                job.status = DocumentJob.Status.ATTENTION
             elif job.status == DocumentJob.Status.RUNNING:
                 job.status = (
                     DocumentJob.Status.FAILED

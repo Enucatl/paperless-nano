@@ -4,6 +4,7 @@ import datetime
 import logging
 import shutil
 from contextlib import nullcontext
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
@@ -58,6 +59,19 @@ logger = logging.getLogger("paperless.handlers")
 DRF_DATETIME_FIELD = serializers.DateTimeField()
 
 
+def legacy_consumption_receiver(function):
+    """Keep legacy signal calls while coordinated ingestion owns built-in steps."""
+
+    @wraps(function)
+    def receive(*args, **kwargs):
+        if not kwargs.get("coordinated", False):
+            return function(*args, **kwargs)
+        return None
+
+    return receive
+
+
+@legacy_consumption_receiver
 def add_inbox_tags(sender, document: Document, logging_group=None, **kwargs) -> None:
     inbox_tags = restrict_queryset_to_visible(
         Tag.objects.filter(is_inbox_tag=True),
@@ -68,6 +82,7 @@ def add_inbox_tags(sender, document: Document, logging_group=None, **kwargs) -> 
         document.add_nested_tags(inbox_tags)
 
 
+@legacy_consumption_receiver
 @classification_assignment
 def set_correspondent(
     sender: object,
@@ -131,6 +146,7 @@ def set_correspondent(
     return selected
 
 
+@legacy_consumption_receiver
 @classification_assignment
 def set_document_type(
     sender: object,
@@ -194,6 +210,7 @@ def set_document_type(
     return selected
 
 
+@legacy_consumption_receiver
 @classification_assignment
 def set_tags(
     sender: object,
@@ -267,6 +284,7 @@ def set_tags(
     return tags_to_add, tags_to_remove
 
 
+@legacy_consumption_receiver
 @classification_assignment
 def set_storage_path(
     sender: object,
@@ -530,6 +548,7 @@ def cleanup_user_deletion(sender, instance: User | Group, **kwargs) -> None:
             )
 
 
+@legacy_consumption_receiver
 def add_to_index(sender, document, **kwargs) -> None:
     from documents.job_context import active_ingestion_job
 
@@ -545,6 +564,7 @@ def add_to_index(sender, document, **kwargs) -> None:
     get_backend().add_or_update(document)
 
 
+@legacy_consumption_receiver
 def run_workflows_added(
     sender,
     document: Document,
@@ -962,6 +982,7 @@ def close_connection_pool_on_worker_shutdown(**kwargs) -> None:  # pragma: no co
             conn.close_pool()
 
 
+@legacy_consumption_receiver
 def add_or_update_document_in_llm_index(sender, document, **kwargs):
     """
     Add or update a document in the LLM index when it is created or updated.

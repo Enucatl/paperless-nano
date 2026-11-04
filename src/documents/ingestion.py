@@ -1,0 +1,408 @@
+"""Explicit preparation and publication operations for the ingestion coordinator."""
+
+import dataclasses
+import datetime
+from pathlib import Path
+
+import magic
+from django.conf import settings
+from django.db import transaction
+
+from documents.data_models import DocumentMetadataOverrides
+from documents.ingestion_state import invoke
+from documents.ingestion_state import transition
+from documents.jobs import _copy
+from documents.jobs import job_directory
+from documents.models import DocumentJob
+from documents.models import PaperlessTask
+from documents.utils import copy_basic_file_stats
+from paperless.parsers.contract import file_reference
+from paperless.parsers.contract import resolve_reference
+
+
+def metadata_from_json(value: dict) -> DocumentMetadataOverrides:
+    """Restore typed metadata at the existing plugin boundary."""
+    value = value.copy()
+    if value.get("created"):
+        value["created"] = datetime.date.fromisoformat(value["created"])
+    if value.get("custom_fields"):
+        value["custom_fields"] = {
+            int(key): item for key, item in value["custom_fields"].items()
+        }
+    return DocumentMetadataOverrides(**value)
+
+
+def prepare(job: DocumentJob, task_id: str) -> None:
+    """Retain each plugin outcome before advancing the durable Prepared boundary."""
+    from documents import tasks
+    from documents.consumer import AsnCheckPlugin
+    from documents.consumer import ConsumeFileDuplicateError
+    from documents.consumer import ConsumerPlugin
+    from documents.consumer import ConsumerPreflightPlugin
+    from documents.ingestion_jobs import NeedsAttention
+    from documents.ingestion_jobs import _input
+    from documents.ingestion_jobs import _json
+    from documents.plugins.base import NoCleanupPluginMixin
+    from documents.plugins.base import StopConsumeTaskError
+
+    directory = job_directory(job.pk)
+    input_doc, metadata = _input(job)
+    input_doc.mime_type = magic.from_file(input_doc.original_file, mime=True)
+    if job.result.get("scripts", {}).get("pre") != settings.PRE_CONSUME_SCRIPT:
+        raise NeedsAttention("Pre-consume script configuration changed")
+    receipt = PaperlessTask.objects.filter(task_id=task_id).first()
+    if receipt is not None:
+        receipt.input_data["mime_type"] = input_doc.mime_type
+        receipt.save(update_fields=["input_data"])
+    plugins = tasks.consumption_plugins(input_doc)
+    with tasks.ProgressManager(
+        metadata.filename or job.input["filename"], task_id
+    ) as progress:
+        for index, cls in enumerate(plugins):
+            key = f"prepare:{index}"
+            identity = (
+                f"{cls.__module__}.{cls.__qualname__}:{getattr(cls, 'version', '1')}"
+            )
+            temporary = directory / f"plugin-{index}"
+            temporary.mkdir(exist_ok=True)
+            plugin = cls(input_doc, metadata, progress, temporary, task_id)
+            inputs = {
+                "metadata": _json(dataclasses.asdict(metadata)),
+                "mime_type": input_doc.mime_type,
+                "source": file_reference(directory, input_doc.original_file),
+            }
+
+            def execute(identifier: str) -> dict:
+                """Validate and retain public outcomes before plugin cleanup."""
+                plugin.invocation_id = identifier
+                retained_input = resolve_reference(directory, inputs["source"])
+                working_input = temporary / retained_input.name
+                _copy(retained_input, working_input)
+                copy_basic_file_stats(retained_input, working_input)
+                input_doc.original_file = working_input
+                if not plugin.able_to_run:
+                    return {
+                        "metadata": inputs["metadata"],
+                        "source": inputs["source"],
+                        "mime_type": input_doc.mime_type,
+                        "skipped": True,
+                    }
+                plugin.setup()
+                stopped = None
+                prepared = None
+                try:
+                    if cls is ConsumerPlugin:
+
+                        def hook(name, action, safe):
+                            """Supply each hook its own stable invocation identity."""
+
+                            def execute_hook(identifier):
+                                previous = plugin.invocation_id
+                                plugin.invocation_id = identifier
+                                try:
+                                    action()
+                                finally:
+                                    plugin.invocation_id = previous
+
+                            return invoke(
+                                job,
+                                f"{key}:{name}",
+                                name,
+                                {
+                                    "script": job.result.get("scripts", {}).get("pre")
+                                    if name == "pre_consume"
+                                    else None
+                                },
+                                execute_hook,
+                                replay_safe=safe,
+                            )
+
+                        plugin.invoke = hook
+                        prepared = plugin.prepare()
+                        message = None
+                    else:
+                        message = plugin.run()
+                except StopConsumeTaskError as error:
+                    stopped = {"reason": error.message}
+                    message = None
+                except ConsumeFileDuplicateError as error:
+                    stopped = {
+                        "duplicate_of": error.duplicate_id,
+                        "duplicate_in_trash": error.in_trash,
+                    }
+                    message = None
+                if message is not None and not isinstance(message, (str, dict)):
+                    raise ValueError("Plugin returned an invalid message")
+                source = None
+                if input_doc.original_file.exists():
+                    retained = (
+                        directory / f"input-{index}" / input_doc.original_file.name
+                    )
+                    _copy(input_doc.original_file, retained)
+                    copy_basic_file_stats(input_doc.original_file, retained)
+                    source = file_reference(directory, retained)
+                elif stopped is None:
+                    raise ValueError(
+                        "Plugin removed its input without stopping ingestion"
+                    )
+                result = {
+                    "metadata": _json(dataclasses.asdict(plugin.metadata)),
+                    "source": source,
+                    "mime_type": input_doc.mime_type,
+                    "stopped": stopped,
+                    "message": message,
+                }
+                if prepared is not None:
+                    result["prepared"] = {
+                        **prepared,
+                        **{
+                            name: file_reference(directory, Path(prepared[name]))
+                            if prepared[name]
+                            else None
+                            for name in ("original", "thumbnail", "archive")
+                        },
+                    }
+                return result
+
+            # Only built-ins without opaque effects may repeat by default.
+            safe = (
+                cls is AsnCheckPlugin
+                or (
+                    cls is ConsumerPreflightPlugin
+                    and not settings.CONSUMER_DELETE_DUPLICATES
+                )
+                or cls.__dict__.get("replay_safe", False) is True
+            )
+            if cls is ConsumerPlugin:
+                # Preparation contains separately tracked hooks; parser implementations own replay promises.
+                from documents.parser_operations import parser_class
+                from documents.parser_operations import parser_replay_safe
+                from documents.signals import document_consumption_started
+                from paperless.config import RemoteOCRConfig
+
+                safe = parser_replay_safe(
+                    parser_class(),
+                    input_doc.original_file,
+                    input_doc.mime_type,
+                    plugin.filename,
+                    directory,
+                    allow_remote=metadata.remote_ocr
+                    or RemoteOCRConfig().remote_ocr_by_default,
+                )
+                safe = (
+                    safe
+                    and not settings.PRE_CONSUME_SCRIPT
+                    and not document_consumption_started.has_listeners()
+                )
+
+            def validate_outcome(outcome: dict) -> None:
+                """Validate recovered outcomes before recording invocation success."""
+                if not isinstance(outcome, dict) or not isinstance(
+                    outcome.get("metadata"), dict
+                ):
+                    raise ValueError("Invalid plugin metadata outcome")
+                metadata_from_json(outcome["metadata"])
+                if not isinstance(outcome.get("mime_type"), str):
+                    raise ValueError("Invalid plugin MIME type")
+                if outcome.get("source"):
+                    resolve_reference(directory, outcome["source"])
+                elif not outcome.get("stopped"):
+                    raise ValueError("Plugin outcome has no retained source")
+                if "prepared" in outcome:
+                    prepared_result = outcome["prepared"]
+                    if not isinstance(prepared_result.get("text"), str):
+                        raise ValueError("Prepared text must be a string")
+                    for name in ("original", "thumbnail", "archive"):
+                        if name != "archive" or prepared_result[name]:
+                            resolve_reference(directory, prepared_result[name])
+
+            result = invoke(
+                job,
+                key,
+                identity,
+                inputs,
+                execute,
+                replay_safe=safe,
+                reconcile=plugin.reconcile,
+                validate=validate_outcome,
+            )
+            if (
+                not isinstance(result, dict)
+                or "metadata" not in result
+                or "source" not in result
+            ):
+                raise NeedsAttention(
+                    f"Plugin {identity} returned an invalid recovery result"
+                )
+            metadata = metadata_from_json(result["metadata"])
+            if result["source"]:
+                input_doc.original_file = resolve_reference(directory, result["source"])
+                input_doc.mime_type = result["mime_type"]
+            plugin.metadata = metadata
+            # Cleanup has its own outcome; opaque cleanup is never blindly repeated.
+            import shutil
+
+            from documents.barcodes import BarcodePlugin
+
+            def cleanup(_identifier: str) -> None:
+                """Clean only the built-in barcode workspace without recreating runtime state."""
+                if result.get("skipped"):
+                    return
+                if cls is BarcodePlugin:
+                    shutil.rmtree(temporary, ignore_errors=False)
+                else:
+                    plugin.cleanup()
+
+            invoke(
+                job,
+                key + ":cleanup",
+                identity,
+                {},
+                cleanup,
+                replay_safe=cls is BarcodePlugin
+                or type(plugin).cleanup is NoCleanupPluginMixin.cleanup
+                or getattr(plugin, "cleanup_replay_safe", False) is True,
+            )
+            job.refresh_from_db()
+            if result.get("stopped") is not None:
+                job.result.update(
+                    payload=result["stopped"], remove_source=result["source"] is None
+                )
+                job.save(update_fields=["result"])
+                break
+            if "prepared" in result:
+                job.result["prepared"] = result["prepared"]
+                job.result["metadata"] = result["metadata"]
+                job.save(update_fields=["result"])
+        transition(job, "prepared")
+
+
+def publish(job: DocumentJob, task_id: str) -> None:
+    """Commit document, permanent references and completion intents atomically."""
+    from documents import tasks
+    from documents.consumer import ConsumerPlugin
+    from documents.ingestion_jobs import _input
+    from documents.ingestion_jobs import commit_consumption
+    from documents.ingestion_jobs import validate_application
+    from documents.ingestion_storage import reconcile_publication
+
+    reconcile_publication(job)
+    job.refresh_from_db()
+    if "prepared" not in job.result:
+        transition(job, "committed")
+        return
+    directory = job_directory(job.pk)
+    prepared = job.result["prepared"]
+    prepared = {
+        **prepared,
+        **{
+            name: str(resolve_reference(directory, prepared[name]))
+            if prepared[name]
+            else None
+            for name in ("original", "thumbnail", "archive")
+        },
+    }
+    input_doc, _ = _input(job)
+    metadata = metadata_from_json(job.result["metadata"])
+    with tasks.ProgressManager(
+        metadata.filename or job.input["filename"], task_id
+    ) as progress:
+        plugin = ConsumerPlugin(input_doc, metadata, progress, directory, task_id)
+        with transaction.atomic():
+            # The process lock serializes execution; row locking protects the commit checkpoint.
+            job = DocumentJob.objects.select_for_update().get(pk=job.pk)
+            if job.status != DocumentJob.Status.PREPARED:
+                raise ValueError("Publication requires a Prepared job")
+            validate_application(job.pk)
+            document = plugin.publish(prepared)
+            commit_consumption(str(job.pk), document)
+
+
+def complete_document(job: DocumentJob) -> None:
+    """Execute explicitly owned post-commit metadata, workflow and extension steps."""
+    from documents.consumer import ConsumerPlugin
+    from documents.consumer import load_classifier
+    from documents.models import Document
+    from documents.models import WorkflowTrigger
+    from documents.signals import document_consumption_finished
+    from documents.signals import document_updated
+    from documents.signals import handlers
+    from documents.workflows.runner import run_workflows
+
+    identifier = job.result.get("payload", {}).get("document_id")
+    if identifier is None:
+        return
+    classification = {}
+
+    def classifier():
+        """Load the selected classifier once, only when completion needs it."""
+        if "provider" not in classification:
+            classification["provider"] = load_classifier()
+        return classification["provider"]
+
+    steps = (
+        "inbox",
+        "correspondent",
+        "type",
+        "tags",
+        "storage",
+        "workflows",
+        "version",
+        "signal",
+    )
+    for name in steps:
+        document = Document.objects.filter(pk=identifier).first()
+        if document is None:
+            continue
+
+        def execute(invocation_id: str) -> None:
+            """Use current committed state for a named completion operation."""
+            if name in {"inbox", "correspondent", "type", "tags", "storage"}:
+                function = {
+                    "inbox": handlers.add_inbox_tags,
+                    "correspondent": handlers.set_correspondent,
+                    "type": handlers.set_document_type,
+                    "tags": handlers.set_tags,
+                    "storage": handlers.set_storage_path,
+                }[name]
+                function(
+                    sender=ConsumerPlugin,
+                    document=document,
+                    classifier=classifier() if name != "inbox" else None,
+                )
+            elif name == "workflows":
+                run_workflows(
+                    WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED,
+                    document,
+                    original_file=document.source_path,
+                )
+            elif name == "version" and document.root_document_id:
+                root = document.root_document
+                run_workflows(
+                    WorkflowTrigger.WorkflowTriggerType.DOCUMENT_UPDATED, root
+                )
+                document_updated.send(
+                    sender=ConsumerPlugin, document=root, skip_ai_index=True
+                )
+            elif name == "signal":
+                document_consumption_finished.send(
+                    sender=ConsumerPlugin,
+                    document=document,
+                    classifier=classifier(),
+                    original_file=document.source_path,
+                    coordinated=True,
+                    invocation_id=invocation_id,
+                )
+
+        invoke(
+            job,
+            "complete:" + name,
+            "paperless." + name,
+            {"document_id": identifier},
+            execute,
+            replay_safe=name == "inbox"
+            or (
+                name in {"correspondent", "type", "tags", "storage"}
+                and not settings.CLASSIFICATION_PROVIDER
+            ),
+        )

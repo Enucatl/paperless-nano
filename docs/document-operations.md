@@ -8,7 +8,8 @@ stale-result rejection, or process isolation already exist.
 
 The traces and #22 acceptance below describe the state before #23. The current
 ingestion, reprocessing, and callback recovery contract is documented under
-[Durable document jobs](#durable-document-jobs-23).
+[Recoverable ingestion coordinator](#recoverable-ingestion-coordinator-35);
+[Durable document jobs](#durable-document-jobs-23) records the earlier design.
 
 ## Owners and dependencies
 
@@ -1421,3 +1422,183 @@ containers, Python 3.14.10, Django 5.2.17, SQLite and frozen uv dependencies.
 `uv run --no-sync ruff format .`, changed-file Ruff checks and
 `git diff --check` passed. Full-suite, other database engines and live external
 workflow destinations were not tested.
+
+## Recoverable ingestion coordinator (#35)
+
+This section supersedes #23's conservative whole-ingestion recovery policy.
+`ingestion_jobs.run_consumption` owns the lifecycle; `ingestion.prepare`,
+`ingestion.publish`, and explicit completion steps perform the work. Consumers
+return preparation results and publication results, without advancing job state.
+The existing `DocumentJob` JSON fields hold a versioned lifecycle (`lifecycle: 1`),
+its durable `phase`, invocation records, and required completion intents. No new
+queue, workflow-engine dependency, or database table is introduced.
+
+### Phases and restart invariants
+
+| Phase | Durable meaning | Restart behavior |
+| --- | --- | --- |
+| Accepted | Input identity, checksum, options, script selections, and a private input copy exist. The job is `queued`; broker delivery is not required for discoverability. | The existing periodic recovery task republishes undispatched jobs. Interrupted admission remains `staging` and requires inspection. |
+| Preparing | Each invoked plugin has a stable UUID, implementation identity/version, input references/metadata, outcome status, result, and error. | Reuse successful outcomes. Replay only explicitly safe invocations; otherwise ask the plugin to reconcile or retain an unknown outcome for operator action. |
+| Prepared | Every required preparation invocation succeeded, retained outputs passed validation, and metadata, detected date, MIME type, page count, text, and file references survive worker loss. A terminal duplicate/stop outcome is an alternative to document creation. | Validate retained references and authority, reconcile owned publication leftovers, then publish without repeating OCR. |
+| Committed | Document/version creation, final stored file references, commit checkpoint, root identity, and required completion intents committed in one database transaction. | Never create the document again. Start or resume completion. |
+| Completing | Named metadata assignment, workflows, extension notification, hook, indexing/cache, and transport completion have independent outcomes. | Skip successful steps; retry safe derived-state work. Unknown external effects block completion until reconciled. |
+| Complete | Required work succeeded or was explicitly reconciled. | Retry outstanding storage/source cleanup only; never replay completed processing. |
+
+`ingestion_state.transition` checks legal phase order and required outcome
+presence. `attention`, `rejected`, and `failed` are operational statuses; they do
+not erase the phase or invocation evidence. The existing `running` status maps to
+Preparing. `committed` covers Committed/Completing. With native Celery callbacks,
+`succeeded` records successful task execution while `phase` remains Completing
+until callback receipts or an explicit operator acknowledgment allow cleanup.
+The phase is the authoritative end-to-end lifecycle, not Celery's task status.
+
+A job's lock lives outside its cleanup directory. All execution and operator
+recovery hold that lock; duplicate delivery receives `Ignore`. The commit also
+locks the job row and, for version ingestion, the root row. Workers must share
+`DATA_DIR`, including its lock files, as they already share durable job inputs.
+This works with SQLite and PostgreSQL; separate private worker data directories
+are not a distributed locking mechanism.
+
+### Steps, transactions, and compatibility
+
+| Component | Ownership and effects |
+| --- | --- |
+| Preflight and ASN checks | Existing ordered plugins. Read-only checks can repeat; duplicate deletion is conservatively treated as effectful. |
+| Collation and barcode plugins | Existing setup/run interfaces and stop/child-ingestion behavior remain. Outcomes retain metadata and a copied input before cleanup. Interrupted split/dispatch/collation is opaque unless the implementation promises safe replay or reconciles it. |
+| Consumption workflows | Still run before parsing and produce overrides. They may have external effects, so whole-workflow execution is not automatically replayed. |
+| Parser preparation | `ConsumerPlugin.prepare` handles format repair, started notification, pre-consume hook, parsing, date detection, and retained outputs. No document is created here. Started notification and pre-consume hooks have their own recorded invocations. |
+| Storage publication | `ConsumerPlugin.publish` creates the document/version and files inside the coordinator's transaction. Permission, revision, current-version, parser configuration/identity, and retained-file integrity are checked before publication. Version timestamps and audit attribution remain part of creation. |
+| Metadata and workflows | Inbox tags, correspondent, type, tags, storage path, added workflows, and version-root updated workflows are named post-commit steps. Their existing explicit metadata scopes reconcile filenames, including version paths. Current effective content is used for matching. |
+| Extensions and scripts | The finished signal and post-consume hook run after commit and file publication. Their outcomes are tracked separately from document creation. Scripts receive a stable `INVOCATION_ID` as well as the existing `TASK_ID`. |
+| Required workflow tasks | Existing durable webhook/AI callback records retain individual task outcomes. Their intents are recorded before dispatch/execution; ambiguous webhook effects are not replayed. |
+| Search/AI/cache | Read current committed state and may repeat. Completed indexing/cache steps are recorded, so later cleanup failure does not replay them. |
+| Source/storage cleanup | A separate retryable outcome. Verify authoritative published files before removing retained inputs; delete only the admitted source/shadow identity. Failure leaves cleanup outstanding. |
+
+**Intentional timing change:** document-added metadata assignments, workflows,
+and `document_consumption_finished` now run after document/file commit for durable
+ingestion. A workflow or extension failure leaves a committed document needing
+completion rather than rolling its database row back around irreversible effects.
+Extensions receiving the finished signal see published files and receive
+`coordinated=True` and `invocation_id`. Built-in receivers skip that coordinated
+notification because the coordinator has already invoked their explicit steps.
+Legacy direct signal calls retain their adapters. The started signal remains
+pre-processing; its external effects are conservatively tracked. Direct
+execution-only `ConsumerPlugin.run` remains an adapter around prepare/publish,
+while normal task admission always uses the durable coordinator.
+
+File naming reflects post-commit workflow metadata through the explicit
+reconciler. Completion does not report success until those steps return. A
+workflow that trashes/deletes a document preserves that outcome; subsequent
+indexing reads current state and removes missing entries. A failed opaque workflow
+may have applied earlier actions: do not rerun it simply because ingestion is
+incomplete.
+
+### Plugin result and recovery contract
+
+`ConsumeTaskPlugin` retains its constructor, `able_to_run`, `setup`, `run`, and
+`cleanup` interface. Construction must not perform external effects. Each run
+receives `invocation_id`; the UUID remains stable across retry/reconciliation.
+The implementation owns its effects and private workspace. It may declare
+`replay_safe = True` only when repeating the entire invocation, including setup,
+is safe. The default is false. A later deployment cannot retroactively grant a
+replay promise to an already unknown invocation.
+
+The coordinator records `pending`, `running`, `succeeded`, `failed` (declared safe
+execution failed), and `unknown` outcomes. Both an exception after an external
+effect and a crash after return but before outcome persistence can be unknown.
+Each invocation gets a working input copy; retained earlier inputs are immutable
+checkpoints, so in-place plugin edits do not invalidate completed predecessors.
+Successful output metadata and source references are retained before cleanup.
+Only the built-in barcode cleanup can discard its known temporary workspace;
+other cleanup follows the plugin's `cleanup_replay_safe` promise (default false).
+Unresolved preparation retains artifacts rather than invoking destructive cleanup.
+
+An optional `reconcile(invocation_id)` returns the retained public outcome after
+the plugin establishes what happened externally, or raises if it cannot. Its
+result is a JSON object containing `metadata` (the dataclass field mapping),
+`source` (a contained SHA-256/size file reference, or null for a terminal stop),
+`mime_type`, and optionally `stopped` (duplicate/stop response), `message`, or the
+consumer's `prepared` output. The coordinator validates recovered references and
+metadata before recording success. Reconciliation must itself be safe to repeat;
+it is not permission to rerun the original effect. Execution-only plugins need
+not implement it: the default raises an attention error with the invocation ID.
+
+Parser construction and configuration snapshots must be side-effect-free;
+processing receives the stable invocation identity. Parser requests also receive
+optional `invocation_id`. Explicit parsers can
+promise `replay_safe = True`; built-in local text, mail, and Tesseract computation
+are treated as replayable. Remote/custom implementations default to no replay.
+An ingestion preparation containing an effectful hook or started listener remains
+conservative even when its parser is replayable. Reprocessing uses the same
+`ingestion_state.invoke` outcome recorder and parser replay policy; a successful
+validated parser result is retained if later preparation fails. Its existing
+revision-bound archive publication and update-specific completion remain distinct
+from ingestion's creation operation. Both operations share file references,
+integrity checks, job locks, and configuration/provider validation.
+
+### Storage ownership and operator recovery
+
+Publication uses a private sibling copy in the destination filesystem, an fsynced
+intent manifest, and an exclusive hard link to the final target. This supports
+separate data/media filesystems. The retained sibling proves ownership by inode,
+even if the worker dies immediately after creating the link. Before retrying an
+uncommitted publication, storage removes only targets still sharing that owned
+inode. A matching checksum alone is insufficient; unrelated replacement files,
+symlinks, and collisions require inspection and are never overwritten or deleted.
+Owned temporary copies are removed during reconciliation or successful cleanup.
+Post-commit filename moves belong to the ordinary explicit file reconciler (#34);
+the old ingestion context hook that journaled arbitrary workflow moves is removed.
+
+Use `document_jobs --job UUID` to inspect phase, invocation IDs, identities,
+inputs/results/errors, publication evidence, and outstanding work. Use `--resume`
+for Accepted/Prepared/Committed/Complete work. Preparing jobs with an unknown
+plugin outcome can resume only through their recorded replay promise or the
+plugin's validated reconciler; they cannot be resolved with a blanket effects
+acknowledgment. If an external provider needs a custom recovery procedure, retain
+the input/workspace and reconcile that invocation before retrying.
+
+For committed jobs needing attention, inspect persisted metadata, workflow action
+logs, and external hook/webhook systems. After handling ambiguous effects,
+`document_jobs --job UUID --resume --acknowledge-effects` records those unresolved
+completion invocations as acknowledged and resumes only remaining work. This is
+an operator assertion that effects were reconciled, not proof of exactly-once
+execution. File collisions and legacy uncommitted publication require manual
+inspection; no command guesses which unrelated file to remove.
+
+### Migration
+
+No schema migration is required. New admissions carry lifecycle version 1.
+Queued legacy jobs have not invoked plugins and adopt the coordinator when run.
+Legacy running/staging or unrecognized prepared records remain attention cases;
+no old progress string is interpreted as a safe preparation checkpoint. Legacy
+committed jobs retain their existing post-consume/callback completion semantics
+and do not rerun added workflows. Failed/attention jobs and unresolved staging
+files are retained. Completed-but-uncleaned jobs retry cleanup with original
+identity checks. Old publication manifests remain inspectable, but lack the new
+inode ownership proof and are not automatically removed. Interrupted legacy
+reprocessing without invocation evidence also requires attention instead of
+assuming an arbitrary parser is replayable.
+
+Verification: **624 tests passed on SQLite**, covering ingestion lifecycle/jobs,
+consumer/archive/API behavior, callbacks, recovery commands, reprocessing, parser
+contracts, barcodes, collation, workflows, versions, file handling, and document
+updates. **84 tests passed on PostgreSQL 18** across lifecycle, ingestion,
+reprocessing, workflow follow-ups, and callbacks. The PostgreSQL run exposed a
+preexisting explicit-PK fixture/sequence collision; the version-race test now
+chooses a distinct fixture ID. After the final progress/phase changes, **130
+focused SQLite tests passed**. Counts overlap. Ruff formatting/checks and
+`git diff --check` passed. All runs used non-root disposable
+`docker run --rm --userns=host` containers, Python 3.14.10, Django 5.2.17,
+frozen uv dependencies, and `pytest -o addopts="" --tb=short -n 4
+--dist=loadscope --randomly-seed=1`. The PostgreSQL service and its temporary data
+were removed; the shared temporary dependency volume is retained only for the
+remaining sequential issue implementations.
+
+Coverage includes admission/broker loss, opaque exceptions and process death,
+result-persistence interruption, optional reconciliation, safe replay,
+Prepared restart without OCR, retained-output tampering, publication/SQL rollback,
+replacement-file protection, post-commit signal visibility, version-root workflow
+filenames, duplicate execution locks, callback uncertainty, and cleanup retry.
+The full repository suite, MariaDB, live OCR services, and real external hooks
+were not run; replay safety for third-party effects remains their authors'
+responsibility, not a guarantee inferred by Paperless.
