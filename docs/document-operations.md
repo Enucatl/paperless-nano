@@ -235,6 +235,28 @@ and repair partial updates, whether any durable mechanism is justified, and
 which actions may safely repeat. Changing response timing, delivery guarantees,
 or replay semantics is a separate decision, not an incidental extraction.
 
+## Version operations (#31)
+
+`documents.updates.update_document_version_label` and
+`delete_document_version` now own version mutation, root timestamps, actor-aware
+audit entries, and root completion through `document_update`. The HTTP adapters
+retain request validation, root permissions, version membership/root-deletion
+checks, and response serialization. No transaction or retry behavior changed.
+Deletion still selects the returned current-version ID before workflows run;
+label responses still use the selected version instance. Exceptions during
+completion retain the partial-update behavior described above.
+
+The version API and update contract tests cover permissions, version selection,
+audit attribution, notifications, indexing, and persisted mutations after failed
+completion. A label-audit regression also checks that repeated unchanged labels
+do not add a second label-change entry.
+
+Verification: **285 passed** across the document-update, bulk-update, version API,
+version-conditional, workflow, and file-handling suites in a disposable
+`docker run --rm --userns=host` container. Tests ran as a non-root user with
+Python 3.14.10, Django 5.2.17, SQLite, and frozen uv dependencies. Ruff formatting,
+changed-file lint, and `git diff --check` passed.
+
 ## Implemented update boundary (#22)
 
 `documents.updates` now owns metadata application and ordered update completion:

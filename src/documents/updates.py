@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.translation import gettext as _
 from rest_framework.exceptions import PermissionDenied
@@ -113,6 +114,88 @@ def document_update(
             backend.remove(document.pk)
         else:
             backend.add_or_update(final_doc)
+
+
+def update_document_version_label(
+    root_document: Document,
+    version: Document,
+    label: str | None,
+    *,
+    user: User | None,
+    sender: object = None,
+) -> None:
+    """Save an authorized version's validated label and complete the root update.
+
+    The caller checks root access and version membership before invoking this
+    operation. Mutation and audit precede workflows, notification, and indexing.
+    """
+    with document_update(root_document, sender=sender):
+        old_label = version.version_label
+        version.version_label = label
+        with document_metadata_update(version):
+            version.save(update_fields=["version_label"])
+        root_document.modified = timezone.now()
+        Document.objects.filter(pk=root_document.pk).update(
+            modified=root_document.modified,
+        )
+        if settings.AUDIT_LOG_ENABLED and old_label != version.version_label:
+            from auditlog.models import LogEntry
+
+            LogEntry.objects.log_create(
+                instance=root_document,
+                changes={"Version Label": [old_label, version.version_label]},
+                action=LogEntry.Action.UPDATE,
+                actor=user if user and user.is_authenticated else None,
+                additional_data={
+                    "reason": "Version label updated",
+                    "version_id": version.id,
+                },
+            )
+
+
+def delete_document_version(
+    root_document: Document,
+    version: Document,
+    *,
+    user: User | None,
+    sender: object = None,
+) -> int:
+    """Delete an authorized non-root version and complete its root update.
+
+    The caller checks root access, version membership, and root protection.
+    Return the current version ID selected before completion workflows run.
+    """
+    from documents.search import get_backend
+    from documents.versioning import versions_newest_first
+
+    with document_update(root_document, sender=sender):
+        get_backend().remove(version.pk)
+        version_id = version.id
+        version.delete()
+        root_document.modified = timezone.now()
+        Document.objects.filter(pk=root_document.pk).update(
+            modified=root_document.modified,
+        )
+        if settings.AUDIT_LOG_ENABLED:
+            from auditlog.models import LogEntry
+
+            LogEntry.objects.log_create(
+                instance=root_document,
+                changes={"Version Deleted": ["None", version_id]},
+                action=LogEntry.Action.UPDATE,
+                actor=user if user and user.is_authenticated else None,
+                additional_data={
+                    "reason": "Version deleted",
+                    "version_id": version_id,
+                },
+            )
+        current = versions_newest_first(
+            Document.objects.filter(
+                Q(id=root_document.id) | Q(root_document=root_document),
+            ),
+        ).first()
+        current_version_id = current.id if current else root_document.id
+    return current_version_id
 
 
 def save_document_metadata(

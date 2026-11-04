@@ -234,8 +234,10 @@ from documents.tasks import llmindex_index
 from documents.tasks import sanity_check
 from documents.tasks import train_classifier
 from documents.tasks import update_document_parent_tags
+from documents.updates import delete_document_version
 from documents.updates import document_metadata_update
 from documents.updates import document_update
+from documents.updates import update_document_version_label
 from documents.utils import get_boolean
 from documents.versioning import VersionResolutionError
 from documents.versioning import annotate_effective_content
@@ -244,7 +246,6 @@ from documents.versioning import get_request_version_param
 from documents.versioning import get_root_document
 from documents.versioning import latest_version_content_prefetch
 from documents.versioning import resolve_requested_version_for_root
-from documents.versioning import versions_newest_first
 from paperless import version
 from paperless.celery import app as celery_app
 from paperless.config import AIConfig
@@ -2340,41 +2341,16 @@ class DocumentViewSet(
                 "Cannot delete the root/original version. Delete the document instead.",
             )
 
-        from documents.search import get_backend
-
-        _backend = get_backend()
-        _backend.remove(version_doc.pk)
-        version_doc_id = version_doc.id
-        version_doc.delete()
-        root_doc.modified = timezone.now()
-        Document.objects.filter(pk=root_doc.pk).update(modified=root_doc.modified)
-        if settings.AUDIT_LOG_ENABLED:
-            actor = (
-                request.user if request.user and request.user.is_authenticated else None
-            )
-            LogEntry.objects.log_create(
-                instance=root_doc,
-                changes={
-                    "Version Deleted": ["None", version_doc_id],
-                },
-                action=LogEntry.Action.UPDATE,
-                actor=actor,
-                additional_data={
-                    "reason": "Version deleted",
-                    "version_id": version_doc_id,
-                },
-            )
-
-        current = versions_newest_first(
-            Document.objects.filter(Q(id=root_doc.id) | Q(root_document=root_doc)),
-        ).first()
-
-        with document_update(root_doc, sender=self.__class__):
-            pass
+        current_version_id = delete_document_version(
+            root_doc,
+            version_doc,
+            user=request.user,
+            sender=self.__class__,
+        )
         return Response(
             {
                 "result": "OK",
-                "current_version_id": current.id if current else root_doc.id,
+                "current_version_id": current_version_id,
             },
         )
 
@@ -2419,32 +2395,13 @@ class DocumentViewSet(
             return HttpResponseForbidden("Insufficient permissions")
 
         version_doc = self._get_version_doc_for_root(root_doc, version_id)
-        old_label = version_doc.version_label
-        version_doc.version_label = serializer.validated_data["version_label"]
-        with document_metadata_update(version_doc):
-            version_doc.save(update_fields=["version_label"])
-        root_doc.modified = timezone.now()
-        Document.objects.filter(pk=root_doc.pk).update(modified=root_doc.modified)
-
-        if settings.AUDIT_LOG_ENABLED and old_label != version_doc.version_label:
-            actor = (
-                request.user if request.user and request.user.is_authenticated else None
-            )
-            LogEntry.objects.log_create(
-                instance=root_doc,
-                changes={
-                    "Version Label": [old_label, version_doc.version_label],
-                },
-                action=LogEntry.Action.UPDATE,
-                actor=actor,
-                additional_data={
-                    "reason": "Version label updated",
-                    "version_id": version_doc.id,
-                },
-            )
-
-        with document_update(root_doc, sender=self.__class__):
-            pass
+        update_document_version_label(
+            root_doc,
+            version_doc,
+            serializer.validated_data["version_label"],
+            user=request.user,
+            sender=self.__class__,
+        )
 
         return Response(
             {

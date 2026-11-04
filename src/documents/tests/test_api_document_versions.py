@@ -372,6 +372,30 @@ class TestDocumentVersioningApi(DirectoriesMixin, APITestCase):
         self.assertIsNone(resp.data["version_label"])
         self.assertTrue(resp.data["is_root"])
 
+    def test_update_version_label_audits_changed_label_against_root(self) -> None:
+        """Attribute label changes to the actor without auditing unchanged labels."""
+        root = DocumentFactory()
+        version = DocumentFactory(root_document=root, version_label="before")
+        entries = LogEntry.objects.filter(
+            content_type=ContentType.objects.get_for_model(Document),
+            object_id=root.id,
+            additional_data__reason="Version label updated",
+        )
+
+        for _ in range(2):
+            response = self.client.patch(
+                f"/api/documents/{root.id}/versions/{version.id}/",
+                {"version_label": "after"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        entry = entries.get()
+        self.assertEqual(entry.actor_id, self.user.id)
+        self.assertEqual(entry.action, LogEntry.Action.UPDATE)
+        self.assertEqual(entry.changes, {"Version Label": ["before", "after"]})
+        self.assertEqual(entry.additional_data["version_id"], version.id)
+
     def test_update_version_label_returns_403_without_permission(self) -> None:
         owner = UserFactory(username="owner")
         other = UserFactory(username="other")
