@@ -22,6 +22,7 @@ from kombu.utils.json import loads as transport_loads
 
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
+from documents.deferred_operations import PendingOperation
 from documents.ingestion_state import NeedsAttention
 from documents.ingestion_state import json_value
 from documents.ingestion_state import restore_input
@@ -331,6 +332,8 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     token = active_ingestion_job.set(str(job_id))
     try:
         job = DocumentJob.objects.get(pk=job_id)
+        if job.status in {DocumentJob.Status.WAITING, DocumentJob.Status.CANCELLED}:
+            raise Ignore
         modern = job.result.get("lifecycle") == 1
         if job.result.get("lifecycle") not in {None, 1} or (
             job.status == DocumentJob.Status.PREPARED and not modern
@@ -401,6 +404,8 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
             elif not job.cleaned:
                 cleanup_consumption(job)
             return job.result.get("payload")
+    except PendingOperation:
+        raise Ignore from None
     except Ignore:
         raise
     except Exception as error:

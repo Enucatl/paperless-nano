@@ -95,6 +95,8 @@ MODEL_FILE = get_path_from_env(
     DATA_DIR / "classification_model.pickle",
 )
 
+DEFERRED_OPERATIONS = get_json_from_env("PAPERLESS_DEFERRED_OPERATIONS", {}, dict)
+
 CLASSIFICATION_PROVIDER = os.getenv("PAPERLESS_CLASSIFICATION_PROVIDER", "")
 CLASSIFIER_ENABLED = get_bool_from_env("PAPERLESS_CLASSIFIER_ENABLED", "YES")
 
@@ -1110,19 +1112,14 @@ def _get_search_language_setting(ocr_lang: str) -> str | None:
     Determine the Tantivy stemmer language.
 
     If PAPERLESS_SEARCH_LANGUAGE is explicitly set, it is validated against
-    the languages supported by Tantivy's built-in stemmer and returned as-is.
+    the selected provider and returned as-is.
     Otherwise the primary Tesseract language code from PAPERLESS_OCR_LANGUAGE
     is mapped to the corresponding ISO 639-1 code understood by Tantivy.
     Returns None when unset and the OCR language has no Tantivy stemmer.
     """
     explicit = os.environ.get("PAPERLESS_SEARCH_LANGUAGE")
     if explicit is not None:
-        if SEARCH_PROVIDER != "documents.search.tantivy.TantivyProvider":
-            return explicit
-        # Validate the built-in vocabulary without loading its native engine.
-        from documents.search._languages import SUPPORTED_LANGUAGES
-
-        return get_choice_from_env("PAPERLESS_SEARCH_LANGUAGE", SUPPORTED_LANGUAGES)
+        return explicit
 
     # Infer from the primary Tesseract language code (ISO 639-2/T → ISO 639-1)
     primary = ocr_lang.split("+", maxsplit=1)[0].lower()

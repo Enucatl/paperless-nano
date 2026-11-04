@@ -222,3 +222,12 @@ class TestFieldRegistry:
         a = get_field_registry("en")
         b = get_field_registry("de")
         assert a is not b
+
+
+def test_tantivy_rejects_unsupported_language(settings):
+    """Tantivy checks its language contract when that provider is selected."""
+    from documents.search.tantivy import TantivyProvider
+
+    settings.SEARCH_LANGUAGE = "klingon"
+    with pytest.raises(ValueError, match="Unsupported search language"):
+        TantivyProvider()

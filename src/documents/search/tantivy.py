@@ -70,7 +70,22 @@ def enter_batch_with_retry(batch: AbstractContextManager) -> None:
 class TantivyProvider:
     """Preserve existing Tantivy syntax, ranking, sorting and storage behavior."""
 
+    @property
+    def configuration(self) -> dict:
+        """Declare the storage and language configuration used by this provider."""
+        return {
+            "index_dir": str(settings.INDEX_DIR),
+            "language": settings.SEARCH_LANGUAGE,
+        }
+
     def __init__(self, path: Path | None = None) -> None:
+        from documents.search._languages import SUPPORTED_LANGUAGES
+
+        if (
+            settings.SEARCH_LANGUAGE is not None
+            and settings.SEARCH_LANGUAGE not in SUPPORTED_LANGUAGES
+        ):
+            raise ValueError("Unsupported search language for this provider")
         self.path = settings.INDEX_DIR if path is None else path
         self.engine = TantivyEngine(self.path, language=settings.SEARCH_LANGUAGE)
 

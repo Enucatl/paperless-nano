@@ -5,27 +5,27 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid5
+from uuid import UUID
+from uuid import uuid5
 
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.utils import timezone
-from documents.data_models import (
-    ConsumableDocument,
-    DocumentMetadataOverrides,
-    DocumentSource,
-)
-from documents.jobs import (
-    RejectedResult,
-    _check_permission,
-    _copy,
-    _revision,
-    job_directory,
-)
-from documents.models import Document, DocumentJob
-from documents.utils import compute_checksum, copy_basic_file_stats
+
+from documents.data_models import ConsumableDocument
+from documents.data_models import DocumentMetadataOverrides
+from documents.data_models import DocumentSource
+from documents.jobs import RejectedResult
+from documents.jobs import _check_permission
+from documents.jobs import _copy
+from documents.jobs import _revision
+from documents.jobs import job_directory
+from documents.models import Document
+from documents.models import DocumentJob
+from documents.utils import compute_checksum
+from documents.utils import copy_basic_file_stats
 from documents.versioning import latest_version
 
 PHASES = ("accepted", "preparing", "prepared", "committed", "completing", "complete")
@@ -70,12 +70,18 @@ def invoke(
     replay_safe: bool = False,
     reconcile: Callable[[str], Any] | None = None,
     validate: Callable[[Any], None] | None = None,
+    operation: str | None = None,
+    allow_deferred: bool = True,
 ) -> Any:
     """Record an opaque call; an exception never proves absence of external effects.
 
     The coordinator must hold the job's process lock. Reconciliation returns a
     validated outcome or raises; it never grants permission for unsafe replay.
     """
+
+    from documents.deferred_operations import PendingOperation
+    from documents.deferred_operations import execution_policy
+    from documents.deferred_operations import wait
 
     job.refresh_from_db()
     invocations = job.result.setdefault("invocations", {})
@@ -89,12 +95,45 @@ def invoke(
             "result": None,
             "error": "",
             "replay_safe": replay_safe,
+            "operation": operation or key,
+            "version": 1,
+            "configuration": json_value(job.configuration),
+            "authorization": {"actor_id": job.input.get("actor_id")},
+            "dependencies": [
+                item["id"]
+                for item in invocations.values()
+                if item["status"] == "succeeded"
+            ],
         },
     )
     if entry["plugin"] != identity or entry["input"] != json_value(inputs):
         raise NeedsAttention(f"Invocation {key} implementation or inputs changed")
     if entry["status"] == "succeeded":
         return entry["result"]
+    if "policy" not in entry and entry["status"] == "pending" and allow_deferred:
+        policy = execution_policy(operation or key, identity)
+        if policy is not None:
+            entry["policy"] = json_value(policy)
+    if "policy" in entry:
+        if entry["status"] in {"unknown", "failed", "conflicted", "cancelled"}:
+            raise NeedsAttention(
+                f"Invocation {key} requires reconciliation: {entry['status']}"
+            )
+        if entry["status"] != "staged":
+            wait(job, entry)
+        result = entry["result"]
+        try:
+            if validate is not None:
+                validate(result)
+        except Exception as error:
+            entry.update(status="conflicted", error=str(error))
+            job.status = DocumentJob.Status.REJECTED
+            job.error = str(error)
+            job.save(update_fields=["result", "status", "error"])
+            raise
+        entry.update(status="succeeded", error="")
+        job.save(update_fields=["result"])
+        return result
     replay_safe = replay_safe and entry["replay_safe"]
     if entry["status"] in {"running", "unknown", "failed"} and not replay_safe:
         entry["status"] = "unknown"
@@ -110,6 +149,13 @@ def invoke(
         result = json_value(execute(entry["id"]))
         if validate is not None:
             validate(result)
+    except PendingOperation:
+        # Nested orchestration is replayable; its finite child owns the claim.
+        job.refresh_from_db()
+        entry = job.result["invocations"][key]
+        entry["status"] = "pending"
+        job.save(update_fields=["result"])
+        raise
     except Exception as error:
         job.refresh_from_db()
         entry = job.result["invocations"][key]

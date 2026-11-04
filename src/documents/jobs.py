@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
+from uuid import uuid5
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -131,6 +132,7 @@ def stage_reprocess(
     remote_ocr: bool = False,
     trigger_source: str = PaperlessTask.TriggerSource.MANUAL,
     job_id: str | None = None,
+    metadata: bool = False,
 ) -> DocumentJob:
     """Snapshot a concrete document and its input before queue publication."""
     job_id = UUID(job_id) if job_id is not None else uuid4()
@@ -138,6 +140,14 @@ def stage_reprocess(
     with FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0):
         existing = DocumentJob.objects.filter(pk=job_id).first()
         if existing is not None:
+            if (
+                existing.kind != "reprocess"
+                or existing.input.get("document_id") != document_id
+                or existing.input.get("actor_id") != actor_id
+                or existing.input.get("metadata", False) != metadata
+                or existing.input.get("remote_ocr", False) != remote_ocr
+            ):
+                raise RejectedResult("Submission identifier belongs to another request")
             return existing
         document = Document.objects.get(pk=document_id)
         _check_permission(document, actor_id)
@@ -148,12 +158,14 @@ def stage_reprocess(
             status=DocumentJob.Status.STAGING,
             result={"invocation_contract": 1},
             timeout=settings.CELERY_TASK_TIME_LIMIT,
+            configuration=_configuration(),
             input={
                 "document_id": document.pk,
                 "root_id": root.pk,
                 "latest_id": latest.pk,
                 "actor_id": actor_id,
                 "remote_ocr": remote_ocr,
+                "metadata": metadata,
                 "trigger_source": trigger_source,
                 "revision": _revision(document),
                 "filename": document.original_filename or document.source_path.name,
@@ -163,6 +175,18 @@ def stage_reprocess(
         )
         job.save()
         try:
+            if metadata:
+                from documents.classification_operations import configured_provider
+                from documents.classification_operations import provider_configuration
+                from documents.ingestion_state import json_value
+
+                identity = configured_provider().identity
+                if identity is None:
+                    raise RejectedResult("No active metadata provider")
+                job.input["metadata_provider"] = list(identity)
+                job.input["metadata_configuration"] = json_value(
+                    provider_configuration()
+                )
             with FileLock(settings.MEDIA_LOCK):
                 _check_target(job)
                 directory = job_directory(job.pk)
@@ -187,6 +211,18 @@ def stage_reprocess(
 
 def _dispatch(job: DocumentJob) -> None:
     """Send only serializable identifiers; a lost send remains recoverable."""
+    if job.kind == "enrich":
+        from documents.enrichment_jobs import execute_enrichment
+
+        execute_enrichment.apply_async(args=[str(job.pk)], time_limit=job.timeout)
+        return
+    if job.kind == "search":
+        from documents.search_operations import run_search
+
+        run_search.apply_async(
+            args=[str(job.pk)], task_id=str(job.pk), time_limit=job.timeout
+        )
+        return
     if job.kind == "consume":
         from documents.ingestion_jobs import dispatch_consumption
 
@@ -280,11 +316,11 @@ def _prepare(job: DocumentJob) -> None:
     job.status = DocumentJob.Status.RUNNING
     job.updated = timezone.now()
     configuration = _configuration()
-    if "parser_request" in job.result and job.configuration != configuration:
+    if job.configuration and job.configuration != configuration:
         raise RejectedResult(
             "Processing configuration or provider changed before retry"
         )
-    if "parser_request" not in job.result:
+    if not job.configuration:
         job.configuration = configuration
     job.result.setdefault("invocation_contract", 1)
     job.result["progress"] = "parsing"
@@ -296,7 +332,6 @@ def _prepare(job: DocumentJob) -> None:
     parser_class = configured_parser_class()
     with configured_parser(parser_class, configuration) as parser:
         from documents.ingestion_state import invoke
-        from documents.parser_operations import parser_replay_safe
 
         def execute(identifier: str) -> dict:
             """Retain validated parser output before reprocessing publication."""
@@ -320,15 +355,8 @@ def _prepare(job: DocumentJob) -> None:
             settings.PARSER,
             {"configuration": configuration, "checksum": job.input["checksum"]},
             execute,
-            replay_safe=parser_replay_safe(
-                parser_class,
-                source,
-                document.mime_type,
-                job.input["filename"],
-                directory,
-                allow_remote=job.input["remote_ocr"]
-                or RemoteOCRConfig().remote_ocr_by_default,
-            ),
+            replay_safe=True,
+            allow_deferred=False,
         )
         job.refresh_from_db()
         result = {
@@ -448,6 +476,17 @@ def _apply(job: DocumentJob) -> None:
                 )
             document.refresh_from_db()
             job.result["applied_revision"] = _revision(document)
+            if job.input.get("metadata"):
+                from documents.enrichment_jobs import submit_enrichment
+
+                child = submit_enrichment(
+                    document.pk,
+                    actor_id=job.input["actor_id"],
+                    job_id=uuid5(job.pk, "metadata"),
+                    expected_provider=job.input["metadata_provider"],
+                    expected_configuration=job.input["metadata_configuration"],
+                )
+                job.result["metadata_job"] = str(child.pk)
             job.result["followup"] = ["thumbnail", "index", "cache"]
             job.result["progress"] = "completion"
             job.status = DocumentJob.Status.COMMITTED
@@ -543,6 +582,8 @@ def _cleanup(job: DocumentJob) -> None:
 
 def run_reprocess(job_id: UUID | str) -> bool:
     """Execute or resume a job, independently of Celery lifecycle callbacks."""
+    from documents.deferred_operations import PendingOperation
+
     directory = job_directory(job_id)
     # Keep the lock outside staging; deleting a live lock creates two owners.
     lock = FileLock(directory.with_suffix(".lock"), timeout=0)
@@ -553,6 +594,8 @@ def run_reprocess(job_id: UUID | str) -> bool:
         return False
     try:
         job = DocumentJob.objects.get(pk=job_id)
+        if job.status in {DocumentJob.Status.WAITING, DocumentJob.Status.CANCELLED}:
+            return False
         if job.status in {
             DocumentJob.Status.FAILED,
             DocumentJob.Status.REJECTED,
@@ -584,6 +627,11 @@ def run_reprocess(job_id: UUID | str) -> bool:
             if job.status == DocumentJob.Status.SUCCEEDED and not job.cleaned:
                 _cleanup(job)
             return True
+        except PendingOperation:
+            job.refresh_from_db()
+            job.attempts = max(0, job.attempts - 1)
+            job.save(update_fields=["attempts"])
+            return False
         except Exception as error:
             # A commit can succeed even if its acknowledgment is lost.
             job.refresh_from_db()
@@ -618,12 +666,17 @@ def run_reprocess(job_id: UUID | str) -> bool:
 
 def recover_document_jobs() -> None:
     """Republish unfinished durable work; workers serialize duplicate delivery."""
+    from documents.deferred_operations import recover_waiting
+
+    recover_waiting()
     cutoff = timezone.now() - datetime.timedelta(minutes=5)
     jobs = DocumentJob.objects.filter(updated__lt=cutoff, cleaned=False).exclude(
         status__in=[
             DocumentJob.Status.FAILED,
             DocumentJob.Status.REJECTED,
             DocumentJob.Status.ATTENTION,
+            DocumentJob.Status.WAITING,
+            DocumentJob.Status.CANCELLED,
         ],
     )
     for job in jobs.iterator():

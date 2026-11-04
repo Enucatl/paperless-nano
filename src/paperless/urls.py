@@ -17,6 +17,12 @@ from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework.routers import DefaultRouter
 
 from documents.consumer_api import ConsumerAPIView
+from documents.operations_api import OperationCancelView
+from documents.operations_api import OperationClaimView
+from documents.operations_api import OperationFileView
+from documents.operations_api import OperationReconcileView
+from documents.operations_api import OperationResultView
+from documents.operations_api import OperationsView
 from documents.scheduler_api import SchedulerAPIView
 from documents.views import BulkDownloadView
 from documents.views import BulkEditObjectsView
@@ -103,6 +109,24 @@ urlpatterns = [
             [
                 path("services/scheduler/", SchedulerAPIView.as_view()),
                 path("services/consumer/", ConsumerAPIView.as_view()),
+                path("operations/", OperationsView.as_view()),
+                path("operations/<uuid:job_id>/cancel/", OperationCancelView.as_view()),
+                path(
+                    "operations/<uuid:job_id>/<str:key>/claim/",
+                    OperationClaimView.as_view(),
+                ),
+                path(
+                    "operations/<uuid:job_id>/<str:key>/result/",
+                    OperationResultView.as_view(),
+                ),
+                path(
+                    "operations/<uuid:job_id>/<str:key>/files/",
+                    OperationFileView.as_view(),
+                ),
+                path(
+                    "operations/<uuid:job_id>/<str:key>/reconcile/",
+                    OperationReconcileView.as_view(),
+                ),
                 re_path(
                     "^auth/",
                     include(

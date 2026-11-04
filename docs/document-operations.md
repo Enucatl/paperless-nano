@@ -1005,6 +1005,21 @@ The snapshot must be JSON-compatible and contain implementation-owned settings
 without credentials. Core records it and rejects changes before retry or publication.
 Credentials are read by the implementation at execution time. Subclassing
 `ParserProvider` supplies an empty snapshot for implementations with no settings.
+Providers can implement `configuration_for(context)` to include document context
+(currently `mailrule_id`) in their effective snapshot. `selection(request, root)`
+returns a JSON object with a nonempty execution `identity`, boolean `replay_safe`,
+and boolean `uses_remote_service`. Include internal engine versions and effective
+configuration in that declaration: core freezes and compares the entire object on
+retry and publication. A result from an internally selected engine includes its
+`execution` identity; without that field the provider identity is used. All
+providers use the same checks. Missing replay promises default to unsafe. An
+optional `reconcile(request, root)` can return a validated result for the same
+`invocation_id` after an uncertain outcome; it must not repeat unknown effects.
+
+Optional `accepted_mime_types()`, `initialize_worker()`, and `check()` methods let
+an implementation own format admission, worker initialization and deployment
+checks. Local thumbnail rendering remains a separate auxiliary implementation.
+
 Bump the identity when changing processing semantics. Installed code is trusted,
 not sandboxed; plugins must accurately declare remote processing and honor the
 request's permission. Core independently rejects a remote replacement when that
@@ -1854,3 +1869,91 @@ The full suite, MariaDB and live deployments were not tested. Post-commit ingest
 workflow/signal timing and explicit configuration migrations remain the documented
 compatibility changes. Unknown external effects still require reconciliation;
 the coordinator does not infer that a failed action is safe to repeat.
+
+## Ingestion ownership and deferred operations (#38–#40)
+
+Ingestion task adapters call the application coordinator. Shared input decoding,
+state transitions, invocation outcomes, and publication validation belong to
+`ingestion_state`; retained files and publication reconciliation belong to
+`ingestion_storage`. Plugin selection lives in `plugins.pipeline`, alongside the
+processing boundary. These modules do not import Celery task plumbing to select
+plugins or report progress. Consumer compatibility, plugin order, terminal stop
+outcomes, hooks, version publication and cleanup retain their existing owners.
+
+### Completion inventory
+
+The completion boundary is a finite operation, not a worker process. The same
+`DocumentJob` invocation records identify local and remote executions.
+
+| Override boundary | Finite work and completion expectation | Lifetime or interactive interfaces |
+| --- | --- | --- |
+| Parser provider | `parser.process` returns validated text, date, page count and private file references. Required ingestion cannot publish before successful parsing. Reprocessing keeps the old document available. | Provider construction and selection are local declarations; no host availability check belongs there. |
+| Classification provider | `metadata.classify` returns proposals for the retained content and permitted candidates. Core rechecks identity, permissions and document revision, then applies assignments. Optional enrichment does not hide an imported document. | Suggestions remain synchronous request/response calls; they do not silently wait for a remote workstation. |
+| Search provider | `search.write`, `search.rebuild`, `search.optimize`, `search.wipe` are finite maintenance operations. Deferred inputs retain plain facts, selection and configuration. Changed facts, permissions or rebuild membership invalidate acceptance. External index effects with an unknown outcome require reconciliation. | Search, matching IDs, highlights, autocomplete, health and rebuild-needed queries remain synchronous. `open`/`close` manage process resources. |
+| Ingestion extensions | Preparation and cleanup have distinct invocation IDs and outcomes. Plugin outputs must satisfy the existing metadata/file contract. Hooks, workflows and extension signals retain conservative effect handling. Core publication and assignment remain core-owned. | Plugin construction/setup describes one processing attempt; it is not a long-lived service. |
+| Service implementations | Watchers submit durable consumption requests; schedulers dispatch existing named operations; workers deliver job IDs. Finite application work uses the operation above, independent of the selected host. | `Service.run()` is a foreground lifetime contract and cannot return a deferred task receipt. Interactive service APIs return admission/status responses. |
+
+Built-in classifier training/activation is a separate implementation operation,
+not an interchangeable classification inference method. Likewise, an arbitrary
+Celery task does not become a provider contract merely because a replaceable
+worker delivers it. No new generic workflow or plugin registry is introduced.
+
+### Durable execution and processor API
+
+`PAPERLESS_DEFERRED_OPERATIONS` selects remote execution by stable operation name
+(or provider identity). For example, a processor user with ID 12 can receive OCR
+and metadata work:
+
+```ini
+PAPERLESS_DEFERRED_OPERATIONS={"parser.process":{"users":[12]},"metadata.classify":{"users":[12]}}
+```
+
+Policies are retained with each accepted invocation. Provider identity, effective
+configuration, input references, requester, successful dependencies, attempt token
+and outcome survive broker, application and worker restarts. Waiting has no age
+expiry and consumes no execution attempts. A claim starts a bounded lease using
+the recorded execution timeout; a stale token cannot submit a result. Pure work
+can receive a new claim after expiry. Effectful work with uncertain completion
+moves to attention instead of automatic replay.
+
+The authenticated `/api/operations/` API admits `ocr`, `metadata` and
+`ocr_metadata` using a stable UUID `request_id` and a `document_id`. OCR followed
+by metadata records the metadata job in the OCR application transaction, so a
+broker outage cannot lose the second stage. Once OCR is committed, metadata
+failure does not rerun OCR. Current documents remain readable throughout optional
+enrichment; conflicting edits are preserved and the stale proposal is rejected.
+
+Processors use the ordinary API authentication plus the operation's explicit
+user grant. Operation listing exposes status; claim, input-file retrieval,
+output-file upload and result submission require the matching operation and
+claim token. Output files are staged privately; processors never receive an API
+that writes authoritative document fields. Result submission only records a
+proposal. The resumed core validator checks the domain result before publication.
+The requester or an administrator can cancel an unfinished job; late claims and
+results cannot revive cancellation. Retained uncertain effects are not represented
+as undone.
+
+A processor must use the retained request and configuration rather than infer
+new settings from the current deployment. Reusing an accepted submission or an
+identical result is idempotent. Changing an implementation, model, configuration,
+source revision or permission while work is pending produces a visible conflict;
+submit fresh work after reviewing the change. Keep the database and private
+`DATA_DIR/jobs` storage together across restarts and backups.
+
+### Provider declarations
+
+Parser orchestration validates public `configuration_snapshot`, optional
+context-aware `configuration_for`, and `selection` declarations. An internally
+selected engine identifies itself through the same declaration; core does not
+recognize its Python module to infer replay safety or remote access. Missing
+replay declarations are conservative. Legacy parser construction, engine dispatch
+and mail configuration overrides live inside the built-in implementation.
+Auxiliary thumbnail generation has an explicit implementation owner and retains
+its file checks.
+
+Classification providers expose an implementation/model identity and optional
+JSON configuration. `current_identity` can report current activation without
+loading a model; otherwise core compares a newly selected provider. The built-in
+classifier and legacy classifier instances obey this same contract. Search cache
+selection uses provider-declared configuration; language vocabulary validation
+belongs to the provider that uses it.

@@ -2,6 +2,7 @@
 
 import dataclasses
 import datetime
+from contextlib import nullcontext
 from pathlib import Path
 
 import magic
@@ -177,26 +178,8 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 or cls.__dict__.get("replay_safe", False) is True
             )
             if cls is ConsumerPlugin:
-                # Preparation contains separately tracked hooks; parser implementations own replay promises.
-                from documents.parser_operations import parser_class
-                from documents.parser_operations import parser_replay_safe
-                from documents.signals import document_consumption_started
-                from paperless.config import RemoteOCRConfig
-
-                safe = parser_replay_safe(
-                    parser_class(),
-                    input_doc.original_file,
-                    input_doc.mime_type,
-                    plugin.filename,
-                    directory,
-                    allow_remote=metadata.remote_ocr
-                    or RemoteOCRConfig().remote_ocr_by_default,
-                )
-                safe = (
-                    safe
-                    and not settings.PRE_CONSUME_SCRIPT
-                    and not document_consumption_started.has_listeners()
-                )
+                # Hooks and parser calls retain their own finite invocation outcomes.
+                safe = True
 
             def validate_outcome(outcome: dict) -> None:
                 """Validate recovered outcomes before recording invocation success."""
@@ -228,6 +211,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 replay_safe=safe,
                 reconcile=plugin.reconcile,
                 validate=validate_outcome,
+                allow_deferred=cls is not ConsumerPlugin,
             )
             if (
                 not isinstance(result, dict)
@@ -336,10 +320,33 @@ def complete_document(job: DocumentJob) -> None:
     identifier = job.result.get("payload", {}).get("document_id")
     if identifier is None:
         return
+    from documents.classification_operations import configured_provider
+    from documents.classification_operations import provider_configuration
+    from documents.deferred_operations import execution_policy
+    from documents.ingestion_state import json_value
+
+    if "enrichment" not in job.result:
+        deferred = None
+        if (
+            settings.CLASSIFIER_ENABLED
+            and execution_policy("metadata.classify", settings.CLASSIFICATION_PROVIDER)
+            is not None
+        ):
+            provider = configured_provider()
+            if provider.identity is not None:
+                deferred = {
+                    "identity": list(provider.identity),
+                    "configuration": json_value(provider_configuration()),
+                }
+        job.result["enrichment"] = deferred
+        job.save(update_fields=["result"])
+    deferred = job.result["enrichment"]
     classification = {}
 
     def classifier():
         """Load the selected classifier once, only when completion needs it."""
+        if deferred is not None:
+            return None
         if "provider" not in classification:
             classification["provider"] = load_classifier()
         return classification["provider"]
@@ -353,6 +360,7 @@ def complete_document(job: DocumentJob) -> None:
         "workflows",
         "version",
         "signal",
+        "enrichment",
     )
     for name in steps:
         document = Document.objects.filter(pk=identifier).first()
@@ -387,6 +395,19 @@ def complete_document(job: DocumentJob) -> None:
                 document_updated.send(
                     sender=ConsumerPlugin, document=root, skip_ai_index=True
                 )
+            elif name == "enrichment" and deferred is not None:
+                from uuid import uuid5
+
+                from documents.enrichment_jobs import submit_enrichment
+
+                with transaction.atomic():
+                    submit_enrichment(
+                        document.pk,
+                        actor_id=job.input["overrides"].get("actor_id"),
+                        job_id=uuid5(job.pk, "metadata"),
+                        expected_provider=tuple(deferred["identity"]),
+                        expected_configuration=deferred["configuration"],
+                    )
             elif name == "signal":
                 document_consumption_finished.send(
                     sender=ConsumerPlugin,
@@ -397,15 +418,23 @@ def complete_document(job: DocumentJob) -> None:
                     invocation_id=invocation_id,
                 )
 
-        invoke(
-            job,
-            "complete:" + name,
-            "paperless." + name,
-            {"document_id": identifier},
-            execute,
-            replay_safe=name == "inbox"
-            or (
-                name in {"correspondent", "type", "tags", "storage"}
-                and not settings.CLASSIFICATION_PROVIDER
-            ),
-        )
+        def validate_completion(result) -> None:
+            """Require a receipt rather than remote core metadata mutations."""
+            if result is not None:
+                raise ValueError("Completion effects must return null")
+
+        with transaction.atomic() if name == "enrichment" else nullcontext():
+            invoke(
+                job,
+                "complete:" + name,
+                "paperless." + name,
+                {"document_id": identifier},
+                execute,
+                allow_deferred=name in {"workflows", "signal"},
+                validate=validate_completion,
+                replay_safe=name in {"inbox", "enrichment"}
+                or (
+                    name in {"correspondent", "type", "tags", "storage"}
+                    and not settings.CLASSIFICATION_PROVIDER
+                ),
+            )

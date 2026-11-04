@@ -128,20 +128,12 @@ def test_get_search_language_setting_explicit_valid(
     assert _get_search_language_setting("deu") == expected
 
 
-def test_get_search_language_setting_explicit_invalid(
+def test_get_search_language_setting_preserves_provider_specific_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    GIVEN:
-        - PAPERLESS_SEARCH_LANGUAGE is set to an unsupported language code
-    WHEN:
-        - _get_search_language_setting is called
-    THEN:
-        - ValueError is raised
-    """
+    """The selected provider owns support for an explicitly configured language."""
     monkeypatch.setenv("PAPERLESS_SEARCH_LANGUAGE", "klingon")
-    with pytest.raises(ValueError, match="klingon"):
-        _get_search_language_setting("eng")
+    assert _get_search_language_setting("eng") == "klingon"
 
 
 class TestPaperlessURLSettings(TestCase):

@@ -25,11 +25,13 @@ from documents.classification_operations import (
 from documents.data_models import ConsumableDocument
 from documents.data_models import ConsumeFileSuccessResult
 from documents.data_models import DocumentMetadataOverrides
+from documents.deferred_operations import PendingOperation
 from documents.exceptions import ConsumerError
 from documents.file_handling import create_source_path_directory
 from documents.file_handling import generate_filename
 from documents.file_handling import generate_unique_filename
 from documents.file_handling import validate_path_in_root
+from documents.ingestion_state import NeedsAttention
 from documents.loggers import LoggingMixin
 from documents.models import Correspondent
 from documents.models import CustomField
@@ -589,6 +591,8 @@ class ConsumerPlugin(
                     )
                     page_count = parsed["page_count"]
 
+                except (PendingOperation, NeedsAttention):
+                    raise
                 except ParseError as e:
                     self._fail(
                         str(e),
@@ -676,8 +680,8 @@ class ConsumerPlugin(
                     pk=self.metadata.actor_id,
                 ).first()
                 if actor is not None:
-                    from auditlog.context import (  # type: ignore[import-untyped]
-                        set_actor,
+                    from auditlog.context import (
+                        set_actor,  # type: ignore[import-untyped]
                     )
 
                     with set_actor(actor):

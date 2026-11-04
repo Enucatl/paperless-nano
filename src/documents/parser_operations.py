@@ -185,6 +185,7 @@ def run_parser(
                 {"request": frozen_request, "selection": selection},
                 execute,
                 replay_safe=selection["replay_safe"],
+                allow_deferred=frozen_request["allow_remote"],
                 reconcile=(
                     lambda identifier: provider.reconcile(
                         {**frozen_request, "invocation_id": identifier}, directory

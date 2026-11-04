@@ -37,6 +37,8 @@ class DocumentJob(models.Model):
         STAGING = "staging"
         ATTENTION = "attention"
         QUEUED = "queued"
+        WAITING = "waiting"
+        CANCELLED = "cancelled"
         RUNNING = "running"
         PREPARED = "prepared"
         COMMITTED = "committed"

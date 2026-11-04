@@ -110,7 +110,15 @@ class SearchService:
 
     def batch_update(self) -> WriteBatch:
         """Apply a batch atomically; never hide partial or failed batch writes."""
-        return WriteBatch(self.provider.batch_update())
+        from documents.search_operations import DeferredSearchBatch
+        from documents.search_operations import should_defer
+
+        context = (
+            DeferredSearchBatch(self.provider)
+            if should_defer(self.provider, "write")
+            else self.provider.batch_update()
+        )
+        return WriteBatch(context)
 
     def add_or_update(self, document: Document) -> None:
         """Defer only failures the provider explicitly declares safe to retry."""
@@ -274,6 +282,19 @@ class SearchService:
                 _DocumentViewerStream(documents, chunk_size=1000)
             )
         )
+        from documents.search_operations import should_defer
+        from documents.search_operations import submit_search
+
+        if should_defer(self.provider, "rebuild"):
+            submit_search(
+                self.provider,
+                "rebuild",
+                {
+                    "records": list(records),
+                    "writer_heap_bytes": writer_heap_bytes,
+                },
+            )
+            return
         self.provider.rebuild(records, writer_heap_bytes=writer_heap_bytes)
 
     def last_modified(self) -> datetime | None:
@@ -282,6 +303,12 @@ class SearchService:
 
     def optimize(self) -> None:
         """Invoke the selected provider's maintenance operation."""
+        from documents.search_operations import should_defer
+        from documents.search_operations import submit_search
+
+        if should_defer(self.provider, "optimize"):
+            submit_search(self.provider, "optimize", {})
+            return
         return self.provider.optimize()
 
 
@@ -307,19 +334,16 @@ _backend_lock = threading.RLock()
 def get_backend() -> SearchService:
     """Cache one selected service per process; never import an unselected provider."""
     global _backend, _backend_key
-    key = (
-        settings.SEARCH_PROVIDER,
-        settings.INDEX_DIR
-        if settings.SEARCH_PROVIDER == "documents.search.tantivy.TantivyProvider"
-        else None,
-    )
+    from documents.search_operations import provider_snapshot
+
+    provider = import_string(settings.SEARCH_PROVIDER)()
+    key = provider_snapshot(provider)
     with _backend_lock:
         if _backend is not None and _backend_key == key:
             return _backend
         if _backend is not None:
             _backend.close()
         _backend = None
-        provider = import_string(settings.SEARCH_PROVIDER)()
         service = SearchService(provider)
         try:
             service.open()
@@ -354,6 +378,12 @@ def wipe_index() -> None:
     reset_backend()
     provider = import_string(settings.SEARCH_PROVIDER)()
     try:
-        provider.wipe()
+        from documents.search_operations import should_defer
+        from documents.search_operations import submit_search
+
+        if should_defer(provider, "wipe"):
+            submit_search(provider, "wipe", {})
+        else:
+            provider.wipe()
     finally:
         provider.close()

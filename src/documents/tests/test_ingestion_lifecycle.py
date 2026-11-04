@@ -41,7 +41,7 @@ def test_prepared_restart_does_not_repeat_parser(incoming, parser, mocker):
     assert job.result["phase"] == "prepared"
     assert (
         job.result["parser_request"]["invocation_id"]
-        == job.result["invocations"]["prepare:6"]["id"]
+        == job.result["invocations"]["parser.process"]["id"]
     )
     assert not Document.objects.exists()
     assert all(
@@ -572,3 +572,50 @@ def test_ingestion_implementations_do_not_import_task_adapters():
                 assert not {alias.name for alias in node.names} & forbidden, (
                     module.__name__
                 )
+
+
+def test_remote_policy_cannot_skip_core_completion(incoming, parser, settings):
+    """Core metadata writes still run when a remote policy targets their names."""
+    from documents.models import Tag
+
+    inbox = Tag.objects.create(name="Core inbox", is_inbox_tag=True)
+    settings.DEFERRED_OPERATIONS = {
+        f"complete:{name}": {"users": []}
+        for name in ("inbox", "correspondent", "type", "tags", "storage", "version")
+    }
+    job = ingestion_jobs.stage_consumption(incoming)
+    result = ingestion_jobs.run_consumption(job.pk)
+    document = Document.objects.get(pk=result["document_id"])
+    assert document.tags.filter(pk=inbox.pk).exists()
+    job.refresh_from_db()
+    assert job.status == DocumentJob.Status.SUCCEEDED
+    for name in ("inbox", "correspondent", "type", "tags", "storage", "version"):
+        assert "policy" not in job.result["invocations"][f"complete:{name}"]
+
+
+def test_deferred_metadata_keeps_import_complete_and_submits_once(
+    incoming, parser, settings, mocker
+):
+    """Optional classification owns a separate job after core completion."""
+    from types import SimpleNamespace
+    from uuid import uuid5
+
+    settings.CLASSIFIER_ENABLED = True
+    settings.CLASSIFICATION_PROVIDER = "tests.RemoteMetadata"
+    settings.DEFERRED_OPERATIONS = {"metadata.classify": {"users": []}}
+    provider = SimpleNamespace(identity=("remote-metadata", "1"), configuration={})
+    mocker.patch(
+        "documents.classification_operations.configured_provider", return_value=provider
+    )
+    classifier = mocker.patch("documents.consumer.load_classifier")
+    mocker.patch("documents.jobs._dispatch")
+    job = ingestion_jobs.stage_consumption(incoming)
+    result = ingestion_jobs.run_consumption(job.pk)
+    assert ingestion_jobs.run_consumption(job.pk) == result
+    job.refresh_from_db()
+    assert job.status == DocumentJob.Status.SUCCEEDED
+    child = DocumentJob.objects.get(kind="enrich")
+    assert child.pk == uuid5(job.pk, "metadata")
+    assert child.input["document_id"] == result["document_id"]
+    assert child.status == DocumentJob.Status.QUEUED
+    classifier.assert_not_called()
