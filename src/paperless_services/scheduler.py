@@ -51,5 +51,13 @@ def main() -> None:
         run(client)
 
 
+class APIScheduler:
+    """Run Supercronic using schedules fetched from the service API."""
+
+    def run(self) -> None:
+        """Run the existing foreground implementation until shutdown."""
+        run(APIClient())
+
+
 if __name__ == "__main__":
     main()

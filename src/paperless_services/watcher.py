@@ -231,5 +231,13 @@ def main() -> None:
                 time.sleep(RETRY_SECONDS)
 
 
+class APIConsumer:
+    """Run the existing API watcher and its persistent journal."""
+
+    def run(self) -> None:
+        """Run the existing foreground implementation until shutdown."""
+        main()
+
+
 if __name__ == "__main__":
     main()

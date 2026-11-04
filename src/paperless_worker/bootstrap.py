@@ -221,3 +221,11 @@ def main() -> None:
         )
     finally:
         app._paperless_outcomes.close()
+
+
+class LeanWorker:
+    """Run the autoscaling worker with Django confined to children."""
+
+    def run(self) -> None:
+        """Run the existing foreground implementation until shutdown."""
+        main()

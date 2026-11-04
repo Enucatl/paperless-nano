@@ -21,5 +21,13 @@ def main() -> None:
     )
 
 
+class Worker:
+    """Run the traditional autoscaling worker."""
+
+    def run(self) -> None:
+        """Run the existing foreground implementation until shutdown."""
+        main()
+
+
 if __name__ == "__main__":
     main()

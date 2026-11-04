@@ -1,18 +1,13 @@
 #!/command/with-contenv /usr/bin/bash
 # shellcheck shell=bash
 
-cd ${PAPERLESS_SRC_DIR}
+cd "${PAPERLESS_SRC_DIR}"
 
 # init-system-checks validates Django before these services start.
 export CELERY_SKIP_CHECKS=1
 
-worker_module=paperless.worker
-if [[ -n "${PAPERLESS_USE_LEAN_WORKER:-}" ]]; then
-	worker_module=paperless_worker
-fi
-
 if [[ -n "${USER_IS_NON_ROOT}" ]]; then
-	exec python3 -m "$worker_module"
+	exec python3 -m paperless_services.launcher worker
 else
-	exec s6-setuidgid paperless python3 -m "$worker_module"
+	exec s6-setuidgid paperless python3 -m paperless_services.launcher worker
 fi

@@ -27,7 +27,7 @@ class _ParentUnpickler(pickle.Unpickler):
         if (module, name) == ("django.db.models.base", "model_unpickle"):
             raise LegacyModelPayloadError(
                 "Legacy model-valued task: drain queued work with the normal worker "
-                "before enabling PAPERLESS_USE_LEAN_WORKER.",
+                "before selecting PAPERLESS_WORKER_CLASS=paperless_worker.bootstrap.LeanWorker.",
             )
         return super().find_class(module, name)
 

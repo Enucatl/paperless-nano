@@ -53,3 +53,18 @@ For the curious among us:
 | Celery parent                        |      98.3 MiB |      57.8 MiB |
 | Celery children                      |      90.2 MiB |       0.0 MiB |
 | **Total**                            | **739.5 MiB** | **292.7 MiB** |
+
+## Selecting resident service implementations
+
+Resident services now use explicit implementation classes rather than feature
+flags. Defaults retain the traditional consumer, scheduler and worker. To select
+the lightweight variants, set `PAPERLESS_CONSUMER_CLASS=paperless_services.watcher.APIConsumer`,
+`PAPERLESS_SCHEDULER_CLASS=paperless_services.scheduler.APIScheduler` and
+`PAPERLESS_WORKER_CLASS=paperless_worker.bootstrap.LeanWorker`. Each is independent.
+Remove the retired `PAPERLESS_USE_API_CONSUMER`, `PAPERLESS_USE_API_SCHEDULER` and
+`PAPERLESS_USE_LEAN_WORKER` variables: active services reject their presence rather
+than silently choosing a different implementation. See the
+[configuration/migration reference](configuration.md#service-implementations) and
+[service contract](document-operations.md#service-implementation-contract-37).
+The launcher and lifecycle interface remain Django-free; no new memory savings
+are claimed by this selection change.

@@ -2341,3 +2341,40 @@ models refuse tool calls on the chat completions API unless reasoning is off:
 AI is enabled and the LLM embedding backend is set.
 
     Defaults to `10 2 * * *`, once per day.
+
+### Service implementations
+
+Docker reads these environment variables directly, before loading Django settings.
+They select installed Python classes with no-argument constructors and a blocking
+`run()` method. Unset values preserve the traditional services:
+
+| Setting | Default | Lightweight alternative |
+| --- | --- | --- |
+| `PAPERLESS_CONSUMER_CLASS` | `paperless_services.traditional.Consumer` | `paperless_services.watcher.APIConsumer` |
+| `PAPERLESS_SCHEDULER_CLASS` | `paperless_services.traditional.Scheduler` | `paperless_services.scheduler.APIScheduler` |
+| `PAPERLESS_WORKER_CLASS` | `paperless.worker.Worker` | `paperless_worker.bootstrap.LeanWorker` |
+
+`PAPERLESS_CONSUMER_DISABLE` and `PAPERLESS_SCHEDULER_DISABLE` still disable their
+services before class selection. Both built-in workers retain autoscaling from
+zero children to the configured `PAPERLESS_TASK_WORKERS` limit. Temporary-process
+language detection remains independent of service selection. API consumer and
+scheduler still need `PAPERLESS_API_URL` and an authorized `PAPERLESS_API_TOKEN`
+(or `PAPERLESS_API_TOKEN_FILE`); their existing journal/scheduling settings apply.
+
+The retired flags `PAPERLESS_USE_API_CONSUMER`, `PAPERLESS_USE_API_SCHEDULER` and
+`PAPERLESS_USE_LEAN_WORKER` cause a visible startup error for the corresponding
+active service whenever present, including empty values or `0`. Remove each flag
+and set its replacement class above when selecting the lightweight implementation;
+remove the flag and leave the class unset for traditional behavior. If both old
+and new settings are present, remove the old one. Previously any nonempty flag,
+including `0` or `false`, selected the lightweight service.
+
+These selections are environment-only; `paperless.conf` and saved application
+settings do not select resident service implementations. Standalone commands such
+as `manage.py document_consumer` and `celery ... beat` continue to use their own
+entry points. To use class selection directly, run
+`python -m paperless_services.launcher consumer` (or `scheduler` / `worker`) from
+the source directory after performing the deployment's initial system checks.
+
+See [service lifecycle and custom implementations](document-operations.md#service-implementation-contract-37)
+for installation and responsibility boundaries.

@@ -1764,3 +1764,60 @@ NULL ordering were corrected to exercise PostgreSQL's existing behavior; a
 lock-release assertion now checks the actual acquired lock rather than unrelated
 objects' garbage collection. The full suite, MariaDB and production external
 providers were not run; the FTS assessment is not a production PostgreSQL provider.
+
+## Service implementation contract (#37)
+
+`paperless_services.contract.Service` documents the structural interface: a
+no-argument constructor and `run() -> None`. Subclassing is not required. The shared
+launcher reads only environment selection and uses `importlib` to load that class;
+it never imports Django settings, initializes unselected engines, discovers entry
+points, or checks behavioral compatibility. Import, constructor, and run failures
+propagate normally to S6 supervision.
+
+An implementation runs in the foreground until shutdown. It owns SIGTERM/SIGINT
+handling, graceful cleanup, task correctness, retries and compatibility with its
+service's contracts. It may `exec` its foreground executable, as the traditional
+consumer/beat and lightweight Supercronic scheduler do. It must not daemonize or
+leave unmanaged children. Unexpected failure must raise or exit nonzero; returning
+normally ends the supervised process. Paperless owns class loading and invocation,
+not certification of third-party behavior.
+
+For a minimal installed replacement, package this module as `example_services` in
+a wheel and install it with `uv pip install --system /path/example_services.whl` in a derived Paperless image. It needs no entry-point registration:
+
+```python
+# example_services.py
+import os
+
+class Consumer:
+    def run(self) -> None:
+        """Delegate signals and exit status to an installed compatible watcher."""
+        os.execvp("my-paperless-watcher", ["my-paperless-watcher"])
+```
+
+Select it with `PAPERLESS_CONSUMER_CLASS=example_services.Consumer`. The referenced
+executable must be installed too and must obey the consumption API contract:
+`documents.service_views` and `paperless_services.watcher` define path admission,
+authorization, stable idempotency keys and durable receipt reconciliation. Scheduler
+implementations follow `documents.service_views` and
+`paperless_services.scheduler`: fetch schedules and dispatch named jobs; they do
+not duplicate task execution. Worker implementations follow Paperless's Celery
+configuration/task registration, authenticated serialization, retries, callbacks,
+durable job delivery and shutdown behavior; see `paperless_worker.bootstrap`,
+`paperless_worker.serialization` and the ingestion/reprocessing sections above.
+A queue consumer that merely calls task functions is not behaviorally equivalent.
+
+Built-in classes reuse existing implementations. S6 keeps privilege dropping,
+initial-check dependencies and service-disable controls. The traditional worker
+and lean worker keep their existing scale-to-zero behavior, and language inference
+still uses its temporary process. Defaults and the explicit migration from retired
+flags are in [configuration](configuration.md#service-implementations).
+
+Verification: **117 tests passed** across service selection, S6 shell execution and
+system checks, scheduler, lean-worker bootstrap/outcomes, task serialization/trace,
+import boundaries and temporary-process language detection. Tests ran as non-root
+in disposable `docker run --rm --userns=host` containers using Python 3.14.10,
+Django 5.2.17 and frozen uv dependencies. Ruff format/check and diff checks passed.
+The launcher/interface import no Django modules; Celery's existing lean bootstrap
+imports Django version utility modules but never Django settings/apps in its
+parent. Full image deployment and live custom implementations were not exercised.
