@@ -2193,6 +2193,82 @@ class TestPathDateLocalization:
 
 
 @pytest.mark.django_db
+def test_failed_move_does_not_restore_an_unrelated_target(
+    paperless_dirs: PaperlessDirs,
+) -> None:
+    """A collision discovered after filename selection cannot become rollback input."""
+    document = DocumentFactory(
+        title="after", filename="before.pdf", mime_type="application/pdf"
+    )
+    original = document.source_path
+    original.write_bytes(b"original")
+    target = paperless_dirs.originals_dir / "after.pdf"
+    target.write_bytes(b"unrelated")
+    with (
+        override_settings(FILENAME_FORMAT="{title}"),
+        mock.patch(
+            "documents.file_handling.generate_unique_filename",
+            return_value=Path("after.pdf"),
+        ),
+    ):
+        reconcile_document_files(document)
+
+    document.refresh_from_db()
+    assert document.filename == "before.pdf"
+    assert original.read_bytes() == b"original"
+    assert target.read_bytes() == b"unrelated"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("occupied", [False, True])
+def test_failed_rollback_retains_files_and_reports_recovery(
+    paperless_dirs: PaperlessDirs,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    occupied: bool,
+) -> None:
+    """Failed restoration is visible and never overwrites a newly occupied path."""
+    import shutil
+
+    document = DocumentFactory(
+        title="after", filename="before.pdf", mime_type="application/pdf"
+    )
+    original = document.source_path
+    original.write_bytes(b"original")
+    target = paperless_dirs.originals_dir / "after.pdf"
+    move = shutil.move
+
+    def move_then_fail(source: Path, destination: Path) -> None:
+        """Complete publication but fail its compensating move."""
+        if source == original:
+            move(source, destination)
+            if occupied:
+                original.write_bytes(b"unrelated")
+        else:
+            raise PermissionError("restore denied")
+
+    with (
+        override_settings(FILENAME_FORMAT="{title}"),
+        mock.patch("documents.file_handling.shutil.move", side_effect=move_then_fail),
+        mock.patch(
+            "django.db.models.query.QuerySet.update",
+            side_effect=DatabaseError("save failed"),
+        ),
+        caplog.at_level(logging.ERROR, logger="paperless.filehandling"),
+    ):
+        reconcile_document_files(document)
+
+    document.refresh_from_db()
+    assert document.filename == "before.pdf"
+    assert target.read_bytes() == b"original"
+    if occupied:
+        assert original.read_bytes() == b"unrelated"
+    else:
+        assert not original.exists()
+    assert "manual file recovery required" in caplog.text
+
+
+@pytest.mark.django_db
 def test_refresh_failure_surfaces_database_error(
     paperless_dirs: PaperlessDirs,
 ) -> None:

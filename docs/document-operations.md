@@ -1357,3 +1357,67 @@ regression coverage proves there is no remaining filename receiver. Tests run
 in non-root disposable `docker run --rm --userns=host` containers with Python
 3.14.10, Django 5.2.17, SQLite and frozen uv dependencies. Full-suite and other
 database-engine testing remain outside this focused change.
+
+## Partial document-update recovery (#34)
+
+Ordinary metadata updates retain the #30 completion contract: persisted metadata
+is authoritative even if a later stage fails. A successful API response remains
+the pre-workflow snapshot, returned after synchronous completion; handled file
+errors can still return success. Bulk success still means persistence and task
+dispatch, not completed workflows. There is no automatic whole-update retry or
+new delivery guarantee.
+
+### Retry inventory and safe repair
+
+| Stage | Existing retry and detection | Recovery action |
+| --- | --- | --- |
+| Metadata/file reconciliation | No automatic retry. Handled move/path/database failures log `Exception during file handling`; metadata stays saved and filename references retain their previous values. Errors acquiring the lock or refreshing the row propagate. | Correct permissions, space, or path configuration, then run `document_renamer`. It refreshes current metadata under the media lock and does not execute workflows. Run `document_sanity_checker` afterward. |
+| Partial filesystem move/failed restoration | A completed move is compensated when possible. Failed compensation now logs document ID and both paths at error level. The sanity checker finds missing, corrupt, or orphaned files, but does not identify every template mismatch. | Preserve both paths. Reconciliation can recognize an already-moved candidate when its checksum matches and the old file is absent. Otherwise inspect recorded checksums and resolve the paths manually; do not delete an orphan just because it is unreferenced. Re-run the sanity checker after repair. |
+| Workflow execution | Exceptions propagate and stop notification/final indexing. Earlier writes and external actions may already have happened. `WorkflowRun` records completed workflows; absence of a record does not prove no action ran. The runner has no automatic replay policy. | Inspect the request/task error, workflow logs and external destination. Reconcile ambiguous email/webhook/hook outcomes with that destination. Repair desired metadata explicitly, then files and indexes. Re-run a workflow only after establishing that its earlier actions are safe to repeat. |
+| Websocket notification / AI dispatch | A receiver exception propagates. Earlier receivers may already have run; no notification receipt or durable dispatch intent exists for these updates. AI index tasks have no explicit automatic retry policy. | Reload the document/list to read authoritative state. For enabled AI indexing, `document_llmindex update` refreshes changed documents; use its documented rebuild operation when a full rebuild is needed. Do not replay all workflows merely to resend a notification. |
+| Full-text indexing | Single writes retry lock acquisition four times, then dispatch a fresh-state task. That task retries lock errors up to five times. Other errors and failed dispatch propagate. Batch writes can fail rather than defer. | After resolving the index/broker error, run `document_index reindex`; it derives the index from current database state without workflows. Explicit removal handles deleted IDs; a full rebuild removes stale entries. |
+| Bulk completion | No explicit automatic retry on `bulk_update_documents`. Enqueue failure leaves metadata saved; task failure can leave earlier documents completed and later documents untouched. Task success is not an external-effect receipt. | Use the failed request/task's document IDs and inspect each document. Repair files/indexes separately. Do not blindly requeue the batch: that repeats workflows for already-processed documents. |
+
+Run these commands through the deployment's normal management-command entry
+point, for example `python3 manage.py document_renamer` from `src` on a bare-metal
+installation. The renamer and index command operate on the collection; extension
+code with a known document can instead call `reconcile_document_files(document)`
+and the search service's `add_or_update` on a fresh row. These repairs intentionally
+do not claim to finish an unresolved workflow. See [management utilities](administration.md#management-commands)
+for command execution and the existing file/index maintenance guidance.
+
+### Smallest mechanism and its limits
+
+Existing maintenance commands are sufficient for derived file/index repair.
+They cannot automatically reconstruct whether arbitrary external workflow effects
+completed, and ordinary metadata updates do not promise that guarantee. Adding
+an update queue or outbox alone would not make replay of those effects safe, so
+this change adds neither. Lost bulk dispatch and interrupted workflows still
+require operator review; there is no persistent per-update completion ledger.
+The explicit ingestion lifecycle in #35 has different durability requirements.
+
+The demonstrated file-safety gap is fixed in the shared reconciler: compensation
+now moves only files this invocation successfully moved. Previously, a rejected
+collision target could be treated as rollback input and overwrite the original.
+Compensation also refuses an occupied original path, reports failed restoration,
+and attempts original/archive restoration independently. It retains ambiguous
+artifacts for inspection instead of silently treating failed restoration as
+success. The media lock coordinates application writers; arbitrary external
+filesystem edits still require operator coordination. SQL rollback does not undo
+published file moves or external workflow effects.
+
+Focused coverage exercises a collision discovered after filename selection,
+failed rollback with and without an occupied previous path, and recovery of files
+and search after a workflow's partial mutation without replaying that workflow.
+Existing cases cover handled filesystem/database failures, already-moved checksum
+recovery, API/notification/index failures and bulk ordering. These decisions
+complete #29's update-operation work together with #30–#33: operation ownership,
+explicit reconciliation, preserved completion ordering, and documented recovery.
+
+Verification: **368 tests passed** across document updates, file handling, bulk
+updates, API versions, maintenance updates, tasks, workflows, ingestion jobs and
+reprocessing jobs. Tests used non-root disposable `docker run --rm --userns=host`
+containers, Python 3.14.10, Django 5.2.17, SQLite and frozen uv dependencies.
+`uv run --no-sync ruff format .`, changed-file Ruff checks and
+`git diff --check` passed. Full-suite, other database engines and live external
+workflow destinations were not tested.

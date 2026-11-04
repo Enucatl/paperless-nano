@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
+from django.core.management import call_command
 
 from documents.models import CustomField
 from documents.models import Document
@@ -293,6 +294,47 @@ def test_workflow_failure_stops_notifications_and_index_until_retry(
         assert list(backend.search_ids("title:after", user=None)) == [document.pk]
     finally:
         document_updated.disconnect(notification)
+
+
+def test_operator_repairs_files_and_search_without_replaying_workflows(
+    paperless_dirs: PaperlessDirs,
+    settings: Settings,
+) -> None:
+    """Existing maintenance repairs derived state without repeating external effects."""
+    settings.FILENAME_FORMAT = "{title}"
+    document = DocumentFactory(
+        title="before", filename="before.pdf", mime_type="application/pdf"
+    )
+    document.source_path.write_bytes(b"original")
+    backend = get_backend()
+    backend.add_or_update(document)
+
+    def incomplete_workflow(**kwargs: object) -> None:
+        """Persist an action before a later external action fails."""
+        Document.objects.filter(pk=document.pk).update(title="after")
+        raise RuntimeError("external effect outcome unknown")
+
+    with (
+        mock.patch(
+            "documents.workflows.runner.run_workflows",
+            side_effect=incomplete_workflow,
+        ) as workflows,
+        mock.patch.object(document_updated, "send") as notification,
+    ):
+        with pytest.raises(RuntimeError, match="external effect outcome unknown"):
+            with document_update(document):
+                pass
+        call_command("document_renamer", no_progress_bar=True)
+        call_command("document_index", "reindex", no_progress_bar=True)
+        workflows.assert_called_once()
+        notification.assert_not_called()
+
+    document.refresh_from_db()
+    assert document.title == "after"
+    assert document.filename == "after.pdf"
+    assert document.source_path.read_bytes() == b"original"
+    assert list(get_backend().search_ids("title:after", user=None)) == [document.pk]
+    assert list(get_backend().search_ids("title:before", user=None)) == []
 
 
 def test_missing_custom_field_value_rejects_entire_update(

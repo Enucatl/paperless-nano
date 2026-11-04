@@ -299,11 +299,13 @@ def reconcile_document_files(instance: Document) -> None:
             old_filename = instance.filename
             old_source_path = instance.source_path
             move_original = False
+            original_moved = False
             original_already_moved = False
 
             old_archive_filename = instance.archive_filename
             old_archive_path = instance.archive_path
             move_archive = False
+            archive_moved = False
             archive_already_moved = False
 
             candidate_filename = generate_filename(instance)
@@ -406,6 +408,7 @@ def reconcile_document_files(instance: Document) -> None:
                 create_source_path_directory(instance.source_path)
                 _journal_ingestion_move(old_source_path, instance.source_path)
                 shutil.move(old_source_path, instance.source_path)
+                original_moved = True
 
             if move_archive:
                 validate_move(
@@ -417,6 +420,7 @@ def reconcile_document_files(instance: Document) -> None:
                 create_source_path_directory(instance.archive_path)
                 _journal_ingestion_move(old_archive_path, instance.archive_path)
                 shutil.move(old_archive_path, instance.archive_path)
+                archive_moved = True
 
             # Don't save() here to prevent infinite recursion.
             Document.global_objects.filter(pk=instance.pk).update(
@@ -434,26 +438,24 @@ def reconcile_document_files(instance: Document) -> None:
             #  - saving to the database failed due to database errors
             # In both cases, we need to revert to the original state.
 
-            # Try to move files to their original location.
-            try:
-                if move_original and instance.source_path.is_file():
-                    logger.info("Restoring previous original path")
-                    shutil.move(instance.source_path, old_source_path)
-
-                if move_archive and instance.archive_path.is_file():
-                    logger.info("Restoring previous archive path")
-                    shutil.move(instance.archive_path, old_archive_path)
-
-            except Exception:
-                # This is fine, since:
-                # A: if we managed to move source from A to B, we will also
-                #  manage to move it from B to A. If not, we have a serious
-                #  issue that's going to get caught by the santiy checker.
-                #  All files remain in place and will never be overwritten,
-                #  so this is not the end of the world.
-                # B: if moving the original file failed, nothing has changed
-                #  anyway.
-                pass
+            # Only restore moves this call completed; a rejected target may be unrelated.
+            for moved, current_path, previous_path in (
+                (original_moved, instance.source_path, old_source_path),
+                (archive_moved, instance.archive_path, old_archive_path),
+            ):
+                if not moved:
+                    continue
+                try:
+                    if previous_path.exists() or previous_path.is_symlink():
+                        raise FileExistsError(previous_path)
+                    shutil.move(current_path, previous_path)
+                except Exception:
+                    logger.exception(
+                        "Document %s: could not restore %s to %s; manual file recovery required",
+                        instance.pk,
+                        current_path,
+                        previous_path,
+                    )
 
             # restore old values on the instance
             instance.filename = old_filename
