@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
-from enum import StrEnum
 from typing import TYPE_CHECKING
 from typing import Self
-from typing import TypedDict
 from typing import cast
 
 import filelock
@@ -22,92 +20,21 @@ from documents.search._schema import build_schema
 from documents.search._schema import open_or_rebuild_index
 from documents.search._schema import rebuild_in_progress
 from documents.search._schema import wipe_index
+from documents.search._tantivy_records import index_record
 from documents.search._tokenizer import ascii_fold
 from documents.search._tokenizer import register_tokenizers
+from documents.search.contract import SearchHit
+from documents.search.contract import SearchMode
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-    from documents.search._records import IndexRecord
     from documents.search._types import QueryConfiguration
     from documents.search._types import SearchVisibility
+    from documents.search.contract import DocumentFacts
 
 logger = logging.getLogger("paperless.search")
-
-
-class SearchMode(StrEnum):
-    QUERY = "query"
-    TEXT = "text"
-    TITLE = "title"
-
-
-class SearchHit(TypedDict):
-    """Type definition for search result hits."""
-
-    id: int
-    score: float
-    rank: int
-    highlights: dict[str, str]
-
-
-class TantivyRelevanceList:
-    """
-    DRF-compatible list wrapper for Tantivy search results.
-
-    Holds a lightweight ordered list of IDs (for pagination count and
-    ``selection_data``) together with a small page of rich ``SearchHit``
-    dicts (for serialization).  DRF's ``PageNumberPagination`` calls
-    ``__len__`` to compute the total page count and ``__getitem__`` to
-    slice the displayed page.
-
-    Args:
-        ordered_ids: All matching document IDs in display order.
-        page_hits: Rich SearchHit dicts for the requested DRF page only.
-        page_offset: Index into *ordered_ids* where *page_hits* starts.
-    """
-
-    def __init__(
-        self,
-        ordered_ids: list[int],
-        page_hits: list[SearchHit],
-        page_offset: int = 0,
-    ) -> None:
-        self._ordered_ids = ordered_ids
-        self._page_hits = page_hits
-        self._page_offset = page_offset
-
-    def __len__(self) -> int:
-        return len(self._ordered_ids)
-
-    def __getitem__(self, key: int | slice) -> SearchHit | list[SearchHit]:
-        if isinstance(key, int):
-            idx = key if key >= 0 else len(self._ordered_ids) + key
-            if self._page_offset <= idx < self._page_offset + len(self._page_hits):
-                return self._page_hits[idx - self._page_offset]
-            return SearchHit(
-                id=self._ordered_ids[key],
-                score=0.0,
-                rank=idx + 1,
-                highlights={},
-            )
-        start = key.start or 0
-        stop = key.stop or len(self._ordered_ids)
-        # DRF slices to extract the current page.  If the slice aligns
-        # with our pre-fetched page_hits, return them directly.
-        # We only check start — DRF always slices with stop=start+page_size,
-        # which exceeds page_hits length on the last page.
-        if start == self._page_offset:
-            return self._page_hits[: stop - start]
-        # Fallback: return stub dicts (no highlights).
-        return [
-            SearchHit(id=doc_id, score=0.0, rank=start + i + 1, highlights={})
-            for i, doc_id in enumerate(self._ordered_ids[key])
-        ]
-
-    def get_all_ids(self) -> list[int]:
-        """Return all matching document IDs in display order."""
-        return self._ordered_ids
 
 
 class WriteBatch:
@@ -190,11 +117,11 @@ class WriteBatch:
             if self._lock is not None:
                 self._lock.release()
 
-    def add_or_update(self, record: IndexRecord) -> None:
+    def add_or_update(self, record: DocumentFacts) -> None:
         """Upsert a plain index record under the acquired writer lock."""
         self.remove(record["id"][0])
         self._writer.add_document(
-            tantivy.Document.from_dict(record, self._backend._schema),
+            tantivy.Document.from_dict(index_record(record), self._backend._schema),
         )
 
     def remove(self, doc_id: int) -> None:
@@ -596,6 +523,8 @@ class TantivyEngine:
         term: str,
         limit: int,
         user: SearchVisibility | None = None,
+        *,
+        allowed_ids: list[int] | None = None,
     ) -> list[str]:
         """
         Get autocomplete suggestions for search queries.
@@ -628,6 +557,11 @@ class TantivyEngine:
         # invisible documents don't leak to other users.
         if user is not None:
             permission_query = self._build_permission_filter(user)
+
+        if allowed_ids is not None:
+            permission_query = tantivy.Query.term_set_query(
+                self._schema, "id", allowed_ids
+            )
 
         matches = searcher.terms_with_prefix(
             "autocomplete_word",
@@ -729,7 +663,7 @@ class TantivyEngine:
 
     def rebuild(
         self,
-        records: Iterable[IndexRecord],
+        records: Iterable[DocumentFacts],
         writer_heap_bytes: int = 512_000_000,
     ) -> None:
         """
@@ -760,7 +694,7 @@ class TantivyEngine:
                 writer = new_index.writer(heap_size=writer_heap_bytes)
                 for record in records:
                     writer.add_document(
-                        tantivy.Document.from_dict(record, self._schema)
+                        tantivy.Document.from_dict(index_record(record), self._schema)
                     )
                 writer.commit()
                 # Wait for background merge threads to finish so all segments

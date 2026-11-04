@@ -1602,3 +1602,165 @@ filenames, duplicate execution locks, callback uncertainty, and cleanup retry.
 The full repository suite, MariaDB, live OCR services, and real external hooks
 were not run; replay safety for third-party effects remains their authors'
 responsibility, not a guarantee inferred by Paperless.
+
+
+## Replaceable document search (#36)
+
+`documents.search.get_backend()` is now a provider-neutral application service.
+`PAPERLESS_SEARCH_PROVIDER` selects an installed no-argument class; unset retains
+`documents.search.tantivy.TantivyProvider`. Only the chosen implementation is
+imported. Public types live in `documents.search.contract`; underscore modules,
+`TantivyBackend` (an internal native-test convenience), native schemas/tokenizers
+and native sorting constants are not the replacement interface.
+
+Core owns root identity, latest-version content, document facts, current
+permissions and deferred job dispatch. `DocumentFacts` is a dictionary of named
+fact lists: `id`, checksum, title, effective content, original filename, taxonomy
+names, notes/user names, custom-field name/value pairs, effective barcode pairs,
+dates, ASN, page/note counts, owner ID and direct user/group grants. Absent
+optional facts have no entry. Text encoding is NFC; dates retain the full
+application range. Core does not require sort copies, bigrams, snippet text,
+autocomplete tokens or Tantivy's nanosecond date range. The native implementation
+derives those values just before writing its schema. A replacement may use the
+facts directly, join authoritative database rows, or maintain its own tables.
+It need not pretend a SQL database is an external index engine.
+
+### Provider operations and lifetime
+
+| Operation | Contract |
+| --- | --- |
+| `open()` / `close()` | Acquire/release process-local resources. Close must also work before opening and after failed initialization. The service replaces its cached instance when the class changes; restart processes after changing implementation-owned settings. |
+| `search(SearchRequest)` | Return `SearchPage(count, hits, offset, matching_ids)`. Count is the exact filtered/authorized count before pagination; hit ranks are one-based positions in the full order. `matching_ids` is a callable returning ordered IDs, optionally a lazy SQL queryset. Normal API pagination never evaluates all IDs; legacy API `all` and explicit selection requests do. |
+| `matching_ids(request)` / `highlight(request, ids, rank_start)` | Matching uses the same query, authorization and ordering semantics as pages. Highlights contain only authorized IDs. A hit has `id`, `score`, `rank`, and the existing field-to-highlight mapping. Escape untrusted text before adding supported highlight markup. |
+| `autocomplete(term, limit, scope)` | Suggestions must derive exclusively from the current authorized scope, including when old index permission fields disagree. |
+| `batch_update()` | Return an atomic context manager with `add_or_update(DocumentFacts)` and `remove(id)`. Failed batches propagate and must roll back; no hidden partial acceptance. Core reads fresh state after entering the provider batch. |
+| `rebuild(records, writer_heap_bytes=...)` | Replace derived state from the core stream. The memory argument is an advisory existing CLI budget; SQL providers can ignore it. Core retains progress reporting. |
+| `needs_rebuild()` / `wipe()` / `optimize()` / `last_modified()` | Implement selected-provider freshness, derived-data removal, maintenance and health. A timestamp may be `None`. Never delete authoritative document state. Freshness checks run before `open()` so opening cannot hide a needed rebuild. |
+
+`SearchRequest` carries a live, authorized root `QuerySet`, query text, mode
+(`query`, `text`, `title`), optional advanced filter, ordering, direction,
+offset/limit, optional similarity seed, and language/fuzzy-threshold/timezone
+configuration. The queryset already includes application filters and current
+owner/direct/group permissions. SQL implementations compose it as a query or
+subquery before matching, ranking, count and slicing. Do not materialize it into
+an ID list unless the implementation requires that. Core checks returned page
+and highlight IDs; selection subqueries remain restricted to current scope.
+Provider authors still own correct counts, term visibility, query behavior and
+resource handling. Autocomplete cannot be authorized after leaking a term, so
+its scope requirement is part of the provider contract.
+
+The built-in provider retains its existing full-ID intersection for native
+ranking and ORM-only ordering; that strategy is not imposed on replacements.
+It now uses current database scope for every read, including stale-grant
+revocation without reindexing. Similarity callers must have access to the seed;
+core's similarity operation rejects an invisible seed before invoking a provider.
+Normal default query syntax, highlights, sorting and result shapes remain intact.
+
+`SearchQueryError` means a user-correctable invalid or unsupported expression and
+maps to the existing HTTP 400 response. Other failures propagate normally.
+`documents.exceptions.SearchWriteBusy` is an optional explicit declaration that a
+single write can safely be retried from fresh state. Core schedules that retry;
+batch failures remain visible. Tantivy's `SearchIndexLockError` derives from it,
+and only the Tantivy provider performs bounded file-lock backoff. A PostgreSQL
+provider need not use either error or any filesystem lock. Tasks, workflows,
+ingestion completion, deletion and rebuilds all use the same selected service.
+
+### Query compatibility and replacement installation
+
+The public language remains the documented Paperless advanced query syntax,
+including saved field queries, boolean/grouped expressions, phrases, ranges,
+relative dates, wildcard/fuzzy expressions and structured-field paths. `text` and
+`title` retain their existing simple-search meaning, and a simultaneous `query`
+is an additional filter. `ordering=score` is ascending relevance;
+`ordering=-score` is descending; absent ordering is best relevance first.
+
+A replacement translates supported syntax to its implementation and raises
+`SearchQueryError` for any unsupported construct, filter, ordering or similarity
+operation. It must not silently drop a clause, treat structured syntax as literal
+text, or substitute its own query language. Exact cross-engine ranking is not
+promised, but filters and authorization must retain meaning. Providers must
+document unsupported operations before switching; saved queries are not rewritten
+or deleted. The default keeps its existing complete behavior.
+
+The complete minimal independent implementation is `DatabaseProvider` in
+[`test_provider_contract.py`](https://github.com/Enucatl/paperless-ngx/blob/architecture/idle-memory/src/documents/tests/search/test_provider_contract.py).
+It composes the supplied queryset, counts/slices in SQL, returns a lazy selection
+query, reads effective version content, supplies scoped completion/highlights,
+and implements every lifecycle/write/maintenance method. It deliberately
+supports only literal search and rejects advanced syntax. The companion
+`PostgreSQLProvider` shows an executable FTS mapping; neither uses the native
+engine/schema internally. They are contract examples, not production search
+replacements.
+
+For an external package, place the implementation and its imports in
+`example_search/provider.py` and package it normally with `pyproject.toml`.
+Install the built wheel into each Paperless Python environment/image, then set:
+
+```ini
+PAPERLESS_SEARCH_PROVIDER=example_search.provider.DatabaseProvider
+```
+
+No registry, score, capabilities dictionary or native index metadata is needed.
+A provider with Django models can ship an application and migrations, install its
+package, and add its application config to `PAPERLESS_APPS`; deploy its migrations
+before enabling it. Provider-specific credentials/settings belong to that
+package. An explicitly set `PAPERLESS_SEARCH_LANGUAGE` is passed to replacements
+without imposing Tantivy's language vocabulary.
+
+Quiesce writers before switching, preserve the old derived store, configure the
+new class, run `document_index reindex --recreate`, and restart web/workers.
+`--if-needed`, `optimize`, Docker startup and system status follow the selected
+provider. Docker creates a native index directory only for the built-in provider.
+If switching back, rebuild the old store from current documents; no authoritative
+rows, permanent files or saved views are removed by a provider switch.
+
+### PostgreSQL contract assessment
+
+The contract supports a PostgreSQL implementation without a native-engine shim.
+The executable assessment composes `request.scope` with effective-content SQL,
+`SearchVector`, `SearchQuery(..., search_type="plain")` and `SearchRank`, then
+executes SQL count, ordering and LIMIT/OFFSET. This proves current authorization,
+version content, ranking and pagination can stay in the database. The query
+contains no file locks, duplicated sort/bigram fields or Python ID intersection.
+These primitives map to PostgreSQL `tsvector`, `tsquery` and `ts_rank`.
+[Django FTS documentation](https://docs.djangoproject.com/en/5.2/ref/contrib/postgres/search/)
+describes these expression classes.
+
+For a production provider, weighted vectors can combine title, effective content
+and metadata; typed dates/numbers and structured fields remain SQL predicates.
+An owned search table/GIN index can store derived vectors and be updated through
+the atomic batch contract, or expressions can query authoritative rows. Use the
+provided scope as an authorization subquery before ranking and pagination.
+`ts_headline` can supply snippets after scope filtering, but its output must be
+escaped/sanitized before HTTP display. Prefix vocabulary aggregation must join
+visible rows. Similarity needs an explicit provider strategy; PostgreSQL's FTS
+query functions are not a drop-in translation of every existing saved query.
+[PostgreSQL text-search controls](https://www.postgresql.org/docs/18/textsearch-controls.html)
+describe vectors, query constructors, ranking and headlines.
+
+Remaining implementation constraints are explicit: translate Paperless's full
+advanced grammar or reject unsupported constructs; preserve relative-date
+request timezone; define fuzzy and similarity semantics; maintain vectors for
+root/version lifecycle changes; and keep permission-sensitive completion terms
+current. The assessment intentionally rejects advanced queries and similarity.
+It validates the interface's suitability, not a production provider's feature
+parity, relevance quality or performance. No memory/performance gain is claimed.
+
+Verification: **927 passed** in the expanded SQLite selection (one PostgreSQL-only
+assessment skipped), followed by **97 passed** on PostgreSQL 18 after the final
+ordering regression was added, then **96 passed** in the final focused SQLite
+run covering last-page and invalid-page handling (one PostgreSQL case skipped).
+The SQLite selection covered all native search
+suites, search APIs/error/length handling, management/status/admin, permissions,
+update/bulk completion, ingestion/reprocessing, tasks, startup/settings and AI
+full-text fallback. The PostgreSQL selection covered the independent provider and
+real FTS assessment, record boundaries, search API, and update/bulk completion.
+Both used Python 3.14.10, Django 5.2.17, frozen uv dependencies and
+`pytest -o addopts="" --tb=short -n 4 --dist=loadscope --randomly-seed=1` in
+non-root disposable `docker run --rm --userns=host` containers. PostgreSQL data
+was temporary and removed with its service. Ruff checks/formatting and diff
+checks passed. Existing SQLite-only test assumptions about generated IDs and
+NULL ordering were corrected to exercise PostgreSQL's existing behavior; a
+lock-release assertion now checks the actual acquired lock rather than unrelated
+objects' garbage collection. The full suite, MariaDB and production external
+providers were not run; the FTS assessment is not a production PostgreSQL provider.

@@ -40,7 +40,7 @@ def staff_user(db) -> User:
 
 class TestDocumentAdmin(DirectoriesMixin, TestCase):
     def get_document_from_index(self, doc):
-        backend = get_backend().engine
+        backend = get_backend().provider.engine
         searcher = backend._index.searcher()
         results = searcher.search(
             tantivy.Query.term_query(backend._schema, "id", doc.pk),

@@ -1117,9 +1117,10 @@ def _get_search_language_setting(ocr_lang: str) -> str | None:
     """
     explicit = os.environ.get("PAPERLESS_SEARCH_LANGUAGE")
     if explicit is not None:
-        # Lazy import avoids any app-loading order concerns; _tokenizer has no
-        # Django dependencies so this is safe.
-        from documents.search._tokenizer import SUPPORTED_LANGUAGES
+        if SEARCH_PROVIDER != "documents.search.tantivy.TantivyProvider":
+            return explicit
+        # Validate the built-in vocabulary without loading its native engine.
+        from documents.search._languages import SUPPORTED_LANGUAGES
 
         return get_choice_from_env("PAPERLESS_SEARCH_LANGUAGE", SUPPORTED_LANGUAGES)
 
@@ -1149,6 +1150,10 @@ def _get_search_language_setting(ocr_lang: str) -> str | None:
 
 
 CLASSIFIER_LANGUAGE: str | None = _get_classifier_language_setting(OCR_LANGUAGE)
+
+SEARCH_PROVIDER = os.getenv(
+    "PAPERLESS_SEARCH_PROVIDER", "documents.search.tantivy.TantivyProvider"
+)
 
 SEARCH_LANGUAGE: str | None = _get_search_language_setting(OCR_LANGUAGE)
 

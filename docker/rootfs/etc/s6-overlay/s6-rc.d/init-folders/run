@@ -17,13 +17,17 @@ declare -r main_dirs=(
 	"${tmp_dir}"
 )
 
-declare -r extra_dirs=(
+declare -a extra_dirs=(
 	"${main_dirs[@]}"
-	"${data_dir}/index"
 	"${media_root_dir}/documents"
 	"${media_root_dir}/documents/originals"
 	"${media_root_dir}/documents/thumbnails"
 )
+
+if [[ "${PAPERLESS_SEARCH_PROVIDER:-documents.search.tantivy.TantivyProvider}" == "documents.search.tantivy.TantivyProvider" ]]; then
+	extra_dirs+=("${data_dir}/index")
+fi
+readonly extra_dirs
 
 if [[ -n "${USER_IS_NON_ROOT}" ]]; then
 	# Non-root mode: Create directories as current user, warn about permission issues

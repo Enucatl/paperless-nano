@@ -1,6 +1,5 @@
 import logging
 
-from django.conf import settings
 from django.db import transaction
 
 from documents.management.commands.base import PaperlessCommand
@@ -61,11 +60,11 @@ class Command(PaperlessCommand):
     def handle(self, *args, **options):
         with transaction.atomic():
             if options["command"] == "reindex":
-                if options.get("if_needed") and not needs_rebuild(settings.INDEX_DIR):
+                if options.get("if_needed") and not needs_rebuild():
                     self.stdout.write("Search index is up to date.")
                     return
                 if options.get("recreate"):
-                    wipe_index(settings.INDEX_DIR)
+                    wipe_index()
 
                 documents = (
                     Document.objects.filter(root_document__isnull=True)
@@ -102,7 +101,4 @@ class Command(PaperlessCommand):
                 reset_backend()
 
             elif options["command"] == "optimize":
-                logger.info(
-                    "document_index optimize is a no-op — Tantivy manages "
-                    "segment merging automatically.",
-                )
+                get_backend().optimize()

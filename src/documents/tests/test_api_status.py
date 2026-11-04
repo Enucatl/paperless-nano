@@ -294,6 +294,7 @@ class TestSystemStatus(APITestCase):
             - The response contains the correct index status
         """
         mock_get_backend.return_value = mock.MagicMock()
+        mock_get_backend.return_value.last_modified.return_value = timezone.now()
         # Use the temp dir created in setUp (self.tmp_dir) as a real INDEX_DIR
         # with a real file so the mtime lookup works
         sentinel = self.tmp_dir / "sentinel.txt"

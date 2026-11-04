@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from django.db.models import QuerySet
 
     from documents.models import Document
-    from documents.search._records import IndexRecord
+    from documents.search.contract import DocumentFacts
 
 
 class ViewerGrant(NamedTuple):
@@ -60,7 +60,7 @@ class _DocumentViewerStream(QuerySetStream["Document"]):
 def index_records(
     documents: QuerySet[Document],
     chunk_size: int = 1000,
-) -> Iterator[IndexRecord]:
+) -> Iterator[DocumentFacts]:
     """Map documents lazily so callers can acquire the writer before reading."""
     for document, grant in _DocumentViewerStream(documents, chunk_size=chunk_size):
         yield document_to_record(
@@ -89,7 +89,7 @@ def documents_for_ids(ids: Sequence[int]) -> QuerySet[Document]:
     )
 
 
-def record_for_document(document: Document) -> IndexRecord:
+def record_for_document(document: Document) -> DocumentFacts:
     """Resolve a document's root and current grants before mapping its record."""
     if document.root_document_id is not None:
         document = document.root_document

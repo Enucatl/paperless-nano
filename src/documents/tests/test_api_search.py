@@ -944,7 +944,7 @@ class TestDocumentSearchApi(DirectoriesMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         results = response.data["results"]
-        self.assertEqual({r["id"] for r in results}, {1, 2})
+        self.assertEqual({r["id"] for r in results}, {d1.pk, d2.pk})
 
     @mock.patch("documents.search._engine.parse_user_query")
     def test_search_parser_bug_surfaces_as_500_not_400(self, m) -> None:
@@ -969,7 +969,7 @@ class TestDocumentSearchApi(DirectoriesMixin, APITestCase):
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    @mock.patch("documents.search._backend.TantivyBackend.autocomplete")
+    @mock.patch("documents.search._backend.SearchService.autocomplete")
     def test_search_autocomplete_limits(self, m) -> None:
         """
         GIVEN:
@@ -1878,14 +1878,14 @@ class TestDocumentSearchApi(DirectoriesMixin, APITestCase):
             search_query("&ordering=-num_notes"),
             [d1.id, d3.id, d2.id],
         )
-        # owner sort: ORM orders by owner_id (integer); NULLs first in SQLite ASC
+        # Owner ordering follows the selected database's NULL ordering.
         self.assertListEqual(
             search_query("&ordering=owner"),
-            [d3.id, d1.id, d2.id],
+            list(Document.objects.order_by("owner").values_list("pk", flat=True)),
         )
         self.assertListEqual(
             search_query("&ordering=-owner"),
-            [d2.id, d1.id, d3.id],
+            list(Document.objects.order_by("-owner").values_list("pk", flat=True)),
         )
 
     def test_search_ordering_by_score(self) -> None:

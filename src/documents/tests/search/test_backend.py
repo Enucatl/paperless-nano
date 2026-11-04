@@ -1190,7 +1190,7 @@ class TestSingleton:
         b2 = get_backend()
 
         assert b1 is not b2
-        assert b2.engine._path == tmp_path / "b"
+        assert b2.provider.engine._path == tmp_path / "b"
 
     @pytest.mark.usefixtures("paperless_dirs")
     def test_reset_forces_new_instance(self) -> None:

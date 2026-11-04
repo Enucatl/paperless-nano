@@ -11,7 +11,7 @@ from django.test import override_settings
 from guardian.shortcuts import remove_perm
 
 from documents.models import Document
-from documents.search import TantivyBackend
+from documents.search._backend import TantivyBackend
 from paperless.config import AIConfig
 from paperless_ai.ai_classifier import TAXONOMY_CANDIDATE_TOP_K
 from paperless_ai.ai_classifier import _fulltext_similar_documents
@@ -994,6 +994,7 @@ class TestFulltextSimilarDocuments:
             content="shared content phrase",
             owner=owner,
         )
+        grant_object(viewer, source, "view_document")
         grant_object(viewer, permitted, "view_document")
         grant_object(viewer, now_private, "view_document")
         fulltext_backend.add_or_update(source)

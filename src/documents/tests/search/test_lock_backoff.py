@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 import filelock
 import pytest
 
-from documents.search._backend import SearchIndexLockError
+from documents.exceptions import SearchIndexLockError
 from documents.search._backend import TantivyBackend
-from documents.search_jobs import _LOCK_BACKOFF_CAP
-from documents.search_jobs import _LOCK_RETRY_ATTEMPTS
-from documents.search_jobs import _LOCK_TIMEOUT_SECONDS
+from documents.search.tantivy import _LOCK_BACKOFF_CAP
+from documents.search.tantivy import _LOCK_RETRY_ATTEMPTS
+from documents.search.tantivy import _LOCK_TIMEOUT_SECONDS
 from documents.tasks import index_document
 from documents.tasks import remove_document_from_index
 from paperless_testing.factories import DocumentFactory
@@ -32,8 +32,11 @@ def test_lock_exception_identity_and_task_retry_contract() -> None:
     from documents.search import SearchIndexLockError as PublicLockError
 
     assert SearchIndexLockError is SharedLockError is PublicLockError
-    assert index_document.autoretry_for == (SharedLockError,)
-    assert remove_document_from_index.autoretry_for == (SharedLockError,)
+    from documents.exceptions import SearchWriteBusy
+
+    assert issubclass(SharedLockError, SearchWriteBusy)
+    assert index_document.autoretry_for == (SearchWriteBusy,)
+    assert remove_document_from_index.autoretry_for == (SearchWriteBusy,)
 
 
 @pytest.fixture
@@ -75,7 +78,7 @@ class TestWriteBatchLockRetry:
             side_effect=flaky_acquire,
         )
         mock_sleep = mocker.patch(
-            "documents.search_jobs.time.sleep",
+            "documents.search.tantivy.time.sleep",
             side_effect=lambda s: sleep_values.append(s),
         )
 
@@ -102,7 +105,7 @@ class TestWriteBatchLockRetry:
             "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
-        mocker.patch("documents.search_jobs.time.sleep")
+        mocker.patch("documents.search.tantivy.time.sleep")
 
         with pytest.raises(SearchIndexLockError):
             with disk_backend.batch_update(lock_timeout=_LOCK_TIMEOUT_SECONDS):
@@ -120,7 +123,7 @@ class TestWriteBatchLockRetry:
         )
         sleep_values: list[float] = []
         mocker.patch(
-            "documents.search_jobs.time.sleep",
+            "documents.search.tantivy.time.sleep",
             side_effect=lambda s: sleep_values.append(s),
         )
         for _ in range(50):
@@ -151,7 +154,7 @@ class TestAddOrUpdateDeferredScheduling:
             "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
-        mocker.patch("documents.search_jobs.time.sleep")
+        mocker.patch("documents.search.tantivy.time.sleep")
         mock_apply = mocker.patch("documents.tasks.index_document.apply_async")
 
         # Must NOT raise
@@ -171,7 +174,7 @@ class TestAddOrUpdateDeferredScheduling:
             "documents.search._engine.filelock.FileLock.acquire",
             side_effect=filelock.Timeout(""),
         )
-        mocker.patch("documents.search_jobs.time.sleep")
+        mocker.patch("documents.search.tantivy.time.sleep")
         mock_apply = mocker.patch(
             "documents.tasks.remove_document_from_index.apply_async",
         )

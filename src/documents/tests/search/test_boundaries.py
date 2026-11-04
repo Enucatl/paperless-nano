@@ -117,7 +117,7 @@ def test_engine_reports_lock_failure_without_retry_or_dispatch(
         "documents.search._engine.filelock.FileLock.acquire",
         side_effect=filelock.Timeout("busy"),
     )
-    sleep = mocker.patch("documents.search_jobs.time.sleep")
+    sleep = mocker.patch("documents.search.tantivy.time.sleep")
     dispatch = mocker.patch("documents.search_jobs.defer_index_write")
     try:
         with pytest.raises(SearchIndexLockError):
@@ -143,7 +143,8 @@ def test_writer_construction_failure_releases_acquired_lock(tmp_path, mocker) ->
     try:
         with pytest.raises(RuntimeError, match="cannot open writer"):
             batch.__enter__()
-        release.assert_called_once()
+        release.assert_any_call(batch._lock)
+        assert not batch._lock.is_locked
         mocker.stop(constructor)
         with engine.batch_update(lock_timeout=0):
             pass

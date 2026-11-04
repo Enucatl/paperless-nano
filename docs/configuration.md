@@ -1325,6 +1325,24 @@ should be a valid crontab(5) expression describing when to run.
 
     Defaults to `0 0 * * *` or daily at midnight.
 
+#### [`PAPERLESS_SEARCH_PROVIDER=<class>`](#PAPERLESS_SEARCH_PROVIDER) {#PAPERLESS_SEARCH_PROVIDER}
+
+Installed Python class implementing the document search contract. Defaults to
+`documents.search.tantivy.TantivyProvider`. The class has a no-argument
+constructor; its package must be installed in every web/worker image. No entry
+point registration is required. The selected provider owns its configuration,
+derived storage, query translation and maintenance. Replacements do not load
+Tantivy or require its index directory. This does not change the separate AI
+vector index.
+
+Stop writers before switching, install/configure the replacement, run
+`document_index reindex --recreate`, then restart all processes. Keep old derived
+storage until the replacement is verified; switching never deletes document
+rows or permanent document files. Saved queries retain their public syntax;
+a replacement must reject unsupported expressions rather than reinterpret them.
+See [the provider contract and PostgreSQL assessment](document-operations.md#replaceable-document-search-36)
+for installation, interfaces, authorization and an executable minimal example.
+
 #### [`PAPERLESS_SEARCH_LANGUAGE=<language>`](#PAPERLESS_SEARCH_LANGUAGE) {#PAPERLESS_SEARCH_LANGUAGE}
 
 : Sets the stemmer language for the full-text search index.

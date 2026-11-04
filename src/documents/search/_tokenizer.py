@@ -6,49 +6,11 @@ from typing import Final
 
 import tantivy
 
+from documents.search._languages import _LANGUAGE_MAP
+from documents.search._languages import SUPPORTED_LANGUAGES
+
 logger = logging.getLogger("paperless.search")
 
-# Mapping of ISO 639-1 codes (and common aliases) -> Tantivy Snowball name
-_LANGUAGE_MAP: dict[str, str] = {
-    "ar": "Arabic",
-    "arabic": "Arabic",
-    "da": "Danish",
-    "danish": "Danish",
-    "nl": "Dutch",
-    "dutch": "Dutch",
-    "en": "English",
-    "english": "English",
-    "fi": "Finnish",
-    "finnish": "Finnish",
-    "fr": "French",
-    "french": "French",
-    "de": "German",
-    "german": "German",
-    "el": "Greek",
-    "greek": "Greek",
-    "hu": "Hungarian",
-    "hungarian": "Hungarian",
-    "it": "Italian",
-    "italian": "Italian",
-    "no": "Norwegian",
-    "norwegian": "Norwegian",
-    "pt": "Portuguese",
-    "portuguese": "Portuguese",
-    "ro": "Romanian",
-    "romanian": "Romanian",
-    "ru": "Russian",
-    "russian": "Russian",
-    "es": "Spanish",
-    "spanish": "Spanish",
-    "sv": "Swedish",
-    "swedish": "Swedish",
-    "ta": "Tamil",
-    "tamil": "Tamil",
-    "tr": "Turkish",
-    "turkish": "Turkish",
-}
-
-SUPPORTED_LANGUAGES: frozenset[str] = frozenset(_LANGUAGE_MAP)
 # Document.title is max_length=128, so use 129 as the limit for
 # Tantivy's remove_long filter
 _TOKEN_REMOVE_LONG_LIMIT: Final[int] = 129

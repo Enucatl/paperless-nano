@@ -263,7 +263,7 @@ class TestSelectionPathsAgreeWithSearch:
     ) -> None:
         """
         GIVEN:
-            - TantivyBackend.more_like_this_ids() raising a
+            - SearchService.more_like_this_ids() raising a
               SearchQueryError
         WHEN:
             - The bulk_download endpoint is called with a more_like_id
@@ -277,7 +277,7 @@ class TestSelectionPathsAgreeWithSearch:
             raise SearchQueryError("similar-document lookup is unavailable")
 
         monkeypatch.setattr(
-            backend_mod.TantivyBackend,
+            backend_mod.SearchService,
             "more_like_this_ids",
             raise_search_query_error,
         )
@@ -302,7 +302,7 @@ class TestSelectionPathsAgreeWithSearch:
     ) -> None:
         """
         GIVEN:
-            - TantivyBackend.more_like_this_ids() raising an unrelated
+            - SearchService.more_like_this_ids() raising an unrelated
               exception (ZeroDivisionError), not a SearchQueryError
         WHEN:
             - The bulk_download endpoint is called with a more_like_id
@@ -317,7 +317,7 @@ class TestSelectionPathsAgreeWithSearch:
             raise ZeroDivisionError("synthetic bug, unrelated to similarity lookup")
 
         monkeypatch.setattr(
-            backend_mod.TantivyBackend,
+            backend_mod.SearchService,
             "more_like_this_ids",
             raise_zero_division,
         )

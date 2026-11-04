@@ -86,10 +86,10 @@ class StandardPagination(PageNumberPagination):
         )
 
     def get_all_result_ids(self):
-        from documents.search import TantivyRelevanceList
+        from documents.search import SearchResults
 
         query = self.page.paginator.object_list
-        if isinstance(query, TantivyRelevanceList):
+        if isinstance(query, SearchResults):
             return query.get_all_ids()
         return self.page.paginator.object_list.values_list("pk", flat=True)
 

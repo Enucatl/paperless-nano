@@ -7,6 +7,7 @@ import tempfile
 import zipfile
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from http import HTTPStatus
@@ -40,7 +41,6 @@ from django.db.models import Model
 from django.db.models import OuterRef
 from django.db.models import Prefetch
 from django.db.models import Q
-from django.db.models import QuerySet
 from django.db.models import Subquery
 from django.db.models import Sum
 from django.db.models import When
@@ -58,7 +58,6 @@ from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.decorators import method_decorator
-from django.utils.timezone import make_aware
 from django.utils.translation import get_language
 from django.utils.translation import gettext_lazy as _
 from django.views import View
@@ -269,20 +268,13 @@ if settings.AUDIT_LOG_ENABLED:
     from auditlog.models import LogEntry
 
 if TYPE_CHECKING:
-    from documents.search import SearchHit
     from paperless_ai.base_model import TaxonomyChoiceDict
 
 
 logger = logging.getLogger("paperless.api")
 
-# Crossover point for intersect_and_order: below this count use a targeted
-# IN-clause query; at or above this count fall back to a full-table scan +
-# Python set intersection.  The IN-clause is faster for small result sets but
-# degrades on SQLite with thousands of parameters.  PostgreSQL handles large IN
-# clauses efficiently, so this threshold mainly protects SQLite users.
-_TANTIVY_INTERSECT_THRESHOLD = 5_000
-_TANTIVY_SEARCH_PARAM_NAMES = ("text", "title_search", "query", "more_like_id")
-_TANTIVY_COMBINABLE_SEARCH_PARAMS = ({"text", "query"}, {"title_search", "query"})
+_SEARCH_PARAM_NAMES = ("text", "title_search", "query", "more_like_id")
+_COMBINABLE_SEARCH_PARAMS = ({"text", "query"}, {"title_search", "query"})
 
 # whoosh-compat's fieldname tagger (used only for SearchMode.QUERY, via the
 # whoosh grammar in parse_user_query) is O(n^2) in plain word characters:
@@ -302,9 +294,9 @@ _TANTIVY_COMBINABLE_SEARCH_PARAMS = ({"text", "query"}, {"title_search", "query"
 _MAX_QUERY_LENGTH: Final[int] = 4096
 
 
-def _validate_tantivy_search_params(active: list[str]) -> None:
+def _validate_search_params(active: list[str]) -> None:
     # may also have a filter query alongside a simple search e.g. relative dates
-    if len(active) > 1 and set(active) not in _TANTIVY_COMBINABLE_SEARCH_PARAMS:
+    if len(active) > 1 and set(active) not in _COMBINABLE_SEARCH_PARAMS:
         raise ValidationError(
             {
                 "detail": _(
@@ -314,7 +306,7 @@ def _validate_tantivy_search_params(active: list[str]) -> None:
         )
 
 
-def _get_tantivy_query_and_mode(params):
+def _get_search_query_and_mode(params):
     from documents.search import QueryTooLongError
     from documents.search import SearchMode
 
@@ -357,20 +349,6 @@ def _get_more_like_id(query_params: dict[str, Any], user: User | None) -> int:
 
     # Only root documents are indexed, a version stands for its root
     return more_like_doc.root_document_id or more_like_doc.pk
-
-
-class SearchParams(NamedTuple):
-    sort_field_name: str | None
-    sort_reverse: bool
-    use_tantivy_sort: bool
-    page_num: int
-    page_size: int
-
-
-class SearchResultPage(NamedTuple):
-    ordered_ids: list[int]
-    hits: list["SearchHit"]
-    page_offset: int
 
 
 class ResolvedRequestDocs(NamedTuple):
@@ -2504,19 +2482,19 @@ class ChatStreamingView(GenericAPIView[Any]):
                 name="text",
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
-                description="Simple Tantivy-backed text search query string",
+                description="Simple text search query string",
             ),
             OpenApiParameter(
                 name="title_search",
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
-                description="Simple Tantivy-backed title-only search query string",
+                description="Simple title-only search query string",
             ),
             OpenApiParameter(
                 name="query",
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
-                description="Advanced Tantivy search query string",
+                description="Advanced document search query string",
             ),
             OpenApiParameter(
                 name="full_perms",
@@ -2558,11 +2536,7 @@ class UnifiedSearchViewSet(DocumentViewSet):
 
     def _get_active_search_params(self, request: Request | None = None) -> list[str]:
         request = request or self.request
-        return [
-            param
-            for param in _TANTIVY_SEARCH_PARAM_NAMES
-            if param in request.query_params
-        ]
+        return [param for param in _SEARCH_PARAM_NAMES if param in request.query_params]
 
     def _is_search_request(self):
         return bool(self._get_active_search_params())
@@ -2571,166 +2545,51 @@ class UnifiedSearchViewSet(DocumentViewSet):
         if not self._is_search_request():
             return super().list(request)
 
-        from documents.search import SearchHit
         from documents.search import SearchQueryError
-        from documents.search import TantivyBackend
-        from documents.search import TantivyRelevanceList
+        from documents.search import SearchResults
         from documents.search import get_backend
         from documents.search import search_query_error_messages
 
-        def parse_search_params() -> SearchParams:
-            """Extract query string, search mode, and ordering from request."""
-            _validate_tantivy_search_params(
-                self._get_active_search_params(request),
-            )
-
-            ordering_param = request.query_params.get("ordering", "")
-            sort_reverse = ordering_param.startswith("-")
-            sort_field_name = ordering_param.lstrip("-") or None
-            # "score" means relevance order — Tantivy handles it natively,
-            # so treat it as a Tantivy sort to preserve the ranked order through
-            # the ORM intersection step.
-            use_tantivy_sort = (
-                sort_field_name in TantivyBackend.SORTABLE_FIELDS
-                or sort_field_name is None
-                or sort_field_name == "score"
-            )
-
+        try:
+            _validate_search_params(self._get_active_search_params(request))
+            ordering = request.query_params.get("ordering", "")
             try:
                 page_num = int(request.query_params.get("page", 1))
             except (TypeError, ValueError):
                 page_num = 1
+            if page_num < 1:
+                raise NotFound(_("Invalid page."))
             page_size = (
                 self.paginator.get_page_size(request) or self.paginator.page_size
             )
-
-            return SearchParams(
-                sort_field_name=sort_field_name,
-                sort_reverse=sort_reverse,
-                use_tantivy_sort=use_tantivy_sort,
-                page_num=page_num,
-                page_size=page_size,
-            )
-
-        def intersect_and_order(
-            all_ids: list[int],
-            filtered_qs: QuerySet[Document],
-            *,
-            use_tantivy_sort: bool,
-        ) -> list[int]:
-            """Intersect search IDs with ORM-visible IDs, preserving order."""
-            if not all_ids:
-                return []
-            if use_tantivy_sort:
-                if len(all_ids) <= _TANTIVY_INTERSECT_THRESHOLD:
-                    # Small result set: targeted IN-clause avoids a full-table scan.
-                    visible_ids = set(
-                        filtered_qs.filter(pk__in=all_ids).values_list("pk", flat=True),
-                    )
-                else:
-                    # Large result set: full-table scan + Python intersection is faster
-                    # than a large IN-clause on SQLite.
-                    visible_ids = set(
-                        filtered_qs.values_list("pk", flat=True),
-                    )
-                return [doc_id for doc_id in all_ids if doc_id in visible_ids]
-            return list(
-                filtered_qs.filter(id__in=all_ids).values_list("pk", flat=True),
-            )
-
-        def run_text_search(
-            backend: TantivyBackend,
-            user: User | None,
-            filtered_qs: QuerySet[Document],
-        ) -> SearchResultPage:
-            """Handle text/title/query search: IDs, ORM intersection, page highlights."""
-            query_str, search_mode, filter_query = _get_tantivy_query_and_mode(
-                request.query_params,
-            )
-
-            # "score" is not a real Tantivy sort field — it means relevance order,
-            # which is Tantivy's default when no sort field is specified.
-            is_score_sort = sort_field_name == "score"
-            all_ids = backend.search_ids(
-                query_str,
-                user=user,
-                sort_field=(
-                    None if (not use_tantivy_sort or is_score_sort) else sort_field_name
-                ),
-                sort_reverse=sort_reverse,
-                search_mode=search_mode,
-                filter_query=filter_query,
-            )
-            ordered_ids = intersect_and_order(
-                all_ids,
-                filtered_qs,
-                use_tantivy_sort=use_tantivy_sort,
-            )
-            # Tantivy returns relevance results best-first (descending score).
-            # ordering=score (ascending, worst-first) requires a reversal.
-            if is_score_sort and not sort_reverse:
-                ordered_ids = list(reversed(ordered_ids))
-
-            page_offset = (page_num - 1) * page_size
-            page_ids = ordered_ids[page_offset : page_offset + page_size]
-            page_hits = backend.highlight_hits(
-                query_str,
-                page_ids,
-                search_mode=search_mode,
-                rank_start=page_offset + 1,
-            )
-            return SearchResultPage(
-                ordered_ids=ordered_ids,
-                hits=page_hits,
-                page_offset=page_offset,
-            )
-
-        def run_more_like_this(
-            backend: TantivyBackend,
-            user: User | None,
-            filtered_qs: QuerySet[Document],
-        ) -> SearchResultPage:
-            """Handle more_like_id search: permission check, IDs, stub hits."""
-            more_like_doc_id = _get_more_like_id(request.query_params, user)
-
-            all_ids = backend.more_like_this_ids(more_like_doc_id, user=user)
-            ordered_ids = intersect_and_order(
-                all_ids,
-                filtered_qs,
-                use_tantivy_sort=True,
-            )
-
-            page_offset = (page_num - 1) * page_size
-            page_ids = ordered_ids[page_offset : page_offset + page_size]
-            page_hits = [
-                SearchHit(id=doc_id, score=0.0, rank=rank, highlights={})
-                for rank, doc_id in enumerate(page_ids, start=page_offset + 1)
-            ]
-            return SearchResultPage(
-                ordered_ids=ordered_ids,
-                hits=page_hits,
-                page_offset=page_offset,
-            )
-
-        try:
-            sort_field_name, sort_reverse, use_tantivy_sort, page_num, page_size = (
-                parse_search_params()
-            )
-
             backend = get_backend()
             filtered_qs = self.filter_queryset(self.get_queryset())
             user = None if request.user.is_superuser else request.user
-
+            search_options = {}
             if "more_like_id" in request.query_params:
-                result = run_more_like_this(backend, user, filtered_qs)
+                search_options["similar_to"] = _get_more_like_id(
+                    request.query_params, user
+                )
             else:
-                result = run_text_search(backend, user, filtered_qs)
-
-            rl = TantivyRelevanceList(
-                result.ordered_ids,
-                result.hits,
-                result.page_offset,
+                query, mode, filter_query = _get_search_query_and_mode(
+                    request.query_params
+                )
+                search_options.update(query=query, mode=mode, filter_query=filter_query)
+            search_request = backend.request(
+                user=user,
+                scope=filtered_qs,
+                ordering=ordering.lstrip("-") or None,
+                descending=ordering.startswith("-"),
+                offset=(page_num - 1) * page_size,
+                limit=page_size,
+                **search_options,
             )
+            result = backend.search(search_request)
+            if request.query_params.get("page") in self.paginator.last_page_strings:
+                offset = max(0, (result.count - 1) // page_size * page_size)
+                if offset != result.offset:
+                    result = backend.search(replace(search_request, offset=offset))
+            rl = SearchResults(result)
             page = self.paginate_queryset(rl)
 
             if page is not None:
@@ -2740,13 +2599,10 @@ class UnifiedSearchViewSet(DocumentViewSet):
                 if get_boolean(
                     str(request.query_params.get("include_selection_data", "false")),
                 ):
-                    # NOTE: pk__in=ordered_ids generates a large SQL IN clause
-                    # for big result sets.  Acceptable today but may need a temp
-                    # table or chunked approach if selection_data becomes slow
-                    # at scale (tens of thousands of matching documents).
+                    # SQL providers can supply a lazy subquery for selection IDs.
                     response.data["selection_data"] = (
                         self._get_selection_data_for_queryset(
-                            filtered_qs.filter(pk__in=result.ordered_ids),
+                            filtered_qs.filter(pk__in=result.matching_ids()),
                         )
                     )
                 return response
@@ -2888,13 +2744,11 @@ class DocumentSelectionMixin:
         filters: dict[str, Any],
     ) -> list[int] | None:
         search_filters = [
-            filter_name
-            for filter_name in _TANTIVY_SEARCH_PARAM_NAMES
-            if filter_name in filters
+            filter_name for filter_name in _SEARCH_PARAM_NAMES if filter_name in filters
         ]
         if not search_filters:
             return None
-        _validate_tantivy_search_params(search_filters)
+        _validate_search_params(search_filters)
 
         from documents.search import SearchQueryError
         from documents.search import get_backend
@@ -2913,7 +2767,7 @@ class DocumentSelectionMixin:
                     user=search_user,
                 )
             else:
-                query_str, search_mode, filter_query = _get_tantivy_query_and_mode(
+                query_str, search_mode, filter_query = _get_search_query_and_mode(
                     filters,
                 )
                 search_ids = backend.search_ids(
@@ -2945,7 +2799,7 @@ class DocumentSelectionMixin:
         orm_filters = {
             key: value
             for key, value in filters.items()
-            if key not in _TANTIVY_SEARCH_PARAM_NAMES
+            if key not in _SEARCH_PARAM_NAMES
         }
         # Operations are addressed to roots, a caller that wants
         # to act on a specific version passes its id explicitly instead
@@ -5456,15 +5310,8 @@ class SystemStatusView(PassUserMixin):
         try:
             from documents.search import get_backend
 
-            get_backend()  # triggers open/rebuild; raises on error
             index_status = "OK"
-            # Use the most-recently modified file in the index directory as a proxy
-            # for last index write time (Tantivy has no single last_modified() call).
-            index_dir = settings.INDEX_DIR
-            mtimes = [p.stat().st_mtime for p in index_dir.iterdir() if p.is_file()]
-            index_last_modified = (
-                make_aware(datetime.fromtimestamp(max(mtimes))) if mtimes else None
-            )
+            index_last_modified = get_backend().last_modified()
         except Exception as e:
             index_status = "ERROR"
             index_error = "Error opening index, check logs for more detail."

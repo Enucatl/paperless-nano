@@ -23,7 +23,7 @@ from documents.data_models import ConsumeFileStoppedResult
 from documents.data_models import ConsumeFileSuccessResult
 from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import StoredBarcode
-from documents.exceptions import SearchIndexLockError
+from documents.exceptions import SearchWriteBusy
 from documents.ingestion_jobs import DurableConsumeTask
 from documents.matching import prefilter_documents_by_workflowtrigger
 from documents.models import CustomFieldInstance
@@ -56,15 +56,15 @@ logger = logging.getLogger("paperless.tasks")
 
 @shared_task
 def index_optimize() -> None:
-    logger.info(
-        "index_optimize is a no-op — Tantivy manages segment merging automatically.",
-    )
+    from documents.search import get_backend
+
+    get_backend().optimize()
 
 
 @shared_task(
     bind=True,
     ignore_result=True,
-    autoretry_for=(SearchIndexLockError,),
+    autoretry_for=(SearchWriteBusy,),
     max_retries=5,
     retry_backoff=60,
     retry_jitter=True,
@@ -96,7 +96,7 @@ def index_document(self, document_id: int) -> None:
 @shared_task(
     bind=True,
     ignore_result=True,
-    autoretry_for=(SearchIndexLockError,),
+    autoretry_for=(SearchWriteBusy,),
     max_retries=5,
     retry_backoff=60,
     retry_jitter=True,
