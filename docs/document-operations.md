@@ -146,16 +146,16 @@ created by `document_update` or `document_metadata_update`.
 
 ### Caller and sequence map
 
-| Entry point | Persistence and files | Workflows, notification, indexes, and response |
-| --- | --- | --- |
-| `DocumentViewSet.update` (PUT/PATCH) | Root serializer validation and `save_document_metadata`; root metadata scope reconciles files after related writes. Selected/latest version content is saved in its own metadata scope when required. | Capture the response **before workflows**. On scope exit, reload root/effective content → updated workflows → `document_updated` → final full-text write/removal. Return the captured response only if these synchronous stages return successfully. |
-| `bulk_edit` scalar/tag/permission operations | Queryset/through-table writes happen synchronously, then enqueue `bulk_update_documents`. Those writes bypass filename signals. Custom-field operations already reconcile affected templates before enqueueing. | The API's “OK” means writes and dispatch succeeded, not workflow completion. The task calls `complete_document_updates`: clear each document's caches → updated workflows → **post-workflow file reconciliation** → notification with per-document AI disabled. After all documents: one full-text batch, then one AI batch if enabled. |
-| `DocumentViewSet.update_version_label` | Validate input/root access/version membership; save label in the version's metadata scope; update root modified time; record changed-label audit entry against the root. | Complete the root with updated workflows → notification → final full-text index. Then return the selected version instance's fields. This is not a freshly serialized post-workflow document. |
-| `DocumentViewSet.delete_version` | Validate root access/version membership and forbid root deletion; remove version search entry; delete the version; update root modified time and audit. Compute the remaining current version. | Complete the root with updated workflows → notification → final full-text index. Return the previously computed current-version ID; it is not recomputed after workflows. |
-| `ConsumerPlugin` adding a version | Creation/publication and the consumer's transaction own the new version; save it before entering root completion. | Root updated workflows and notification run inside the surrounding consumer transaction. Skip per-document AI; durable ingestion also skips this immediate full-text write because ingestion completion owns indexing. This is not the standalone HTTP update guarantee. |
-| `run_workflows` on persisted documents | Refresh before each workflow, match effective content, execute actions in order inside one metadata scope per matched workflow; save selective scalar fields, then reconcile files. Record `WorkflowRun` afterward; a trash action runs after the workflow's other actions. | Nested assignment/removal scopes do not recursively trigger updated workflows. Later workflows see earlier mutations. A failure stops remaining actions/workflows. Direct scheduled workflows notify through their existing adapter; callers do not all enter `document_update`. |
-| Workflow consumption overrides | Mutate the override value object before a document exists; no metadata scope or document file reconciliation. | The consumer applies overrides later. This is preparation, not a completed document update. |
-| AI assignment, admin, notes, maintenance | Use explicit metadata scopes or the existing file reconciler; each adapter retains its own indexing/cache policy. | They do not automatically invoke updated workflows. See the #22 caller inventory below; metadata persistence alone is not full update completion. |
+| Entry point                                  | Persistence and files                                                                                                                                                                                                                                                       | Workflows, notification, indexes, and response                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DocumentViewSet.update` (PUT/PATCH)         | Root serializer validation and `save_document_metadata`; root metadata scope reconciles files after related writes. Selected/latest version content is saved in its own metadata scope when required.                                                                       | Capture the response **before workflows**. On scope exit, reload root/effective content → updated workflows → `document_updated` → final full-text write/removal. Return the captured response only if these synchronous stages return successfully.                                                                                    |
+| `bulk_edit` scalar/tag/permission operations | Queryset/through-table writes happen synchronously, then enqueue `bulk_update_documents`. Those writes bypass filename signals. Custom-field operations already reconcile affected templates before enqueueing.                                                             | The API's “OK” means writes and dispatch succeeded, not workflow completion. The task calls `complete_document_updates`: clear each document's caches → updated workflows → **post-workflow file reconciliation** → notification with per-document AI disabled. After all documents: one full-text batch, then one AI batch if enabled. |
+| `DocumentViewSet.update_version_label`       | Validate input/root access/version membership; save label in the version's metadata scope; update root modified time; record changed-label audit entry against the root.                                                                                                    | Complete the root with updated workflows → notification → final full-text index. Then return the selected version instance's fields. This is not a freshly serialized post-workflow document.                                                                                                                                           |
+| `DocumentViewSet.delete_version`             | Validate root access/version membership and forbid root deletion; remove version search entry; delete the version; update root modified time and audit. Compute the remaining current version.                                                                              | Complete the root with updated workflows → notification → final full-text index. Return the previously computed current-version ID; it is not recomputed after workflows.                                                                                                                                                               |
+| `ConsumerPlugin` adding a version            | Creation/publication and the consumer's transaction own the new version; save it before entering root completion.                                                                                                                                                           | Root updated workflows and notification run inside the surrounding consumer transaction. Skip per-document AI; durable ingestion also skips this immediate full-text write because ingestion completion owns indexing. This is not the standalone HTTP update guarantee.                                                                |
+| `run_workflows` on persisted documents       | Refresh before each workflow, match effective content, execute actions in order inside one metadata scope per matched workflow; save selective scalar fields, then reconcile files. Record `WorkflowRun` afterward; a trash action runs after the workflow's other actions. | Nested assignment/removal scopes do not recursively trigger updated workflows. Later workflows see earlier mutations. A failure stops remaining actions/workflows. Direct scheduled workflows notify through their existing adapter; callers do not all enter `document_update`.                                                        |
+| Workflow consumption overrides               | Mutate the override value object before a document exists; no metadata scope or document file reconciliation.                                                                                                                                                               | The consumer applies overrides later. This is preparation, not a completed document update.                                                                                                                                                                                                                                             |
+| AI assignment, admin, notes, maintenance     | Use explicit metadata scopes or the existing file reconciler; each adapter retains its own indexing/cache policy.                                                                                                                                                           | They do not automatically invoke updated workflows. See the #22 caller inventory below; metadata persistence alone is not full update completion.                                                                                                                                                                                       |
 
 `document_metadata_update` restores its document-local deferral guard even on
 failure, but reconciles only after its body returns normally. Nested scopes for
@@ -185,16 +185,16 @@ therefore not an unconditional guarantee of HTTP success.
 
 ### Failure and retry boundary
 
-| Failure point | Durable/visible result and later work |
-| --- | --- |
-| Validation/access rejection before mutation | No update completion runs. Existing permission and malformed-custom-field tests assert no metadata change. |
-| Exception during a metadata scope | Earlier writes may already be persisted. The guard resets; that scope does not reconcile files. Neither context manager adds rollback. |
+| Failure point                                               | Durable/visible result and later work                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Validation/access rejection before mutation                 | No update completion runs. Existing permission and malformed-custom-field tests assert no metadata change.                                                                                                                                                                                                                                               |
+| Exception during a metadata scope                           | Earlier writes may already be persisted. The guard resets; that scope does not reconcile files. Neither context manager adds rollback.                                                                                                                                                                                                                   |
 | Handled file move/path/database error inside reconciliation | Log the failure, attempt to restore moved files, retain old filename fields. Saved metadata remains; workflows/notification/indexing may continue and the HTTP request may succeed. Failed restoration is not proof that files are at their old paths; sanity checks and logs are needed. Errors outside the reconciler's handled block still propagate. |
-| Workflow failure | Earlier metadata, file moves, workflow actions, and external effects may remain. No subsequent update notification or final index write is attempted. The prepared API response is not returned as success. Version label/deletion mutations and root timestamps also survive standalone endpoint completion failure. |
-| Notification receiver failure | Workflows and prior persistence remain. Django's ordinary `Signal.send` stops at the failing receiver; subsequent receivers and final full-text indexing do not run. A preceding websocket send may already have happened. |
-| Full-text write or deferred-dispatch failure | Notification/AI scheduling may already have happened; metadata and workflow results remain. The error propagates. Lock exhaustion with successful single-write dispatch is the exception described above. |
-| Bulk enqueue failure | Synchronous metadata writes remain, but completion may never run. There is no update outbox for discovering that missing dispatch. |
-| Failure during bulk completion | Earlier documents may already have completed workflows, moves, and notifications; later ones may be untouched. A failure before the batch prevents the final full-text and AI batches; an AI-batch failure occurs after full-text completion. |
+| Workflow failure                                            | Earlier metadata, file moves, workflow actions, and external effects may remain. No subsequent update notification or final index write is attempted. The prepared API response is not returned as success. Version label/deletion mutations and root timestamps also survive standalone endpoint completion failure.                                    |
+| Notification receiver failure                               | Workflows and prior persistence remain. Django's ordinary `Signal.send` stops at the failing receiver; subsequent receivers and final full-text indexing do not run. A preceding websocket send may already have happened.                                                                                                                               |
+| Full-text write or deferred-dispatch failure                | Notification/AI scheduling may already have happened; metadata and workflow results remain. The error propagates. Lock exhaustion with successful single-write dispatch is the exception described above.                                                                                                                                                |
+| Bulk enqueue failure                                        | Synchronous metadata writes remain, but completion may never run. There is no update outbox for discovering that missing dispatch.                                                                                                                                                                                                                       |
+| Failure during bulk completion                              | Earlier documents may already have completed workflows, moves, and notifications; later ones may be untouched. A failure before the batch prevents the final full-text and AI batches; an AI-batch failure occurs after full-text completion.                                                                                                            |
 
 There is no automatic whole-update replay guarantee. The plain
 `bulk_update_documents` task has no explicit automatic retry policy, and manually
@@ -1030,8 +1030,10 @@ Install the package in the same Python environment as the web process and worker
 # example/parsers.py
 from paperless.parsers.providers import PlainTextProvider
 
+
 class CustomParser(PlainTextProvider):
     """A minimal text-only replacement using the explicit contract."""
+
     identity = "example.text:1"
 ```
 
@@ -1309,7 +1311,6 @@ hooks passed (12 passed, seven with no matching files), including Ruff, Prettier
 codespell and Dockerfile checks. Independent review found no material correctness
 or safety issue. Preexisting workflow and memory-report diffs were preserved.
 
-
 ## Explicit file reconciliation ownership (#33)
 
 The legacy `Document.post_save`, document-tag `m2m_changed`, and
@@ -1327,19 +1328,19 @@ writes. The scopes do not add transactions or replay workflows.
 
 ### Write-path inventory
 
-| Writes | Reconciliation owner |
-| --- | --- |
-| Document API metadata, tags, permissions and custom fields | `save_document_metadata` completes the root scope after all writes. Selected-version content and version labels have explicit scopes. Notes retain their own scope. |
-| Admin scalar and related document edits | `DocumentAdmin.save_model` / `save_related`; full-text indexing follows related writes. Custom-field instance values are read-only in admin. |
-| Workflow assignment/removal and AI suggestions | The workflow runner encloses each matched workflow; AI assignment uses a nested metadata scope. Consumption overrides remain values until the consumer publishes the document. |
-| Inbox/classifier tags and scalar classification | Assignment adapters own explicit scopes, including tag removal with no replacement. Dry-run/no-change classification does not reconcile. |
-| Bulk scalar/tag/owner/ASN writes and tag-parent propagation | Existing queued `complete_document_updates` reconciles after workflows. Through-table/queryset writes already bypassed signals. Merging versions retains that batched completion owner. |
-| Individual custom-field serializer writes | `save_custom_field_value` owns a scope when the filename template uses custom fields; nested API/bulk scopes coalesce it. |
-| Bulk custom fields and reciprocal links | Bulk fields reconcile after the complete batch. Reciprocal additions and removals explicitly reconcile affected targets; source ownership remains with its operation. Select-option updates use their existing background operation. |
-| New ingestion and version ingestion | Initial documents have no published filename. The consumer computes paths after metadata/workflows, publishes under the media lock, then explicitly saves/reconciles outside that lock. |
-| Reprocessing/external archive publication | Existing publication code owns generated archive paths and protected database reference updates; metadata completion is unchanged. |
-| Export/import and maintenance | Import restores manifest paths and files without renaming; renamer directly reconciles each document. Retagger uses assignment operations. Trash/delete retain their separate cleanup owners. |
-| Root timestamps, job state, caches, audit, notes and non-document models | Their existing operations retain ownership; these are not replacement implicit filename hooks. |
+| Writes                                                                   | Reconciliation owner                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Document API metadata, tags, permissions and custom fields               | `save_document_metadata` completes the root scope after all writes. Selected-version content and version labels have explicit scopes. Notes retain their own scope.                                                                  |
+| Admin scalar and related document edits                                  | `DocumentAdmin.save_model` / `save_related`; full-text indexing follows related writes. Custom-field instance values are read-only in admin.                                                                                         |
+| Workflow assignment/removal and AI suggestions                           | The workflow runner encloses each matched workflow; AI assignment uses a nested metadata scope. Consumption overrides remain values until the consumer publishes the document.                                                       |
+| Inbox/classifier tags and scalar classification                          | Assignment adapters own explicit scopes, including tag removal with no replacement. Dry-run/no-change classification does not reconcile.                                                                                             |
+| Bulk scalar/tag/owner/ASN writes and tag-parent propagation              | Existing queued `complete_document_updates` reconciles after workflows. Through-table/queryset writes already bypassed signals. Merging versions retains that batched completion owner.                                              |
+| Individual custom-field serializer writes                                | `save_custom_field_value` owns a scope when the filename template uses custom fields; nested API/bulk scopes coalesce it.                                                                                                            |
+| Bulk custom fields and reciprocal links                                  | Bulk fields reconcile after the complete batch. Reciprocal additions and removals explicitly reconcile affected targets; source ownership remains with its operation. Select-option updates use their existing background operation. |
+| New ingestion and version ingestion                                      | Initial documents have no published filename. The consumer computes paths after metadata/workflows, publishes under the media lock, then explicitly saves/reconciles outside that lock.                                              |
+| Reprocessing/external archive publication                                | Existing publication code owns generated archive paths and protected database reference updates; metadata completion is unchanged.                                                                                                   |
+| Export/import and maintenance                                            | Import restores manifest paths and files without renaming; renamer directly reconciles each document. Retagger uses assignment operations. Trash/delete retain their separate cleanup owners.                                        |
+| Root timestamps, job state, caches, audit, notes and non-document models | Their existing operations retain ownership; these are not replacement implicit filename hooks.                                                                                                                                       |
 
 `reconcile_document_files` itself is unchanged: it refreshes persisted metadata
 under the media lock, protects root paths, handles collisions, recovers moved
@@ -1370,14 +1371,14 @@ new delivery guarantee.
 
 ### Retry inventory and safe repair
 
-| Stage | Existing retry and detection | Recovery action |
-| --- | --- | --- |
-| Metadata/file reconciliation | No automatic retry. Handled move/path/database failures log `Exception during file handling`; metadata stays saved and filename references retain their previous values. Errors acquiring the lock or refreshing the row propagate. | Correct permissions, space, or path configuration, then run `document_renamer`. It refreshes current metadata under the media lock and does not execute workflows. Run `document_sanity_checker` afterward. |
-| Partial filesystem move/failed restoration | A completed move is compensated when possible. Failed compensation now logs document ID and both paths at error level. The sanity checker finds missing, corrupt, or orphaned files, but does not identify every template mismatch. | Preserve both paths. Reconciliation can recognize an already-moved candidate when its checksum matches and the old file is absent. Otherwise inspect recorded checksums and resolve the paths manually; do not delete an orphan just because it is unreferenced. Re-run the sanity checker after repair. |
-| Workflow execution | Exceptions propagate and stop notification/final indexing. Earlier writes and external actions may already have happened. `WorkflowRun` records completed workflows; absence of a record does not prove no action ran. The runner has no automatic replay policy. | Inspect the request/task error, workflow logs and external destination. Reconcile ambiguous email/webhook/hook outcomes with that destination. Repair desired metadata explicitly, then files and indexes. Re-run a workflow only after establishing that its earlier actions are safe to repeat. |
-| Websocket notification / AI dispatch | A receiver exception propagates. Earlier receivers may already have run; no notification receipt or durable dispatch intent exists for these updates. AI index tasks have no explicit automatic retry policy. | Reload the document/list to read authoritative state. For enabled AI indexing, `document_llmindex update` refreshes changed documents; use its documented rebuild operation when a full rebuild is needed. Do not replay all workflows merely to resend a notification. |
-| Full-text indexing | Single writes retry lock acquisition four times, then dispatch a fresh-state task. That task retries lock errors up to five times. Other errors and failed dispatch propagate. Batch writes can fail rather than defer. | After resolving the index/broker error, run `document_index reindex`; it derives the index from current database state without workflows. Explicit removal handles deleted IDs; a full rebuild removes stale entries. |
-| Bulk completion | No explicit automatic retry on `bulk_update_documents`. Enqueue failure leaves metadata saved; task failure can leave earlier documents completed and later documents untouched. Task success is not an external-effect receipt. | Use the failed request/task's document IDs and inspect each document. Repair files/indexes separately. Do not blindly requeue the batch: that repeats workflows for already-processed documents. |
+| Stage                                      | Existing retry and detection                                                                                                                                                                                                                                      | Recovery action                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metadata/file reconciliation               | No automatic retry. Handled move/path/database failures log `Exception during file handling`; metadata stays saved and filename references retain their previous values. Errors acquiring the lock or refreshing the row propagate.                               | Correct permissions, space, or path configuration, then run `document_renamer`. It refreshes current metadata under the media lock and does not execute workflows. Run `document_sanity_checker` afterward.                                                                                              |
+| Partial filesystem move/failed restoration | A completed move is compensated when possible. Failed compensation now logs document ID and both paths at error level. The sanity checker finds missing, corrupt, or orphaned files, but does not identify every template mismatch.                               | Preserve both paths. Reconciliation can recognize an already-moved candidate when its checksum matches and the old file is absent. Otherwise inspect recorded checksums and resolve the paths manually; do not delete an orphan just because it is unreferenced. Re-run the sanity checker after repair. |
+| Workflow execution                         | Exceptions propagate and stop notification/final indexing. Earlier writes and external actions may already have happened. `WorkflowRun` records completed workflows; absence of a record does not prove no action ran. The runner has no automatic replay policy. | Inspect the request/task error, workflow logs and external destination. Reconcile ambiguous email/webhook/hook outcomes with that destination. Repair desired metadata explicitly, then files and indexes. Re-run a workflow only after establishing that its earlier actions are safe to repeat.        |
+| Websocket notification / AI dispatch       | A receiver exception propagates. Earlier receivers may already have run; no notification receipt or durable dispatch intent exists for these updates. AI index tasks have no explicit automatic retry policy.                                                     | Reload the document/list to read authoritative state. For enabled AI indexing, `document_llmindex update` refreshes changed documents; use its documented rebuild operation when a full rebuild is needed. Do not replay all workflows merely to resend a notification.                                  |
+| Full-text indexing                         | Single writes retry lock acquisition four times, then dispatch a fresh-state task. That task retries lock errors up to five times. Other errors and failed dispatch propagate. Batch writes can fail rather than defer.                                           | After resolving the index/broker error, run `document_index reindex`; it derives the index from current database state without workflows. Explicit removal handles deleted IDs; a full rebuild removes stale entries.                                                                                    |
+| Bulk completion                            | No explicit automatic retry on `bulk_update_documents`. Enqueue failure leaves metadata saved; task failure can leave earlier documents completed and later documents untouched. Task success is not an external-effect receipt.                                  | Use the failed request/task's document IDs and inspect each document. Repair files/indexes separately. Do not blindly requeue the batch: that repeats workflows for already-processed documents.                                                                                                         |
 
 Run these commands through the deployment's normal management-command entry
 point, for example `python3 manage.py document_renamer` from `src` on a bare-metal
@@ -1435,14 +1436,14 @@ queue, workflow-engine dependency, or database table is introduced.
 
 ### Phases and restart invariants
 
-| Phase | Durable meaning | Restart behavior |
-| --- | --- | --- |
-| Accepted | Input identity, checksum, options, script selections, and a private input copy exist. The job is `queued`; broker delivery is not required for discoverability. | The existing periodic recovery task republishes undispatched jobs. Interrupted admission remains `staging` and requires inspection. |
-| Preparing | Each invoked plugin has a stable UUID, implementation identity/version, input references/metadata, outcome status, result, and error. | Reuse successful outcomes. Replay only explicitly safe invocations; otherwise ask the plugin to reconcile or retain an unknown outcome for operator action. |
-| Prepared | Every required preparation invocation succeeded, retained outputs passed validation, and metadata, detected date, MIME type, page count, text, and file references survive worker loss. A terminal duplicate/stop outcome is an alternative to document creation. | Validate retained references and authority, reconcile owned publication leftovers, then publish without repeating OCR. |
-| Committed | Document/version creation, final stored file references, commit checkpoint, root identity, and required completion intents committed in one database transaction. | Never create the document again. Start or resume completion. |
-| Completing | Named metadata assignment, workflows, extension notification, hook, indexing/cache, and transport completion have independent outcomes. | Skip successful steps; retry safe derived-state work. Unknown external effects block completion until reconciled. |
-| Complete | Required work succeeded or was explicitly reconciled. | Retry outstanding storage/source cleanup only; never replay completed processing. |
+| Phase      | Durable meaning                                                                                                                                                                                                                                                   | Restart behavior                                                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accepted   | Input identity, checksum, options, script selections, and a private input copy exist. The job is `queued`; broker delivery is not required for discoverability.                                                                                                   | The existing periodic recovery task republishes undispatched jobs. Interrupted admission remains `staging` and requires inspection.                         |
+| Preparing  | Each invoked plugin has a stable UUID, implementation identity/version, input references/metadata, outcome status, result, and error.                                                                                                                             | Reuse successful outcomes. Replay only explicitly safe invocations; otherwise ask the plugin to reconcile or retain an unknown outcome for operator action. |
+| Prepared   | Every required preparation invocation succeeded, retained outputs passed validation, and metadata, detected date, MIME type, page count, text, and file references survive worker loss. A terminal duplicate/stop outcome is an alternative to document creation. | Validate retained references and authority, reconcile owned publication leftovers, then publish without repeating OCR.                                      |
+| Committed  | Document/version creation, final stored file references, commit checkpoint, root identity, and required completion intents committed in one database transaction.                                                                                                 | Never create the document again. Start or resume completion.                                                                                                |
+| Completing | Named metadata assignment, workflows, extension notification, hook, indexing/cache, and transport completion have independent outcomes.                                                                                                                           | Skip successful steps; retry safe derived-state work. Unknown external effects block completion until reconciled.                                           |
+| Complete   | Required work succeeded or was explicitly reconciled.                                                                                                                                                                                                             | Retry outstanding storage/source cleanup only; never replay completed processing.                                                                           |
 
 `ingestion_state.transition` checks legal phase order and required outcome
 presence. `attention`, `rejected`, and `failed` are operational statuses; they do
@@ -1461,18 +1462,18 @@ are not a distributed locking mechanism.
 
 ### Steps, transactions, and compatibility
 
-| Component | Ownership and effects |
-| --- | --- |
-| Preflight and ASN checks | Existing ordered plugins. Read-only checks can repeat; duplicate deletion is conservatively treated as effectful. |
-| Collation and barcode plugins | Existing setup/run interfaces and stop/child-ingestion behavior remain. Outcomes retain metadata and a copied input before cleanup. Interrupted split/dispatch/collation is opaque unless the implementation promises safe replay or reconciles it. |
-| Consumption workflows | Still run before parsing and produce overrides. They may have external effects, so whole-workflow execution is not automatically replayed. |
-| Parser preparation | `ConsumerPlugin.prepare` handles format repair, started notification, pre-consume hook, parsing, date detection, and retained outputs. No document is created here. Started notification and pre-consume hooks have their own recorded invocations. |
-| Storage publication | `ConsumerPlugin.publish` creates the document/version and files inside the coordinator's transaction. Permission, revision, current-version, parser configuration/identity, and retained-file integrity are checked before publication. Version timestamps and audit attribution remain part of creation. |
-| Metadata and workflows | Inbox tags, correspondent, type, tags, storage path, added workflows, and version-root updated workflows are named post-commit steps. Their existing explicit metadata scopes reconcile filenames, including version paths. Current effective content is used for matching. |
-| Extensions and scripts | The finished signal and post-consume hook run after commit and file publication. Their outcomes are tracked separately from document creation. Scripts receive a stable `INVOCATION_ID` as well as the existing `TASK_ID`. |
-| Required workflow tasks | Existing durable webhook/AI callback records retain individual task outcomes. Their intents are recorded before dispatch/execution; ambiguous webhook effects are not replayed. |
-| Search/AI/cache | Read current committed state and may repeat. Completed indexing/cache steps are recorded, so later cleanup failure does not replay them. |
-| Source/storage cleanup | A separate retryable outcome. Verify authoritative published files before removing retained inputs; delete only the admitted source/shadow identity. Failure leaves cleanup outstanding. |
+| Component                     | Ownership and effects                                                                                                                                                                                                                                                                                     |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Preflight and ASN checks      | Existing ordered plugins. Read-only checks can repeat; duplicate deletion is conservatively treated as effectful.                                                                                                                                                                                         |
+| Collation and barcode plugins | Existing setup/run interfaces and stop/child-ingestion behavior remain. Outcomes retain metadata and a copied input before cleanup. Interrupted split/dispatch/collation is opaque unless the implementation promises safe replay or reconciles it.                                                       |
+| Consumption workflows         | Still run before parsing and produce overrides. They may have external effects, so whole-workflow execution is not automatically replayed.                                                                                                                                                                |
+| Parser preparation            | `ConsumerPlugin.prepare` handles format repair, started notification, pre-consume hook, parsing, date detection, and retained outputs. No document is created here. Started notification and pre-consume hooks have their own recorded invocations.                                                       |
+| Storage publication           | `ConsumerPlugin.publish` creates the document/version and files inside the coordinator's transaction. Permission, revision, current-version, parser configuration/identity, and retained-file integrity are checked before publication. Version timestamps and audit attribution remain part of creation. |
+| Metadata and workflows        | Inbox tags, correspondent, type, tags, storage path, added workflows, and version-root updated workflows are named post-commit steps. Their existing explicit metadata scopes reconcile filenames, including version paths. Current effective content is used for matching.                               |
+| Extensions and scripts        | The finished signal and post-consume hook run after commit and file publication. Their outcomes are tracked separately from document creation. Scripts receive a stable `INVOCATION_ID` as well as the existing `TASK_ID`.                                                                                |
+| Required workflow tasks       | Existing durable webhook/AI callback records retain individual task outcomes. Their intents are recorded before dispatch/execution; ambiguous webhook effects are not replayed.                                                                                                                           |
+| Search/AI/cache               | Read current committed state and may repeat. Completed indexing/cache steps are recorded, so later cleanup failure does not replay them.                                                                                                                                                                  |
+| Source/storage cleanup        | A separate retryable outcome. Verify authoritative published files before removing retained inputs; delete only the admitted source/shadow identity. Failure leaves cleanup outstanding.                                                                                                                  |
 
 **Intentional timing change:** document-added metadata assignments, workflows,
 and `document_consumption_finished` now run after document/file commit for durable
@@ -1482,7 +1483,8 @@ Extensions receiving the finished signal see published files and receive
 `coordinated=True` and `invocation_id`. Built-in receivers skip that coordinated
 notification because the coordinator has already invoked their explicit steps.
 Legacy direct signal calls retain their adapters. The started signal remains
-pre-processing; its external effects are conservatively tracked. Direct
+pre-processing and receives its own durable `invocation_id`; its external effects
+are conservatively tracked. Direct
 execution-only `ConsumerPlugin.run` remains an adapter around prepare/publish,
 while normal task admission always uses the durable coordinator.
 
@@ -1493,6 +1495,11 @@ indexing reads current state and removes missing entries. A failed opaque workfl
 may have applied earlier actions: do not rerun it simply because ingestion is
 incomplete.
 
+Preparation checks the recorded timeout before entering Prepared. An overlong
+attempt retains its validated outcomes without publishing a document; a later
+attempt can reuse those outcomes. Time spent waiting for recovery after Prepared
+does not expire an otherwise valid result.
+
 ### Plugin result and recovery contract
 
 `ConsumeTaskPlugin` retains its constructor, `able_to_run`, `setup`, `run`, and
@@ -1502,6 +1509,8 @@ The implementation owns its effects and private workspace. It may declare
 `replay_safe = True` only when repeating the entire invocation, including setup,
 is safe. The default is false. A later deployment cannot retroactively grant a
 replay promise to an already unknown invocation.
+`StopConsumeTaskError` from either `setup` or `run` records a terminal stopped
+outcome and proceeds to tracked cleanup.
 
 The coordinator records `pending`, `running`, `succeeded`, `failed` (declared safe
 execution failed), and `unknown` outcomes. Both an exception after an external
@@ -1603,7 +1612,6 @@ The full repository suite, MariaDB, live OCR services, and real external hooks
 were not run; replay safety for third-party effects remains their authors'
 responsibility, not a guarantee inferred by Paperless.
 
-
 ## Replaceable document search (#36)
 
 `documents.search.get_backend()` is now a provider-neutral application service.
@@ -1627,15 +1635,15 @@ It need not pretend a SQL database is an external index engine.
 
 ### Provider operations and lifetime
 
-| Operation | Contract |
-| --- | --- |
-| `open()` / `close()` | Acquire/release process-local resources. Close must also work before opening and after failed initialization. The service replaces its cached instance when the class changes; restart processes after changing implementation-owned settings. |
-| `search(SearchRequest)` | Return `SearchPage(count, hits, offset, matching_ids)`. Count is the exact filtered/authorized count before pagination; hit ranks are one-based positions in the full order. `matching_ids` is a callable returning ordered IDs, optionally a lazy SQL queryset. Normal API pagination never evaluates all IDs; legacy API `all` and explicit selection requests do. |
-| `matching_ids(request)` / `highlight(request, ids, rank_start)` | Matching uses the same query, authorization and ordering semantics as pages. Highlights contain only authorized IDs. A hit has `id`, `score`, `rank`, and the existing field-to-highlight mapping. Escape untrusted text before adding supported highlight markup. |
-| `autocomplete(term, limit, scope)` | Suggestions must derive exclusively from the current authorized scope, including when old index permission fields disagree. |
-| `batch_update()` | Return an atomic context manager with `add_or_update(DocumentFacts)` and `remove(id)`. Failed batches propagate and must roll back; no hidden partial acceptance. Core reads fresh state after entering the provider batch. |
-| `rebuild(records, writer_heap_bytes=...)` | Replace derived state from the core stream. The memory argument is an advisory existing CLI budget; SQL providers can ignore it. Core retains progress reporting. |
-| `needs_rebuild()` / `wipe()` / `optimize()` / `last_modified()` | Implement selected-provider freshness, derived-data removal, maintenance and health. A timestamp may be `None`. Never delete authoritative document state. Freshness checks run before `open()` so opening cannot hide a needed rebuild. |
+| Operation                                                       | Contract                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open()` / `close()`                                            | Acquire/release process-local resources. Close must also work before opening and after failed initialization. The service replaces its cached instance when the class changes; restart processes after changing implementation-owned settings.                                                                                                                       |
+| `search(SearchRequest)`                                         | Return `SearchPage(count, hits, offset, matching_ids)`. Count is the exact filtered/authorized count before pagination; hit ranks are one-based positions in the full order. `matching_ids` is a callable returning ordered IDs, optionally a lazy SQL queryset. Normal API pagination never evaluates all IDs; legacy API `all` and explicit selection requests do. |
+| `matching_ids(request)` / `highlight(request, ids, rank_start)` | Matching uses the same query, authorization and ordering semantics as pages. Highlights contain only authorized IDs. A hit has `id`, `score`, `rank`, and the existing field-to-highlight mapping. Escape untrusted text before adding supported highlight markup.                                                                                                   |
+| `autocomplete(term, limit, scope)`                              | Suggestions must derive exclusively from the current authorized scope, including when old index permission fields disagree.                                                                                                                                                                                                                                          |
+| `batch_update()`                                                | Return an atomic context manager with `add_or_update(DocumentFacts)` and `remove(id)`. Failed batches propagate and must roll back; no hidden partial acceptance. Core reads fresh state after entering the provider batch.                                                                                                                                          |
+| `rebuild(records, writer_heap_bytes=...)`                       | Replace derived state from the core stream. The memory argument is an advisory existing CLI budget; SQL providers can ignore it. Core retains progress reporting.                                                                                                                                                                                                    |
+| `needs_rebuild()` / `wipe()` / `optimize()` / `last_modified()` | Implement selected-provider freshness, derived-data removal, maintenance and health. A timestamp may be `None`. Never delete authoritative document state. Freshness checks run before `open()` so opening cannot hide a needed rebuild.                                                                                                                             |
 
 `SearchRequest` carries a live, authorized root `QuerySet`, query text, mode
 (`query`, `text`, `title`), optional advanced filter, ordering, direction,
@@ -1789,6 +1797,7 @@ a wheel and install it with `uv pip install --system /path/example_services.whl`
 # example_services.py
 import os
 
+
 class Consumer:
     def run(self) -> None:
         """Delegate signals and exit status to an installed compatible watcher."""
@@ -1821,3 +1830,27 @@ Django 5.2.17 and frozen uv dependencies. Ruff format/check and diff checks pass
 The launcher/interface import no Django modules; Celery's existing lean bootstrap
 imports Django version utility modules but never Django settings/apps in its
 parent. Full image deployment and live custom implementations were not exercised.
+
+## Integrated review and verification
+
+The final review traced the combined parser, update, ingestion, search and service
+boundaries. Fixes keep workflow attachments current after filename changes,
+propagate ambiguous email failures into durable attention state, preserve
+setup-time plugin stops, check preparation timeouts before publication, and expose
+the started signal's durable invocation identity. Search now scopes a similarity
+seed before calling any selected provider. Test fixtures explicitly own their
+configuration and document identities instead of depending on execution order.
+
+The final combined SQLite selection passed **2,230 tests**, with **12 skipped**,
+covering parser contracts, document/search APIs, workflows, file handling,
+ingestion/reprocessing, imports, settings, services and workers. The migration
+check reported no model changes. Earlier issue-specific PostgreSQL 18 runs passed
+84 lifecycle/job tests and 97 search/update tests, including the database-side FTS
+assessment. All tests used non-root disposable Docker containers with frozen uv
+dependencies. Changed-file hooks and formatting were checked before the final
+commit; the temporary test volume was removed afterward.
+
+The full suite, MariaDB and live deployments were not tested. Post-commit ingestion
+workflow/signal timing and explicit configuration migrations remain the documented
+compatibility changes. Unknown external effects still require reconciliation;
+the coordinator does not infer that a failed action is safe to repeat.

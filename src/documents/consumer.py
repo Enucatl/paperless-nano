@@ -486,6 +486,7 @@ class ConsumerPlugin(
                     sender=self.__class__,
                     filename=self.working_copy,
                     logging_group=self.logging_group,
+                    invocation_id=self.invocation_id,
                 )
 
             invoke = getattr(self, "invoke", lambda _name, action, safe=False: action())

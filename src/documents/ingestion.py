@@ -7,6 +7,7 @@ from pathlib import Path
 import magic
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 
 from documents.data_models import DocumentMetadataOverrides
 from documents.ingestion_state import invoke
@@ -45,6 +46,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
     from documents.plugins.base import NoCleanupPluginMixin
     from documents.plugins.base import StopConsumeTaskError
 
+    started = timezone.now()
     directory = job_directory(job.pk)
     input_doc, metadata = _input(job)
     input_doc.mime_type = magic.from_file(input_doc.original_file, mime=True)
@@ -87,10 +89,10 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                         "mime_type": input_doc.mime_type,
                         "skipped": True,
                     }
-                plugin.setup()
                 stopped = None
                 prepared = None
                 try:
+                    plugin.setup()
                     if cls is ConsumerPlugin:
 
                         def hook(name, action, safe):
@@ -274,6 +276,8 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 job.result["prepared"] = result["prepared"]
                 job.result["metadata"] = result["metadata"]
                 job.save(update_fields=["result"])
+        if job.timeout and (timezone.now() - started).total_seconds() > job.timeout:
+            raise TimeoutError("Ingestion exceeded its recorded timeout")
         transition(job, "prepared")
 
 
@@ -374,7 +378,6 @@ def complete_document(job: DocumentJob) -> None:
                 run_workflows(
                     WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED,
                     document,
-                    original_file=document.source_path,
                 )
             elif name == "version" and document.root_document_id:
                 root = document.root_document

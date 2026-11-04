@@ -9,6 +9,7 @@ from typing import Any
 from typing import Self
 
 from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.utils.module_loading import import_string
 from django.utils.timezone import get_current_timezone
 
@@ -137,11 +138,25 @@ class SearchService:
     ) -> SearchRequest:
         """Build a request whose authorized scope remains composable SQL."""
         return SearchRequest(
-            authorized_scope(user, scope), query_configuration(), query=query, **kwargs
+            authorized_scope(user, scope),
+            query_configuration(),
+            query=query,
+            similarity_scope=authorized_scope(user)
+            if kwargs.get("similar_to")
+            else None,
+            **kwargs,
         )
 
     def search(self, request: SearchRequest) -> SearchPage:
         """Validate provider page visibility against the supplied core scope."""
+        if request.similar_to is not None:
+            seed_scope = (
+                request.similarity_scope
+                if request.similarity_scope is not None
+                else request.scope
+            )
+            if not seed_scope.filter(pk=request.similar_to).exists():
+                raise PermissionDenied("Insufficient permissions for similarity seed")
         result = self.provider.search(request)
         ids = [hit["id"] for hit in result.hits]
         allowed = set(request.scope.filter(pk__in=ids).values_list("pk", flat=True))

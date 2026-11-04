@@ -152,17 +152,11 @@ def stage_consumption(
 
 
 def validate_application(job_id: str | UUID) -> None:
-    """Recheck the original actor, version revision, and deadline before storing."""
+    """Recheck parser outputs, the original actor and version revision before storing."""
     job = DocumentJob.objects.get(pk=job_id)
     from documents.parser_operations import validate_parser_job
 
     validate_parser_job(job)
-    if (
-        job.status == DocumentJob.Status.RUNNING
-        and job.timeout
-        and (timezone.now() - job.updated).total_seconds() > job.timeout
-    ):
-        raise RejectedResult("Ingestion exceeded its recorded timeout")
     actor_id = job.input["overrides"].get("actor_id")
     root_id = job.input["root_document_id"]
     if root_id:

@@ -47,6 +47,8 @@ class SearchRequest:
     Providers apply scope before ranking/count/pagination, never discard filters,
     and raise SearchQueryError for unsupported expressions. Ordering is a public
     Document field name or score; None means best relevance first.
+    similarity_scope carries live seed visibility separately from result filters;
+    core checks the seed before invoking the provider.
     """
 
     scope: QuerySet[Document]
@@ -59,6 +61,7 @@ class SearchRequest:
     offset: int = 0
     limit: int | None = None
     similar_to: int | None = None
+    similarity_scope: QuerySet[Document] | None = None
 
 
 @dataclass(frozen=True)

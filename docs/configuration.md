@@ -888,10 +888,9 @@ for performing OCR on documents and images. Paperless uses sensible
 defaults for most settings, but all of them can be configured to your
 needs.
 
-Parser plugins may implement the explicit request/result interface described in
-[Replaceable OCR providers](document-operations.md#replaceable-ocr-providers-25).
-They use the existing `paperless_ngx.parsers` entrypoint registry and scoring;
-there is no separate provider setting. Existing parser plugins remain supported.
+Select a replacement with `PAPERLESS_PARSER`. The default implementation retains
+existing `paperless_ngx.parsers` entry-point plugins and format scoring.
+
 #### [`PAPERLESS_PARSER=<class>`](#PAPERLESS_PARSER) {#PAPERLESS_PARSER}
 
 : Select an installed Python implementation class for ingestion and reprocessing.
@@ -2348,11 +2347,11 @@ Docker reads these environment variables directly, before loading Django setting
 They select installed Python classes with no-argument constructors and a blocking
 `run()` method. Unset values preserve the traditional services:
 
-| Setting | Default | Lightweight alternative |
-| --- | --- | --- |
-| `PAPERLESS_CONSUMER_CLASS` | `paperless_services.traditional.Consumer` | `paperless_services.watcher.APIConsumer` |
+| Setting                     | Default                                    | Lightweight alternative                     |
+| --------------------------- | ------------------------------------------ | ------------------------------------------- |
+| `PAPERLESS_CONSUMER_CLASS`  | `paperless_services.traditional.Consumer`  | `paperless_services.watcher.APIConsumer`    |
 | `PAPERLESS_SCHEDULER_CLASS` | `paperless_services.traditional.Scheduler` | `paperless_services.scheduler.APIScheduler` |
-| `PAPERLESS_WORKER_CLASS` | `paperless.worker.Worker` | `paperless_worker.bootstrap.LeanWorker` |
+| `PAPERLESS_WORKER_CLASS`    | `paperless.worker.Worker`                  | `paperless_worker.bootstrap.LeanWorker`     |
 
 `PAPERLESS_CONSUMER_DISABLE` and `PAPERLESS_SCHEDULER_DISABLE` still disable their
 services before class selection. Both built-in workers retain autoscaling from

@@ -93,6 +93,9 @@ def run_workflows(
                 )
                 break
 
+            if not caller_supplied_original_file:
+                original_file = document.source_path
+
             # Check if document was soft deleted (moved to trash)
             if document.is_deleted:
                 logger.info(

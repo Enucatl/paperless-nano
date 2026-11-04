@@ -18,6 +18,7 @@ from documents.plugins.base import AlwaysRunPluginMixin
 from documents.plugins.base import NoCleanupPluginMixin
 from documents.plugins.base import NoSetupPluginMixin
 from documents.signals import document_consumption_finished
+from documents.signals import document_consumption_started
 from documents.tests.test_ingestion_jobs import WorkerStopped
 from documents.tests.test_ingestion_jobs import incoming as incoming_fixture
 from documents.tests.test_ingestion_jobs import parser as parser_fixture
@@ -52,6 +53,70 @@ def test_prepared_restart_does_not_repeat_parser(incoming, parser, mocker):
         Document.objects.get(pk=result["document_id"]).content
         == "durable ingestion content"
     )
+
+
+def test_setup_can_stop_ingestion_without_an_unknown_outcome(incoming, mocker):
+    """A supported setup-time stop retains its result and runs tracked cleanup."""
+    from documents.plugins.base import StopConsumeTaskError
+
+    ran = Mock()
+    cleaned = Mock()
+
+    class Plugin(AlwaysRunPluginMixin, NoCleanupPluginMixin):
+        def setup(self):
+            raise StopConsumeTaskError("setup chose not to consume")
+
+        def run(self):
+            ran()
+
+        def cleanup(self):
+            cleaned()
+
+    mocker.patch("documents.tasks.consumption_plugins", return_value=[Plugin])
+    job = ingestion_jobs.stage_consumption(incoming)
+    assert ingestion_jobs.run_consumption(job.pk) == {
+        "reason": "setup chose not to consume"
+    }
+    job.refresh_from_db()
+    assert job.status == "succeeded"
+    assert job.cleaned
+    assert incoming.original_file.exists()
+    assert not Document.objects.exists()
+    ran.assert_not_called()
+    cleaned.assert_called_once()
+
+
+def test_overlong_preparation_retains_outputs_without_publishing(
+    incoming, parser, mocker
+):
+    """An expired attempt cannot publish; a fresh attempt reuses validated outcomes."""
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    job = ingestion_jobs.stage_consumption(incoming)
+    after_deadline = timezone.now() + timedelta(seconds=job.timeout + 1)
+    clock = None
+
+    def exceed_timeout(*args, **kwargs):
+        nonlocal clock
+        clock = mocker.patch(
+            "documents.ingestion.timezone.now", return_value=after_deadline
+        )
+
+    parser.parse.side_effect = exceed_timeout
+    with pytest.raises(TimeoutError, match="recorded timeout"):
+        ingestion_jobs.run_consumption(job.pk)
+    job.refresh_from_db()
+    assert job.status == "running"
+    assert job.result["phase"] == "preparing"
+    assert "prepared" in job.result
+    assert not Document.objects.exists()
+    assert incoming.original_file.exists()
+    mocker.stop(clock)
+    result = ingestion_jobs.run_consumption(job.pk)
+    assert Document.objects.get(pk=result["document_id"]).source_path.exists()
+    parser.parse.assert_called_once()
 
 
 def test_prepared_artifact_tampering_is_not_published(incoming, parser, mocker):
@@ -94,6 +159,23 @@ def test_finished_signal_observes_committed_files(incoming, parser):
     assert observed[0][:3] == (result["document_id"], True, False)
     job.refresh_from_db()
     assert observed[0][3] == job.result["invocations"]["complete:signal"]["id"]
+
+
+def test_started_signal_receives_its_durable_invocation_id(incoming, parser):
+    """A started extension can identify the tracked invocation's external effects."""
+    observed = []
+
+    def receiver(sender, invocation_id, **kwargs):
+        observed.append(invocation_id)
+
+    document_consumption_started.connect(receiver)
+    try:
+        job = ingestion_jobs.stage_consumption(incoming)
+        ingestion_jobs.run_consumption(job.pk)
+    finally:
+        document_consumption_started.disconnect(receiver)
+    job.refresh_from_db()
+    assert observed == [job.result["invocations"]["prepare:6:started_signal"]["id"]]
 
 
 @pytest.mark.parametrize("failure", [RuntimeError, WorkerStopped])
@@ -358,6 +440,64 @@ def test_version_workflow_updates_root_and_reconciles_files(
     assert sample_doc.title == "after-version"
     assert version.source_path.exists()
     assert "after-version" in version.filename
+
+
+@pytest.mark.parametrize("email_failure", [False, True])
+def test_added_workflow_email_uses_renamed_file_and_records_failure(
+    incoming, parser, settings, mocker, email_failure
+):
+    """Post-commit workflow files stay current and ambiguous email is not success."""
+    from documents.models import Workflow
+    from documents.models import WorkflowAction
+    from documents.models import WorkflowActionEmail
+    from documents.models import WorkflowTrigger
+
+    settings.FILENAME_FORMAT = "{title}"
+    settings.EMAIL_ENABLED = True
+    trigger = WorkflowTrigger.objects.create(
+        type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED
+    )
+    for order, action in enumerate(
+        [
+            WorkflowAction.objects.create(assign_title="renamed-before-email"),
+            WorkflowAction.objects.create(
+                type=WorkflowAction.WorkflowActionType.EMAIL,
+                email=WorkflowActionEmail.objects.create(
+                    to="test@example.com", subject="Document", include_document=True
+                ),
+            ),
+        ]
+    ):
+        workflow = Workflow.objects.create(name=f"completion {order}", order=order)
+        workflow.triggers.add(trigger)
+        workflow.actions.add(action)
+    attachments = []
+
+    def send(**kwargs):
+        attachment = kwargs["attachments"][0]
+        attachments.append(attachment.path)
+        assert attachment.path.name == "renamed-before-email.pdf"
+        assert attachment.path.read_bytes()
+        if email_failure:
+            raise OSError("email outcome unknown")
+        return 1
+
+    email = mocker.patch("documents.workflows.actions.send_email", side_effect=send)
+    job = ingestion_jobs.stage_consumption(incoming)
+    if email_failure:
+        with pytest.raises(OSError, match="email outcome unknown"):
+            ingestion_jobs.run_consumption(job.pk)
+        with pytest.raises(ingestion_jobs.NeedsAttention):
+            ingestion_jobs.run_consumption(job.pk)
+    else:
+        ingestion_jobs.run_consumption(job.pk)
+    job.refresh_from_db()
+    assert job.status == ("attention" if email_failure else "succeeded")
+    assert job.result["invocations"]["complete:workflows"]["status"] == (
+        "unknown" if email_failure else "succeeded"
+    )
+    assert Document.objects.get().source_path == attachments[0]
+    email.assert_called_once()
 
 
 def test_workflow_failure_keeps_committed_document_without_replay(

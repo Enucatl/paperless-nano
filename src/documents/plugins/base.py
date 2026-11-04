@@ -32,7 +32,7 @@ class ConsumeTaskPlugin(abc.ABC):
     The plugin property able_to_run MAY be hardcoded to return True.
     The plugin setup SHOULD perform any resource creation or additional initialization needed to run the document.
     The plugin setup MAY be a non-operation.
-    The plugin cleanup SHOULD perform resource cleanup, including in the event of an error.
+    The plugin cleanup SHOULD release resources after its successful outcome is retained.
     The plugin cleanup MAY be a non-operation.
     The plugin run SHALL perform any operations against the document or system state required for the plugin.
     The plugin run MAY update the document metadata.
@@ -44,7 +44,8 @@ class ConsumeTaskPlugin(abc.ABC):
     The plugin manager SHALL provide the plugin with the input document, document metadata, progress manager and a created temporary directory.
     The plugin manager SHALL execute the plugin setup, run and cleanup, in that order IF the plugin property able_to_run is True.
     The plugin manager SHOULD log the return message of executing a plugin's run.
-    The plugin manager SHALL always execute the plugin cleanup, IF the plugin property able_to_run is True.
+    The durable plugin manager SHALL record cleanup separately after a successful or stopped outcome.
+    Unresolved execution SHALL retain artifacts for reconciliation rather than invoking destructive cleanup.
     The plugin manager SHALL cease calling plugins and exit the task IF a plugin raises StopConsumeTaskError.
     The plugin manager SHOULD return the StopConsumeTaskError message IF a plugin raises StopConsumeTaskError.
     """
@@ -109,7 +110,9 @@ class ConsumeTaskPlugin(abc.ABC):
         """
         Allows the plugin to execute any cleanup it may require
 
-        Executed after run(), even in the case of error
+        Durable execution calls cleanup after retaining a successful or stopped outcome.
+        Errors retain artifacts for reconciliation. The legacy synchronous manager
+        also calls cleanup on errors.
         """
 
 

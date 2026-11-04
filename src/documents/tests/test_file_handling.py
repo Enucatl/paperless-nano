@@ -790,6 +790,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
         Path(original).touch()
         Path(archive).touch()
         doc = Document.objects.create(
+            id=1,
             mime_type="application/pdf",
             filename="0000001.pdf",
             checksum="A",
@@ -1016,6 +1017,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
         Path(original).touch()
         Path(archive).touch()
         doc = Document.objects.create(
+            id=1,
             mime_type="application/pdf",
             title="my_doc",
             filename="0000001.pdf",

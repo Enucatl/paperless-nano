@@ -39,6 +39,8 @@ from paperless_ai.exceptions import LLMTimeoutError
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
+    from paperless_testing.dirs import PaperlessDirs
+
 from documents import tasks
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
@@ -74,6 +76,118 @@ from paperless_testing.factories import DocumentFactory
 from paperless_testing.factories import UserFactory
 from paperless_testing.permissions import grant_global
 from paperless_testing.permissions import grant_object
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("attachment_type", ["email", "webhook"])
+@pytest.mark.parametrize("staged", [False, True])
+def test_added_workflow_attachments_follow_renames(
+    paperless_dirs: "PaperlessDirs",
+    settings: Settings,
+    attachment_type: str,
+    *,
+    staged: bool,
+) -> None:
+    """Later workflows use current published paths or a supplied staged source."""
+    settings.FILENAME_FORMAT = "{title}"
+    settings.EMAIL_ENABLED = True
+    document = DocumentFactory(
+        title="before", filename="before.pdf", mime_type="application/pdf"
+    )
+    document.source_path.write_bytes(b"published original")
+    source = paperless_dirs.scratch_dir / "staged.pdf"
+    source.write_bytes(b"staged original")
+    trigger = WorkflowTrigger.objects.create(
+        type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED,
+    )
+    rename = Workflow.objects.create(name="Rename", order=0)
+    rename.triggers.add(trigger)
+    rename.actions.add(WorkflowAction.objects.create(assign_title="after"))
+    attachment = Workflow.objects.create(name="Attach", order=1)
+    attachment.triggers.add(trigger)
+    if attachment_type == "email":
+        action = WorkflowAction.objects.create(
+            type=WorkflowAction.WorkflowActionType.EMAIL,
+            email=WorkflowActionEmail.objects.create(
+                subject="Document",
+                body="Ready",
+                to="reader@example.com",
+                include_document=True,
+            ),
+        )
+    else:
+        action = WorkflowAction.objects.create(
+            type=WorkflowAction.WorkflowActionType.WEBHOOK,
+            webhook=WorkflowActionWebhook.objects.create(
+                url="https://example.com/hook",
+                include_document=True,
+            ),
+        )
+    attachment.actions.add(action)
+    with (
+        mock.patch("documents.workflows.actions.send_email", return_value=1) as email,
+        mock.patch.object(send_webhook, "apply_async") as webhook,
+    ):
+        run_workflows(
+            WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED,
+            document,
+            original_file=source if staged else None,
+        )
+
+    document.refresh_from_db()
+    assert document.filename == "after.pdf"
+    expected = b"staged original" if staged else b"published original"
+    if attachment_type == "email":
+        email.assert_called_once()
+        assert email.call_args.kwargs["attachments"][0].path.read_bytes() == expected
+    else:
+        webhook.assert_called_once()
+        assert webhook.call_args.kwargs["kwargs"]["files"]["file"][1] == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("coordinated", [False, True])
+def test_email_failure_propagates_for_coordinated_ingestion(
+    paperless_dirs: "PaperlessDirs",
+    settings: Settings,
+    *,
+    coordinated: bool,
+) -> None:
+    """Required ingestion email failures remain visible; ordinary emails are best effort."""
+    from documents.job_context import active_ingestion_job
+
+    settings.EMAIL_ENABLED = True
+    document = DocumentFactory()
+    trigger = WorkflowTrigger.objects.create(
+        type=WorkflowTrigger.WorkflowTriggerType.DOCUMENT_ADDED,
+    )
+    workflow = Workflow.objects.create(name="Email")
+    workflow.triggers.add(trigger)
+    workflow.actions.add(
+        WorkflowAction.objects.create(
+            type=WorkflowAction.WorkflowActionType.EMAIL,
+            email=WorkflowActionEmail.objects.create(
+                subject="Document",
+                body="Ready",
+                to="reader@example.com",
+            ),
+        )
+    )
+    token = active_ingestion_job.set("test-ingestion" if coordinated else None)
+    try:
+        with mock.patch(
+            "documents.workflows.actions.send_email",
+            side_effect=RuntimeError("ambiguous email outcome"),
+        ) as email:
+            if coordinated:
+                with pytest.raises(RuntimeError, match="ambiguous email outcome"):
+                    run_workflows(trigger.type, document)
+            else:
+                run_workflows(trigger.type, document)
+            email.assert_called_once()
+    finally:
+        active_ingestion_job.reset(token)
+    assert WorkflowRun.objects.filter(workflow=workflow).exists() is not coordinated
 
 
 class TestWorkflows(

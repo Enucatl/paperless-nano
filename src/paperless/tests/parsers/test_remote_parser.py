@@ -237,8 +237,7 @@ class TestRemoteParserScore:
         settings.REMOTE_OCR_ENGINE = None
         settings.REMOTE_OCR_API_KEY = None
         settings.REMOTE_OCR_ENDPOINT = None
-        config = ApplicationConfiguration.objects.first()
-        assert config is not None
+        config, _ = ApplicationConfiguration.objects.get_or_create()
         config.remote_ocr_engine = "azureai"
         config.remote_ocr_api_key = "app-config-key"
         config.remote_ocr_endpoint = "https://config.cognitiveservices.azure.com"

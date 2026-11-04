@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from django.contrib.auth.models import Group
+from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.db import connection
 from django.db.models import Q
@@ -443,6 +444,40 @@ def test_core_rejects_out_of_scope_provider_hits(replacement, mocker):
     )
     with pytest.raises(ValueError, match="outside authorized scope"):
         replacement.search(replacement.request("private", user))
+
+
+@pytest.mark.django_db
+def test_similarity_seed_authorization_is_live_and_independent_of_filters(
+    replacement, mocker
+):
+    """A private seed never reaches providers, even after request-time revocation."""
+    from guardian.shortcuts import remove_perm
+
+    viewer = UserFactory()
+    seed = DocumentFactory(owner=UserFactory())
+    result = DocumentFactory(owner=viewer)
+    request = replacement.request(
+        user=viewer,
+        similar_to=seed.pk,
+        scope=Document.objects.filter(pk=result.pk),
+    )
+    search = mocker.patch.object(
+        replacement.provider,
+        "search",
+        return_value=SearchPage(0, [], 0, list),
+    )
+    with pytest.raises(PermissionDenied):
+        replacement.search(request)
+    search.assert_not_called()
+
+    grant_object(viewer, seed, "view_document")
+    assert replacement.search(request).count == 0
+    search.assert_called_once()
+    search.reset_mock()
+    remove_perm("view_document", viewer, seed)
+    with pytest.raises(PermissionDenied):
+        replacement.search(request)
+    search.assert_not_called()
 
 
 @pytest.mark.parametrize("provider", ["", "external.search.SQLProvider"])

@@ -200,6 +200,10 @@ def execute_email_action(
             extra={"group": logging_group},
         )
     except Exception as e:
+        from documents.job_context import active_ingestion_job
+
+        if active_ingestion_job.get() is not None:
+            raise
         logger.exception(
             f"Error occurred sending notification email: {e}",
             extra={"group": logging_group},
