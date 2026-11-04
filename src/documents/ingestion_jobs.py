@@ -22,20 +22,21 @@ from kombu.utils.json import loads as transport_loads
 
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
-from documents.deferred_operations import PendingOperation
-from documents.ingestion_state import NeedsAttention
-from documents.ingestion_state import json_value
 from documents.ingestion_state import restore_input
 from documents.ingestion_state import run_post_consume
 from documents.ingestion_state import validate_application
 from documents.job_context import active_ingestion_job
-from documents.jobs import RejectedResult
-from documents.jobs import _copy
-from documents.jobs import _revision
-from documents.jobs import _sync_directory
-from documents.jobs import job_directory
+from documents.job_state import PendingOperation
+from documents.job_state import RejectedResult
+from documents.job_state import document_revision as _revision
+from documents.job_storage import atomic_copy as _copy
+from documents.job_storage import job_directory
+from documents.job_storage import sync_directory as _sync_directory
 from documents.models import Document
 from documents.models import DocumentJob
+from documents.operation_journal import NeedsAttention
+from documents.operation_journal import json_value
+from documents.operation_journal import operation_failure_status
 from documents.utils import compute_checksum
 from documents.utils import copy_basic_file_stats
 from documents.versioning import latest_version
@@ -204,7 +205,7 @@ def finish_consumption(job: DocumentJob) -> None:
 
     if isinstance(payload, dict) and "document_id" in payload:
         if modern:
-            from documents.ingestion_state import invoke
+            from documents.operation_journal import invoke
 
             invoke(
                 job,
@@ -411,7 +412,10 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     except Exception as error:
         job = DocumentJob.objects.get(pk=job_id)
         job.error = str(error)
-        if (
+        failure_status = operation_failure_status(job)
+        if failure_status in {DocumentJob.Status.REJECTED, DocumentJob.Status.FAILED}:
+            job.status = failure_status
+        elif (
             isinstance(error, NeedsAttention)
             or job.status == DocumentJob.Status.STAGING
             or (

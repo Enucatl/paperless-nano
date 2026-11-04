@@ -4,37 +4,21 @@ import datetime
 import secrets
 from contextlib import contextmanager
 
-from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
 from filelock import FileLock
 from filelock import Timeout
 
+from documents.job_state import PendingOperation  # noqa: F401
+from documents.job_state import execution_policy  # noqa: F401
+from documents.job_state import requester_id
+from documents.job_state import wait  # noqa: F401
 from documents.models import DocumentJob
-
-
-class PendingOperation(Exception):
-    """The accepted invocation is waiting without holding execution resources."""
 
 
 class OperationConflict(ValueError):
     """An expired, cancelled or changed operation cannot accept this request."""
-
-
-def execution_policy(operation: str, identity: str) -> dict | None:
-    """Select remote execution once, retaining its access grant in the journal."""
-    policies = getattr(settings, "DEFERRED_OPERATIONS", {})
-    return policies.get(operation, policies.get(identity))
-
-
-def wait(job: DocumentJob, entry: dict) -> None:
-    """Persist waiting separately from the coordinator's resumable phase."""
-    job.result.setdefault("resume_status", job.status)
-    job.status = DocumentJob.Status.WAITING
-    job.updated = timezone.now()
-    job.save(update_fields=["result", "status", "updated"])
-    raise PendingOperation(entry["id"])
 
 
 def authorize(entry: dict, user) -> None:
@@ -48,7 +32,7 @@ def authorize(entry: dict, user) -> None:
 @contextmanager
 def locked_operation(job_id, key: str, user):
     """Serialize remote mutation with the core coordinator on shared storage."""
-    from documents.jobs import job_directory
+    from documents.job_storage import job_directory
 
     with (
         FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0),
@@ -135,7 +119,7 @@ def resume(job: DocumentJob) -> None:
 
 def submit_result(job_id, key: str, user, token: str, result) -> dict:
     """Stage an immutable result; only the core validator can apply it."""
-    from documents.ingestion_state import json_value
+    from documents.operation_journal import json_value
 
     result = json_value(result)
     with locked_operation(job_id, key, user) as (job, entry):
@@ -154,7 +138,7 @@ def submit_result(job_id, key: str, user, token: str, result) -> dict:
 
 def cancel(job_id, user) -> None:
     """Cancel pending work without treating uncertain effects as undone."""
-    from documents.jobs import job_directory
+    from documents.job_storage import job_directory
 
     with (
         FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0),
@@ -162,7 +146,7 @@ def cancel(job_id, user) -> None:
     ):
         job = DocumentJob.objects.select_for_update().get(pk=job_id)
         if not user.is_active or not (
-            user.is_superuser or job.input.get("actor_id") == user.pk
+            user.is_superuser or requester_id(job) == user.pk
         ):
             raise PermissionDenied("Only the requester can cancel this job")
         if job.status in {
@@ -181,7 +165,7 @@ def cancel(job_id, user) -> None:
 
 def reconcile(job_id, key: str, user, result, evidence: str) -> dict:
     """Record an administrator's verified external outcome without replaying it."""
-    from documents.ingestion_state import json_value
+    from documents.operation_journal import json_value
 
     if not user.is_active or not user.is_superuser:
         raise PermissionDenied("Only administrators can reconcile external effects")
@@ -207,7 +191,7 @@ def reconcile(job_id, key: str, user, result, evidence: str) -> dict:
 
 def recover_waiting() -> None:
     """Distinguish untouched offline work from expired real execution attempts."""
-    from documents.jobs import job_directory
+    from documents.job_storage import job_directory
 
     for identifier in (
         DocumentJob.objects.filter(status=DocumentJob.Status.WAITING)

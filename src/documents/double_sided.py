@@ -9,8 +9,8 @@ from filelock import FileLock
 
 from documents.converters import convert_from_tiff_to_pdf
 from documents.exceptions import ConsumerError
-from documents.jobs import _copy
-from documents.jobs import _sync_directory
+from documents.job_storage import atomic_copy as _copy
+from documents.job_storage import sync_directory as _sync_directory
 from documents.plugins.base import ConsumeTaskPlugin
 from documents.plugins.base import NoCleanupPluginMixin
 from documents.plugins.base import NoSetupPluginMixin

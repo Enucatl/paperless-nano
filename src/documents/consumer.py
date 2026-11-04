@@ -25,13 +25,12 @@ from documents.classification_operations import (
 from documents.data_models import ConsumableDocument
 from documents.data_models import ConsumeFileSuccessResult
 from documents.data_models import DocumentMetadataOverrides
-from documents.deferred_operations import PendingOperation
 from documents.exceptions import ConsumerError
 from documents.file_handling import create_source_path_directory
 from documents.file_handling import generate_filename
 from documents.file_handling import generate_unique_filename
 from documents.file_handling import validate_path_in_root
-from documents.ingestion_state import NeedsAttention
+from documents.job_state import PendingOperation
 from documents.loggers import LoggingMixin
 from documents.models import Correspondent
 from documents.models import CustomField
@@ -42,6 +41,7 @@ from documents.models import DocumentType
 from documents.models import StoragePath
 from documents.models import Tag
 from documents.models import WorkflowTrigger
+from documents.operation_journal import NeedsAttention
 from documents.parser_operations import effective_configuration
 from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
@@ -545,7 +545,7 @@ class ConsumerPlugin(
                     self.log.debug(f"Parsing {self.filename}...")
 
                     if self.input_doc.job_id:
-                        from documents.jobs import job_directory
+                        from documents.job_storage import job_directory
 
                         directory = job_directory(self.input_doc.job_id)
                     else:

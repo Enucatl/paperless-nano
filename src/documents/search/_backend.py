@@ -286,6 +286,7 @@ class SearchService:
         from documents.search_operations import submit_search
 
         if should_defer(self.provider, "rebuild"):
+            # shortcut: rebuild snapshots use memory; stage JSONL when indexes exceed worker RAM.
             submit_search(
                 self.provider,
                 "rebuild",
@@ -336,14 +337,13 @@ def get_backend() -> SearchService:
     global _backend, _backend_key
     from documents.search_operations import provider_snapshot
 
-    provider = import_string(settings.SEARCH_PROVIDER)()
-    key = provider_snapshot(provider)
     with _backend_lock:
-        if _backend is not None and _backend_key == key:
-            return _backend
         if _backend is not None:
-            _backend.close()
-        _backend = None
+            if _backend_key == provider_snapshot(_backend.provider):
+                return _backend
+            reset_backend()
+        provider = import_string(settings.SEARCH_PROVIDER)()
+        key = provider_snapshot(provider)
         service = SearchService(provider)
         try:
             service.open()

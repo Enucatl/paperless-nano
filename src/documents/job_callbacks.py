@@ -18,7 +18,7 @@ from kombu.utils.json import dumps as transport_dumps
 from kombu.utils.json import loads as transport_loads
 
 from documents.job_context import active_ingestion_job
-from documents.jobs import job_directory
+from documents.job_storage import job_directory
 from documents.models import Document
 from documents.models import DocumentJob
 

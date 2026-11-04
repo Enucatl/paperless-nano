@@ -1873,9 +1873,11 @@ the coordinator does not infer that a failed action is safe to repeat.
 ## Ingestion ownership and deferred operations (#38–#40)
 
 Ingestion task adapters call the application coordinator. Shared input decoding,
-state transitions, invocation outcomes, and publication validation belong to
-`ingestion_state`; retained files and publication reconciliation belong to
-`ingestion_storage`. Plugin selection lives in `plugins.pipeline`, alongside the
+state transitions and publication validation belong to `ingestion_state`;
+retained files and publication reconciliation belong to `ingestion_storage`.
+Shared finite invocation outcomes live in `operation_journal`, below parser,
+metadata, search and ingestion orchestration. `job_state` and `job_storage` own
+common authorization, revisions, waiting state and atomic file operations. Plugin selection lives in `plugins.pipeline`, alongside the
 processing boundary. These modules do not import Celery task plumbing to select
 plugins or report progress. Consumer compatibility, plugin order, terminal stop
 outcomes, hooks, version publication and cleanup retain their existing owners.
@@ -1914,7 +1916,8 @@ and outcome survive broker, application and worker restarts. Waiting has no age
 expiry and consumes no execution attempts. A claim starts a bounded lease using
 the recorded execution timeout; a stale token cannot submit a result. Pure work
 can receive a new claim after expiry. Effectful work with uncertain completion
-moves to attention instead of automatic replay.
+moves to attention instead of automatic replay. Actual local and remote attempts
+are bounded to three; an offline queue does not consume that budget.
 
 The authenticated `/api/operations/` API admits `ocr`, `metadata` and
 `ocr_metadata` using a stable UUID `request_id` and a `document_id`. OCR followed
@@ -1931,7 +1934,16 @@ that writes authoritative document fields. Result submission only records a
 proposal. The resumed core validator checks the domain result before publication.
 The requester or an administrator can cancel an unfinished job; late claims and
 results cannot revive cancellation. Retained uncertain effects are not represented
-as undone.
+as undone. Administrators can submit a verified outcome and required evidence to
+`/api/operations/{job}/{key}/reconcile/`; this does not replay the external action.
+Reconciliation of a cancelled operation records evidence without applying it.
+
+Remote ingestion plugins cannot rewrite the retained requester, owner, grants,
+remote-processing permission, or relation/custom-field assignments. Such changes
+require a core authorization/candidate contract, rather than a generic plugin
+receipt. Parser deferral also respects the original remote-processing policy.
+Metadata proposals preserve existing scalar assignments and reject concurrent
+edits; committed changes reconcile filenames before refreshing search and caches.
 
 A processor must use the retained request and configuration rather than infer
 new settings from the current deployment. Reusing an accepted submission or an
@@ -1957,3 +1969,34 @@ loading a model; otherwise core compares a newly selected provider. The built-in
 classifier and legacy classifier instances obey this same contract. Search cache
 selection uses provider-declared configuration; language vocabulary validation
 belongs to the provider that uses it.
+
+Deferred full-index rebuilds currently materialize their record snapshot in one
+job; incremental writes avoid that memory cost. Live workstation deployment and
+external-provider effects need integration testing in the target environment.
+
+### Review and verification for #38–#40
+
+The independent final review added requester-aware listing/cancellation, bounded
+actual attempts, terminal validation conflicts, immutable atomic uploads, model
+activation checks, metadata file reconciliation, and protection against remote
+plugin privilege changes. Auxiliary thumbnail attempts now have their own durable
+outcome, so a successful main parse cannot authorize replay of an uncertain
+thumbnail side effect. Search provider replacement closes the prior implementation
+before loading the next one and does not reconstruct a cached provider on every
+lookup.
+
+The broad integration selection passed 1,259 tests with one PostgreSQL-only skip.
+Four failures identified a provider-lifetime regression and three container setup
+issues; these were corrected and checked in targeted reruns. The final
+unprivileged integration selection passed 258 tests with one PostgreSQL-only skip,
+covering ingestion, parsing, deferred execution, search, file permissions and
+startup scripts. The final cache/search/reviewer selection passed another 24 tests
+with one PostgreSQL-only skip. Earlier metadata/file/workflow coverage passed 281 tests plus two
+subtests, with its root-sensitive permission check passing separately as a
+non-root user. Migration consistency and changed-file Ruff checks passed. Tests
+ran only in disposable `docker run --rm --userns=host` containers; no test volumes
+were retained.
+
+The full suite, PostgreSQL execution, production deployment and live workstation
+integration were not run for these changes. Offline waiting and recovery were
+simulated with persisted jobs, expired claims, repeat deliveries and stale results.

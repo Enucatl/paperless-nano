@@ -11,12 +11,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from documents.data_models import DocumentMetadataOverrides
-from documents.ingestion_state import invoke
 from documents.ingestion_state import transition
-from documents.jobs import _copy
-from documents.jobs import job_directory
+from documents.job_storage import atomic_copy as _copy
+from documents.job_storage import job_directory
 from documents.models import DocumentJob
 from documents.models import PaperlessTask
+from documents.operation_journal import invoke
 from documents.plugins.helpers import ProgressManager
 from documents.plugins.pipeline import consumption_plugins
 from documents.utils import copy_basic_file_stats
@@ -42,9 +42,9 @@ def prepare(job: DocumentJob, task_id: str) -> None:
     from documents.consumer import ConsumeFileDuplicateError
     from documents.consumer import ConsumerPlugin
     from documents.consumer import ConsumerPreflightPlugin
-    from documents.ingestion_state import NeedsAttention
-    from documents.ingestion_state import json_value
     from documents.ingestion_state import restore_input
+    from documents.operation_journal import NeedsAttention
+    from documents.operation_journal import json_value
     from documents.plugins.base import NoCleanupPluginMixin
     from documents.plugins.base import StopConsumeTaskError
 
@@ -187,7 +187,18 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                     outcome.get("metadata"), dict
                 ):
                     raise ValueError("Invalid plugin metadata outcome")
-                metadata_from_json(outcome["metadata"])
+                returned_metadata = json_value(
+                    dataclasses.asdict(metadata_from_json(outcome["metadata"]))
+                )
+                if "policy" in job.result.get("invocations", {}).get(key, {}):
+                    for name, value in inputs["metadata"].items():
+                        if (
+                            name not in {"title", "created", "filename", "barcodes"}
+                            and returned_metadata.get(name) != value
+                        ):
+                            raise ValueError(
+                                f"Remote plugin changed protected metadata: {name}"
+                            )
                 if not isinstance(outcome.get("mime_type"), str):
                     raise ValueError("Invalid plugin MIME type")
                 if outcome.get("source"):
@@ -322,8 +333,8 @@ def complete_document(job: DocumentJob) -> None:
         return
     from documents.classification_operations import configured_provider
     from documents.classification_operations import provider_configuration
-    from documents.deferred_operations import execution_policy
-    from documents.ingestion_state import json_value
+    from documents.job_state import execution_policy
+    from documents.operation_journal import json_value
 
     if "enrichment" not in job.result:
         deferred = None

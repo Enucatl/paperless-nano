@@ -737,3 +737,40 @@ def test_internal_engine_declaration_is_enforced(sample_doc, provider, changed):
         jobs.run_reprocess(job.pk)
     sample_doc.refresh_from_db()
     assert sample_doc.content == "test content"
+
+
+def test_unsafe_auxiliary_thumbnail_is_not_replayed(sample_doc, provider, mocker):
+    """Main parser success does not authorize replay of an uncertain auxiliary call."""
+    from documents.ingestion_state import NeedsAttention
+    from documents.parser_operations import run_parser
+
+    class UnsafeThumbnail:
+        identity = "test.unsafe-thumbnail:1"
+        uses_remote_service = False
+        replay_safe = False
+
+        def configuration_snapshot(self):
+            return {}
+
+        def process(self, request, root):
+            raise RuntimeError("uncertain thumbnail effect")
+
+    process = mocker.spy(UnsafeThumbnail, "process")
+    mocker.patch("documents.parser_operations.LocalThumbnailProvider", UnsafeThumbnail)
+    job = jobs.stage_reprocess(sample_doc.pk)
+    directory = jobs.job_directory(job.pk)
+    configuration = jobs._configuration()
+    arguments = (
+        provider(),
+        directory / job.input["staged_name"],
+        sample_doc.mime_type,
+        job.input["filename"],
+        configuration,
+        directory,
+    )
+    with pytest.raises(RuntimeError, match="uncertain thumbnail"):
+        run_parser(*arguments, job_id=str(job.pk))
+    with pytest.raises(NeedsAttention, match="unknown outcome"):
+        run_parser(*arguments, job_id=str(job.pk))
+    assert process.call_count == 1
+    assert provider.process.call_count == 1

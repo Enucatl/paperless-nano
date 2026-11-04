@@ -1,7 +1,9 @@
 """Authenticated processor claims and core-owned operation admission."""
 
+import os
 from hashlib import sha256
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from django.core.exceptions import PermissionDenied
 from django.http import FileResponse
@@ -14,8 +16,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from documents import deferred_operations as operations
-from documents.jobs import RejectedResult
-from documents.jobs import job_directory
+from documents.job_state import RejectedResult
+from documents.job_storage import job_directory
+from documents.job_storage import sync_directory
 from documents.models import DocumentJob
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import relative_path
@@ -62,7 +65,7 @@ class OperationsView(OperationAPIView):
                 try:
                     operations.authorize(entry, request.user)
                 except PermissionDenied:
-                    if job.input.get("actor_id") != request.user.pk:
+                    if operations.requester_id(job) != request.user.pk:
                         continue
                 results.append(
                     {
@@ -181,13 +184,19 @@ class OperationFileView(OperationAPIView):
                 if digest.hexdigest() != reference["sha256"]:
                     raise Conflict("Output already uploaded with different content")
                 return Response(reference)
-            with destination.open("xb") as output:
-                for chunk in upload.chunks():
-                    output.write(chunk)
-                import os
-
-                output.flush()
-                os.fsync(output.fileno())
+            with NamedTemporaryFile(
+                dir=destination.parent, prefix=".upload-", delete=False
+            ) as output:
+                temporary = Path(output.name)
+                try:
+                    for chunk in upload.chunks():
+                        output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+                    temporary.replace(destination)
+                    sync_directory(destination.parent)
+                finally:
+                    temporary.unlink(missing_ok=True)
             return Response(file_reference(directory, destination), status=201)
 
 

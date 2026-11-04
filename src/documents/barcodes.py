@@ -591,3 +591,26 @@ def read_barcode_values(
     if mime_type == "image/tiff":
         path = convert_from_tiff_to_pdf(path, work_dir)
     return [x.stored() for x in scan_pdf(path, settings, work_dir)]
+
+
+def read_barcodes_for_reprocess(document: Document) -> list[StoredBarcode] | None:
+    """
+    Reads the barcodes of the original again, e.g. for documents consumed
+    before storing them was enabled. Returns None if they should be left as
+    they are: storing is off, the file can't be scanned with the current
+    settings, or the scan failed.
+    """
+    barcode_settings = BarcodeConfig()
+    if not barcode_settings.barcode_store_values:
+        return None
+    try:
+        with tempfile.TemporaryDirectory(dir=settings.SCRATCH_DIR) as tmpdir:
+            return read_barcode_values(
+                document.source_path,
+                document.mime_type,
+                barcode_settings,
+                Path(tmpdir),
+            )
+    except Exception as e:
+        logger.warning(f"Could not read barcodes of document {document}: {e}")
+        return None

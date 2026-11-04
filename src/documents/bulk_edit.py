@@ -366,7 +366,7 @@ def delete(
         from django.contrib.auth.models import User
 
         from documents.job_callbacks import deletion_revision
-        from documents.jobs import RejectedResult
+        from documents.job_state import RejectedResult
         from documents.permissions import permitted_document_ids
 
         with transaction.atomic():

@@ -551,15 +551,28 @@ def test_ingestion_implementations_do_not_import_task_adapters():
     import inspect
 
     from documents import consumer
+    from documents import job_state
+    from documents import job_storage
+    from documents import operation_journal
+    from documents import parser_operations
     from documents.plugins import base
     from documents.plugins import pipeline
 
-    forbidden = {"documents.tasks", "documents.ingestion_jobs"}
+    forbidden = {
+        "documents.tasks",
+        "documents.ingestion_jobs",
+        "documents.jobs",
+        "documents.deferred_operations",
+    }
     for module in (
         ingestion,
         ingestion_state,
         ingestion_storage,
         consumer,
+        job_state,
+        job_storage,
+        operation_journal,
+        parser_operations,
         base,
         pipeline,
     ):
@@ -619,3 +632,71 @@ def test_deferred_metadata_keeps_import_complete_and_submits_once(
     assert child.input["document_id"] == result["document_id"]
     assert child.status == DocumentJob.Status.QUEUED
     classifier.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("actor_id", 42),
+        ("owner_id", 42),
+        ("view_users", [42]),
+        ("view_groups", [42]),
+        ("change_users", [42]),
+        ("change_groups", [42]),
+        ("remote_ocr", True),
+        ("correspondent_id", 42),
+        ("document_type_id", 42),
+        ("tag_ids", [42]),
+        ("storage_path_id", 42),
+        ("custom_fields", {"42": "unauthorized"}),
+    ],
+)
+def test_remote_plugin_cannot_change_protected_metadata(
+    incoming, settings, mocker, field, value
+):
+    """A per-plugin execution grant cannot widen document authority or policy."""
+    from documents.deferred_operations import claim
+    from documents.deferred_operations import submit_result
+    from paperless_testing.factories import UserFactory
+
+    processor = UserFactory()
+    settings.DEFERRED_OPERATIONS = {"prepare:0": {"users": [processor.pk]}}
+    mocker.patch("documents.jobs._dispatch")
+    job = ingestion_jobs.stage_consumption(incoming)
+    with pytest.raises(Ignore):
+        ingestion_jobs.run_consumption(job.pk)
+    lease = claim(job.pk, "prepare:0", processor)
+    outcome = {**lease["input"], "stopped": None, "message": None}
+    outcome["metadata"] = {**outcome["metadata"], field: value}
+    submit_result(job.pk, "prepare:0", processor, lease["token"], outcome)
+    with pytest.raises(ValueError, match="protected metadata"):
+        ingestion_jobs.run_consumption(job.pk)
+    assert not Document.objects.exists()
+    job.refresh_from_db()
+    assert job.result["invocations"]["prepare:0"]["status"] == "conflicted"
+    assert job.status == DocumentJob.Status.REJECTED
+
+
+def test_remote_post_consume_receipt_updates_legacy_marker(incoming, settings, mocker):
+    """A completed remote hook records the same completion marker as a local hook."""
+    from documents.deferred_operations import PendingOperation
+    from documents.deferred_operations import claim
+    from documents.deferred_operations import submit_result
+    from paperless_testing.factories import UserFactory
+
+    processor = UserFactory()
+    settings.POST_CONSUME_SCRIPT = "/remote/post-consume"
+    settings.DEFERRED_OPERATIONS = {"complete:post_consume": {"users": [processor.pk]}}
+    mocker.patch("documents.jobs._dispatch")
+    job = ingestion_jobs.stage_consumption(incoming)
+    job.result["post_consume"] = "pending"
+    job.save(update_fields=["result"])
+    callback = Mock()
+    with pytest.raises(PendingOperation):
+        ingestion_state.run_post_consume(str(job.pk), callback)
+    lease = claim(job.pk, "complete:post_consume", processor)
+    submit_result(job.pk, "complete:post_consume", processor, lease["token"], None)
+    ingestion_state.run_post_consume(str(job.pk), callback)
+    job.refresh_from_db()
+    assert job.result["post_consume"] == "done"
+    callback.assert_not_called()

@@ -17,15 +17,16 @@ from documents.classification_operations import candidates_for
 from documents.classification_operations import configured_provider
 from documents.classification_operations import provider_configuration
 from documents.classification_operations import snapshot_document
-from documents.deferred_operations import PendingOperation
-from documents.ingestion_state import invoke
-from documents.ingestion_state import json_value
-from documents.jobs import RejectedResult
-from documents.jobs import _check_permission
-from documents.jobs import job_directory
+from documents.job_state import PendingOperation
+from documents.job_state import RejectedResult
+from documents.job_state import check_permission as _check_permission
+from documents.job_storage import job_directory
 from documents.models import Document
 from documents.models import DocumentJob
 from documents.models import MatchingModel
+from documents.operation_journal import invoke
+from documents.operation_journal import json_value
+from documents.operation_journal import operation_failure_status
 
 
 def candidate_snapshot(document: Document, actor_id=None) -> dict:
@@ -139,12 +140,18 @@ def run_enrichment(job_id: str) -> None:
                 document = Document.objects.get(pk=job.input["document_id"])
                 _check_permission(document, job.input["actor_id"])
                 validate_result(request, result, tuple(job.provider["identity"]))
+                current_identity = (
+                    provider.current_identity
+                    if hasattr(provider, "current_identity")
+                    else configured_provider().identity
+                )
                 if (
                     snapshot_document(document) != request["revision"]
                     or candidate_snapshot(document, job.input["actor_id"])
                     != request["candidates"]
                     or json_value(provider_configuration()) != job.configuration
                     or list(provider.identity) != job.provider["identity"]
+                    or json_value(current_identity) != job.provider["identity"]
                 ):
                     raise RejectedResult(
                         "Metadata input, permissions or provider changed"
@@ -186,7 +193,11 @@ def run_enrichment(job_id: str) -> None:
             return
         except Exception as error:
             job.refresh_from_db()
-            job.status = DocumentJob.Status.REJECTED
+            job.status = (
+                DocumentJob.Status.REJECTED
+                if isinstance(error, RejectedResult)
+                else operation_failure_status(job)
+            )
             job.error = str(error)
             job.save(update_fields=["status", "error"])
             raise
@@ -196,14 +207,17 @@ def run_enrichment(job_id: str) -> None:
 def finish_enrichment(job: DocumentJob) -> None:
     """Refresh derived state after the atomic assignment without rerunning inference."""
     from documents.caching import clear_document_caches
+    from documents.file_handling import reconcile_document_files
     from documents.search import get_backend
 
     document = Document.objects.get(pk=job.input["document_id"])
+    reconcile_document_files(document)
     get_backend().add_or_update(document)
     clear_document_caches(document.pk)
     job.status = DocumentJob.Status.SUCCEEDED
+    job.cleaned = True
     job.updated = timezone.now()
-    job.save(update_fields=["status", "updated"])
+    job.save(update_fields=["status", "updated", "cleaned"])
 
 
 @shared_task

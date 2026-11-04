@@ -52,7 +52,7 @@ def parser_replay_safe(
     allow_remote: bool,
 ) -> bool:
     """Use an implementation's explicit replay promise, including the default adapter."""
-    from documents.jobs import RejectedResult
+    from documents.job_state import RejectedResult
 
     try:
         request = {
@@ -81,10 +81,10 @@ def run_parser(
     invocation_id: str | None = None,
 ) -> dict:
     """Execute and validate a provider without granting it permanent-file ownership."""
-    from documents.jobs import RejectedResult
-    from documents.jobs import _copy
-    from documents.jobs import _sync_directory
-    from documents.jobs import _validate_file
+    from documents.job_state import RejectedResult
+    from documents.job_storage import atomic_copy as _copy
+    from documents.job_storage import sync_directory as _sync_directory
+    from documents.job_storage import validate_file as _validate_file
     from documents.models import DocumentJob
     from documents.utils import compute_checksum
 
@@ -176,7 +176,7 @@ def run_parser(
 
     try:
         if job_id:
-            from documents.ingestion_state import invoke
+            from documents.operation_journal import invoke
 
             result = invoke(
                 job,
@@ -217,6 +217,7 @@ def run_parser(
         thumbnail_request = {
             **frozen_request,
             "operation": "thumbnail",
+            "output_dir": f"{frozen_request['output_dir']}/thumbnail",
             "settings": configuration_snapshot(thumbnail_provider, {}),
             "allow_remote": False,
         }
@@ -224,22 +225,52 @@ def run_parser(
             selection_before = execution_snapshot(
                 thumbnail_provider, thumbnail_request, directory
             )
-            thumbnail_result = thumbnail_provider.process(
-                json.loads(json.dumps(thumbnail_request)), directory
-            )
-            validate_result(
-                thumbnail_request,
-                thumbnail_result,
-                directory,
-                thumbnail_provider.identity,
-            )
-            if (
-                execution_snapshot(thumbnail_provider, thumbnail_request, directory)
-                != selection_before
-            ):
-                raise RejectedResult(
-                    "Thumbnail parser identity changed during execution"
+
+            def validate_thumbnail(thumbnail_result: dict) -> None:
+                """Keep auxiliary output and engine freshness checks together."""
+                validate_result(
+                    thumbnail_request,
+                    thumbnail_result,
+                    directory,
+                    thumbnail_provider.identity,
                 )
+                if (
+                    execution_snapshot(thumbnail_provider, thumbnail_request, directory)
+                    != selection_before
+                ):
+                    raise RejectedResult(
+                        "Thumbnail parser identity changed during execution"
+                    )
+
+            def create_thumbnail(identifier: str) -> dict:
+                """Give the auxiliary attempt its own stable identity."""
+                import shutil
+
+                from paperless.parsers.contract import relative_path
+
+                output = relative_path(directory, thumbnail_request["output_dir"])
+                if output.exists():
+                    shutil.rmtree(output)
+                auxiliary_request = json.loads(json.dumps(thumbnail_request))
+                auxiliary_request["invocation_id"] = identifier
+                return thumbnail_provider.process(auxiliary_request, directory)
+
+            if job_id:
+                thumbnail_result = invoke(
+                    job,
+                    "parser.thumbnail",
+                    thumbnail_provider.identity,
+                    {"request": thumbnail_request, "selection": selection_before},
+                    create_thumbnail,
+                    replay_safe=selection_before["replay_safe"],
+                    allow_deferred=False,
+                    validate=validate_thumbnail,
+                )
+            else:
+                thumbnail_result = create_thumbnail(
+                    invocation_id or "immediate-thumbnail"
+                )
+            validate_thumbnail(thumbnail_result)
         except (ValueError, TypeError, KeyError, OSError) as error:
             raise RejectedResult(str(error)) from error
         result["thumbnail"] = thumbnail_result["thumbnail"]
@@ -275,8 +306,8 @@ def run_parser(
 
 def validate_parser_job(job: object) -> None:
     """Reject prepared results if configuration or selected provider has changed."""
-    from documents.jobs import RejectedResult
-    from documents.jobs import job_directory
+    from documents.job_state import RejectedResult
+    from documents.job_storage import job_directory
 
     request = job.result.get("parser_request")
     if request is None:

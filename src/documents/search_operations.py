@@ -10,12 +10,13 @@ from django.utils import timezone
 from filelock import FileLock
 from filelock import Timeout
 
-from documents.deferred_operations import PendingOperation
-from documents.deferred_operations import execution_policy
-from documents.ingestion_state import NeedsAttention
-from documents.ingestion_state import invoke
-from documents.ingestion_state import json_value
+from documents.job_state import PendingOperation
+from documents.job_state import execution_policy
 from documents.models import DocumentJob
+from documents.operation_journal import NeedsAttention
+from documents.operation_journal import invoke
+from documents.operation_journal import json_value
+from documents.operation_journal import operation_failure_status
 
 
 def provider_snapshot(provider) -> dict:
@@ -140,7 +141,7 @@ def _execute(provider, operation: str, inputs: dict) -> None:
 @shared_task(ignore_result=True)
 def run_search(job_id: str) -> None:
     """Release workers while pending and validate declarations on completion."""
-    from documents.jobs import job_directory
+    from documents.job_storage import job_directory
     from documents.search import get_backend
 
     try:
@@ -151,6 +152,7 @@ def run_search(job_id: str) -> None:
                 DocumentJob.Status.CANCELLED,
                 DocumentJob.Status.REJECTED,
                 DocumentJob.Status.ATTENTION,
+                DocumentJob.Status.FAILED,
             }:
                 return
             provider = get_backend().provider
@@ -182,12 +184,13 @@ def run_search(job_id: str) -> None:
                 job.refresh_from_db()
                 job.status = DocumentJob.Status.SUCCEEDED
                 job.updated = timezone.now()
-                job.save(update_fields=["status", "updated"])
+                job.cleaned = True
+                job.save(update_fields=["status", "updated", "cleaned"])
             except PendingOperation:
                 return
             except Exception as error:
                 job.refresh_from_db()
-                job.status = DocumentJob.Status.ATTENTION
+                job.status = operation_failure_status(job)
                 job.error = str(error)
                 job.save(update_fields=["status", "error"])
                 raise

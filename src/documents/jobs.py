@@ -6,15 +6,12 @@ private shared storage, independent of either process's scratch directory.
 
 import datetime
 import logging
-import os
 import shutil
-from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
 from uuid import uuid5
 
 from django.conf import settings
-from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -24,6 +21,14 @@ from filelock import Timeout
 from documents.caching import clear_document_caches
 from documents.file_handling import generate_unique_filename
 from documents.file_handling import validate_path_in_root
+from documents.job_state import RejectedResult
+from documents.job_state import check_permission as _check_permission
+from documents.job_state import document_revision as _revision
+from documents.job_storage import atomic_copy as _copy
+from documents.job_storage import file_result as _file_result
+from documents.job_storage import job_directory
+from documents.job_storage import sync_directory as _sync_directory
+from documents.job_storage import validate_file as _validate_file
 from documents.models import Document
 from documents.models import DocumentBarcode
 from documents.models import DocumentJob
@@ -32,7 +37,6 @@ from documents.parser_operations import effective_configuration as _configuratio
 from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
 from documents.parser_operations import validate_parser_job
-from documents.permissions import permitted_document_ids
 from documents.utils import compute_checksum
 from documents.versioning import latest_version
 from paperless.config import RemoteOCRConfig
@@ -41,74 +45,6 @@ from paperless.parsers.providers import configured_parser
 
 logger = logging.getLogger("paperless.jobs")
 MAX_ATTEMPTS = 3
-REVISION_FIELDS = (
-    "content",
-    "checksum",
-    "archive_checksum",
-    "archive_filename",
-    "filename",
-    "modified",
-    "mime_type",
-    "root_document_id",
-    "content_job",
-)
-
-
-class RejectedResult(Exception):
-    """The input, authorization, or output no longer permits application."""
-
-
-def job_directory(job_id: UUID | str) -> Path:
-    """Return the private durable directory for a validated job identifier."""
-    root = settings.DATA_DIR / "jobs"
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return root / str(UUID(str(job_id)))
-
-
-def _sync_directory(path: Path) -> None:
-    """Persist a rename before recording its completion in the database."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _copy(source: Path, destination: Path) -> None:
-    """Atomically publish a copy while keeping the recoverable source."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.job-part")
-    with source.open("rb") as src, temporary.open("wb") as dst:
-        shutil.copyfileobj(src, dst)
-        dst.flush()
-        os.fsync(dst.fileno())
-    temporary.replace(destination)
-    _sync_directory(destination.parent)
-
-
-def _revision(document: Document) -> dict:
-    """Capture fields whose replacement would invalidate a parsing result."""
-    revision = {field: getattr(document, field) for field in REVISION_FIELDS}
-    revision["modified"] = document.modified.isoformat()
-    revision["content_job"] = (
-        str(document.content_job) if document.content_job else None
-    )
-    return revision
-
-
-def _check_permission(document: Document, actor_id: int | None) -> None:
-    """Recheck the original caller; None explicitly denotes a trusted CLI job."""
-    if actor_id is None:
-        return
-    actor = User.objects.filter(pk=actor_id, is_active=True).first()
-    if (
-        actor is None
-        or not actor.has_perm("documents.change_document")
-        or not permitted_document_ids(actor, perm="change_document")
-        .filter(pk=document.pk)
-        .exists()
-    ):
-        raise RejectedResult("The requesting user can no longer change this document")
 
 
 def _check_target(job: DocumentJob) -> Document:
@@ -178,7 +114,7 @@ def stage_reprocess(
             if metadata:
                 from documents.classification_operations import configured_provider
                 from documents.classification_operations import provider_configuration
-                from documents.ingestion_state import json_value
+                from documents.operation_journal import json_value
 
                 identity = configured_provider().identity
                 if identity is None:
@@ -264,50 +200,9 @@ def submit_reprocess(
     return job
 
 
-def _file_result(directory: Path, source: Path, name: str) -> dict:
-    """Retain a parser output after its temporary context has exited."""
-    destination = directory / name
-    _copy(source, destination)
-    return {"name": name, "checksum": compute_checksum(destination)}
-
-
-def _validate_file(directory: Path, reference: dict, mime_type: str) -> Path:
-    """Check containment, integrity, and decodability before publication."""
-    import magic
-
-    path = directory / reference["name"]
-    validate_path_in_root(path, directory)
-    if (
-        path.is_symlink()
-        or not path.is_file()
-        or compute_checksum(path) != reference["checksum"]
-    ):
-        raise RejectedResult("Staged output is missing or has changed")
-    if magic.from_file(path, mime=True) != mime_type:
-        raise RejectedResult(f"Parser output is not {mime_type}")
-    if mime_type == "application/pdf":
-        import pikepdf
-
-        try:
-            with pikepdf.open(path) as pdf:
-                if not pdf.pages:
-                    raise RejectedResult("Parser returned an empty PDF")
-        except pikepdf.PdfError as error:
-            raise RejectedResult("Parser returned an invalid PDF") from error
-    else:
-        from PIL import Image
-
-        try:
-            with Image.open(path) as image:
-                image.verify()
-        except (OSError, ValueError) as error:
-            raise RejectedResult("Parser returned an invalid thumbnail") from error
-    return path
-
-
 def _prepare(job: DocumentJob) -> None:
     """Run the current parser and persist validated, serializable output."""
-    from documents.tasks import _read_barcodes_for_reprocess
+    from documents.barcodes import read_barcodes_for_reprocess
 
     document = _check_target(job)
     directory = job_directory(job.pk)
@@ -331,7 +226,7 @@ def _prepare(job: DocumentJob) -> None:
         raise RejectedResult("Staged input has changed")
     parser_class = configured_parser_class()
     with configured_parser(parser_class, configuration) as parser:
-        from documents.ingestion_state import invoke
+        from documents.operation_journal import invoke
 
         def execute(identifier: str) -> dict:
             """Retain validated parser output before reprocessing publication."""
@@ -381,7 +276,7 @@ def _prepare(job: DocumentJob) -> None:
             )
         # Barcode reading uses the durable input too, without changing the ORM row.
         document.filename = str(source)
-        result["barcodes"] = _read_barcodes_for_reprocess(document)
+        result["barcodes"] = read_barcodes_for_reprocess(document)
         _validate_file(directory, result["thumbnail"], "image/webp")
         if result["archive"]:
             _validate_file(directory, result["archive"], "application/pdf")
@@ -582,7 +477,7 @@ def _cleanup(job: DocumentJob) -> None:
 
 def run_reprocess(job_id: UUID | str) -> bool:
     """Execute or resume a job, independently of Celery lifecycle callbacks."""
-    from documents.deferred_operations import PendingOperation
+    from documents.job_state import PendingOperation
 
     directory = job_directory(job_id)
     # Keep the lock outside staging; deleting a live lock creates two owners.

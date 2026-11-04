@@ -22,7 +22,6 @@ from documents.data_models import ConsumeFileDuplicateResult
 from documents.data_models import ConsumeFileStoppedResult
 from documents.data_models import ConsumeFileSuccessResult
 from documents.data_models import DocumentMetadataOverrides
-from documents.data_models import StoredBarcode
 from documents.exceptions import SearchWriteBusy
 from documents.ingestion_jobs import DurableConsumeTask
 from documents.matching import prefilter_documents_by_workflowtrigger
@@ -45,7 +44,6 @@ from documents.utils import identity
 from documents.workflows.runner import run_workflows
 from documents.workflows.utils import get_workflows_for_trigger
 from paperless.config import AIConfig
-from paperless.config import BarcodeConfig
 from paperless.logging import consume_task_id
 from paperless_ai.exceptions import LLMTimeoutError
 
@@ -302,31 +300,6 @@ def bulk_update_documents(document_ids) -> None:
     from documents.updates import complete_document_updates
 
     complete_document_updates(document_ids)
-
-
-def _read_barcodes_for_reprocess(document: Document) -> list[StoredBarcode] | None:
-    """
-    Reads the barcodes of the original again, e.g. for documents consumed
-    before storing them was enabled. Returns None if they should be left as
-    they are: storing is off, the file can't be scanned with the current
-    settings, or the scan failed.
-    """
-    barcode_settings = BarcodeConfig()
-    if not barcode_settings.barcode_store_values:
-        return None
-    try:
-        from documents.barcodes import read_barcode_values
-
-        with TemporaryDirectory(dir=settings.SCRATCH_DIR) as tmpdir:
-            return read_barcode_values(
-                document.source_path,
-                document.mime_type,
-                barcode_settings,
-                Path(tmpdir),
-            )
-    except Exception as e:
-        logger.warning(f"Could not read barcodes of document {document}: {e}")
-        return None
 
 
 @shared_task(bind=True)

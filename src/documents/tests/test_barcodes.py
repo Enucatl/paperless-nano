@@ -17,6 +17,7 @@ from documents import tasks
 from documents.barcodes import Barcode
 from documents.barcodes import BarcodePlugin
 from documents.barcodes import read_barcode_values
+from documents.barcodes import read_barcodes_for_reprocess
 from documents.consumer import ConsumerError
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
@@ -1477,7 +1478,7 @@ class TestBarcodeValues:
         document = consume_sample("barcode-qr-url.pdf")
         settings.CONSUMER_STORE_BARCODE_VALUES = False
 
-        assert tasks._read_barcodes_for_reprocess(document) is None
+        assert read_barcodes_for_reprocess(document) is None
 
     def test_consume_version_stores_own_values(
         self,

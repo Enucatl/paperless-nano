@@ -526,3 +526,26 @@ def test_provider_request_orders_without_a_view(
     assert result.hits[0]["id"] == first.pk
     assert list(result.matching_ids()) == [first.pk, last.pk]
     reset_backend()
+
+
+def test_provider_cache_uses_only_declared_configuration(replacement, settings, mocker):
+    """Reuse resources until provider-declared effective configuration changes."""
+    settings.TEST_SEARCH_CACHE_VERSION = 1
+    mocker.patch.object(
+        DatabaseProvider,
+        "configuration",
+        new=property(lambda self: {"version": settings.TEST_SEARCH_CACHE_VERSION}),
+        create=True,
+    )
+    factory = mocker.Mock(wraps=DatabaseProvider)
+    mocker.patch("documents.search._backend.import_string", return_value=factory)
+    first = get_backend()
+    assert replacement.provider.closed
+    assert get_backend() is first
+    settings.SEARCH_LANGUAGE = "provider-independent-query-setting"
+    assert get_backend() is first
+    factory.assert_called_once()
+    settings.TEST_SEARCH_CACHE_VERSION = 2
+    assert get_backend() is not first
+    assert first.provider.closed
+    assert factory.call_count == 2
