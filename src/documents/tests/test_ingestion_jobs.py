@@ -12,6 +12,7 @@ from celery import signature
 from celery.exceptions import Ignore
 
 from documents import ingestion_jobs
+from documents import ingestion_storage
 from documents import tasks
 from documents.consumer import ConsumerError
 from documents.data_models import ConsumableDocument
@@ -84,7 +85,8 @@ def parser(
         def __exit__(self, *args) -> None:
             pass
 
-    mocker.patch("documents.tasks.ProgressManager", FakeProgressManager)
+    mocker.patch("documents.plugins.helpers.ProgressManager", FakeProgressManager)
+    mocker.patch("documents.ingestion.ProgressManager", FakeProgressManager)
     mocker.patch("documents.consumer.load_classifier", return_value=None)
     mocker.patch(
         "paperless.parsers.providers.get_parser_registry",
@@ -325,7 +327,7 @@ def test_publication_crash_keeps_input_and_does_not_create_a_second_document(
     """Files published before a rollback remain recoverable without replaying hooks."""
     job = ingestion_jobs.stage_consumption(incoming)
     original_bytes = incoming.original_file.read_bytes()
-    publish_file = ingestion_jobs.publish_file
+    publish_file = ingestion_storage.publish_file
 
     def stop_after_publication(job_id: str, source: Path, target: Path) -> None:
         """Crash after the first durable file publication, before its DB commit."""
@@ -334,7 +336,7 @@ def test_publication_crash_keeps_input_and_does_not_create_a_second_document(
         raise WorkerStopped
 
     interrupted = mocker.patch(
-        "documents.ingestion_jobs.publish_file",
+        "documents.ingestion_storage.publish_file",
         side_effect=stop_after_publication,
     )
     with pytest.raises(WorkerStopped):

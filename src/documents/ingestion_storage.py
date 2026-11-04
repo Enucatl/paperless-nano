@@ -8,16 +8,20 @@ from django.conf import settings
 from filelock import FileLock
 
 from documents.jobs import RejectedResult
+from documents.jobs import _configuration
 from documents.jobs import _copy
+from documents.jobs import _file_result
 from documents.jobs import _sync_directory
+from documents.jobs import _validate_file
 from documents.jobs import job_directory
 from documents.models import DocumentJob
 from documents.utils import compute_checksum
+from documents.utils import copy_basic_file_stats
 
 
 def reconcile_publication(job: DocumentJob) -> None:
     """Remove only proven links owned by a rolled-back publication attempt."""
-    from documents.ingestion_jobs import NeedsAttention
+    from documents.ingestion_state import NeedsAttention
 
     directory = job_directory(job.pk)
     manifest_path = directory / "publication.json"
@@ -67,7 +71,6 @@ def validate_target(target: Path) -> None:
 def publish_file(job_id: str, source: Path, target: Path) -> None:
     """Link a retained same-filesystem copy without replacing an existing target."""
     from documents.file_handling import validate_path_in_root
-    from documents.ingestion_jobs import record_publication
 
     directory = job_directory(job_id)
     validate_path_in_root(source, directory)
@@ -114,3 +117,51 @@ def cleanup_publication(job: DocumentJob) -> None:
             owned.unlink(missing_ok=True)
             owned.with_name(f".{owned.name}.job-part").unlink(missing_ok=True)
             _sync_directory(owned.parent)
+
+
+def stage_outputs(
+    job_id: str, *, original: Path, thumbnail: Path, archive: Path | None, text: str
+) -> tuple[Path, Path, Path | None]:
+    """Retain validated outputs before temporary parser cleanup or publication."""
+    job = DocumentJob.objects.get(pk=job_id)
+    directory = job_directory(job.pk)
+    if not isinstance(text, str):
+        raise RejectedResult("Parser text must be a string")
+    result = {
+        "original": _file_result(directory, original, "original"),
+        "thumbnail": _file_result(directory, thumbnail, "thumbnail.webp"),
+        "archive": _file_result(directory, archive, "archive.pdf") if archive else None,
+        "content": text,
+    }
+    copy_basic_file_stats(original, directory / "original")
+    _validate_file(directory, result["thumbnail"], "image/webp")
+    if archive:
+        _validate_file(directory, result["archive"], "application/pdf")
+    for name, value in _configuration(mailrule_id=job.input["mailrule_id"]).items():
+        if value != job.configuration[name]:
+            raise RejectedResult("Processing configuration changed during ingestion")
+    job.result.update(result)
+    job.result["progress"] = "publication"
+    job.save(update_fields=["result"])
+    return (
+        directory / "original",
+        directory / "thumbnail.webp",
+        directory / "archive.pdf" if archive else None,
+    )
+
+
+def record_publication(job_id: str, entry: dict) -> None:
+    """Persist file publication or relocation intent independently of DB rollback."""
+    import os
+
+    directory = job_directory(job_id)
+    manifest_path = directory / "publication.json"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else []
+    manifest.append(entry)
+    temporary = directory / "publication.pending"
+    with temporary.open("w") as output:
+        json.dump(manifest, output)
+        output.flush()
+        os.fsync(output.fileno())
+    temporary.replace(manifest_path)
+    _sync_directory(directory)

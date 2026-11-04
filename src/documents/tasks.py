@@ -34,10 +34,10 @@ from documents.models import ShareLinkBundle
 from documents.models import Tag
 from documents.models import WorkflowRun
 from documents.models import WorkflowTrigger
-from documents.plugins.base import ConsumeTaskPlugin
 from documents.plugins.base import StopConsumeTaskError
 from documents.plugins.helpers import ProgressManager
 from documents.plugins.helpers import ProgressStatusOptions
+from documents.plugins.pipeline import consumption_plugins
 from documents.signals.handlers import cleanup_document_deletion
 from documents.signals.handlers import send_websocket_document_updated
 from documents.utils import IterWrapper
@@ -167,33 +167,6 @@ def consume_file(
         raise
 
 
-def consumption_plugins(input_doc: ConsumableDocument) -> list[type[ConsumeTaskPlugin]]:
-    """Return the existing ordered ingestion extension points."""
-    from documents.barcodes import BarcodePlugin
-    from documents.consumer import AsnCheckPlugin
-    from documents.consumer import ConsumerPlugin
-    from documents.consumer import ConsumerPreflightPlugin
-    from documents.consumer import WorkflowTriggerPlugin
-    from documents.double_sided import CollatePlugin
-
-    return (
-        [
-            ConsumerPreflightPlugin,
-            ConsumerPlugin,
-        ]
-        if input_doc.root_document_id is not None
-        else [
-            ConsumerPreflightPlugin,
-            AsnCheckPlugin,
-            CollatePlugin,
-            BarcodePlugin,
-            AsnCheckPlugin,  # Re-run ASN check after barcode reading
-            WorkflowTriggerPlugin,
-            ConsumerPlugin,
-        ]
-    )
-
-
 def _consume_file_pipeline(
     input_doc: ConsumableDocument,
     overrides: DocumentMetadataOverrides | None = None,
@@ -247,7 +220,7 @@ def _consume_file_pipeline(
                     continue
 
                 if input_doc.job_id:
-                    from documents.ingestion_jobs import record_progress
+                    from documents.ingestion_state import record_progress
 
                     record_progress(input_doc.job_id, plugin_class.__name__)
                 try:

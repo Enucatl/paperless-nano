@@ -5,7 +5,6 @@ import datetime
 import json
 import logging
 import shutil
-from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -14,8 +13,6 @@ from celery import signature
 from celery.contrib.django.task import DjangoTask
 from celery.exceptions import Ignore
 from django.conf import settings
-from django.contrib.auth.models import User
-from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.utils import timezone
 from filelock import FileLock
@@ -25,17 +22,16 @@ from kombu.utils.json import loads as transport_loads
 
 from documents.data_models import ConsumableDocument
 from documents.data_models import DocumentMetadataOverrides
-from documents.data_models import DocumentSource
-from documents.ingestion_storage import publish_file  # noqa: F401
+from documents.ingestion_state import NeedsAttention
+from documents.ingestion_state import json_value
+from documents.ingestion_state import restore_input
+from documents.ingestion_state import run_post_consume
+from documents.ingestion_state import validate_application
 from documents.job_context import active_ingestion_job
 from documents.jobs import RejectedResult
-from documents.jobs import _check_permission
-from documents.jobs import _configuration
 from documents.jobs import _copy
-from documents.jobs import _file_result
 from documents.jobs import _revision
 from documents.jobs import _sync_directory
-from documents.jobs import _validate_file
 from documents.jobs import job_directory
 from documents.models import Document
 from documents.models import DocumentJob
@@ -44,15 +40,6 @@ from documents.utils import copy_basic_file_stats
 from documents.versioning import latest_version
 
 logger = logging.getLogger("paperless.jobs")
-
-
-class NeedsAttention(Exception):
-    """An external effect may have happened and must not be repeated automatically."""
-
-
-def _json(value: object) -> object:
-    """Normalize model inputs to JSON primitives, including dates and decimal values."""
-    return json.loads(json.dumps(value, cls=DjangoJSONEncoder))
 
 
 def stage_consumption(
@@ -109,7 +96,7 @@ def stage_consumption(
                 "root_document_id": input_doc.root_document_id,
                 "revision": _revision(root) if root else None,
                 "latest_id": latest_version(root).pk if root else None,
-                "overrides": _json(metadata),
+                "overrides": json_value(metadata),
                 "parent_job_id": active_ingestion_job.get(),
             },
         )
@@ -151,204 +138,6 @@ def stage_consumption(
         return job
 
 
-def validate_application(job_id: str | UUID) -> None:
-    """Recheck parser outputs, the original actor and version revision before storing."""
-    job = DocumentJob.objects.get(pk=job_id)
-    from documents.parser_operations import validate_parser_job
-
-    validate_parser_job(job)
-    actor_id = job.input["overrides"].get("actor_id")
-    root_id = job.input["root_document_id"]
-    if root_id:
-        qs = (
-            Document.objects.select_for_update()
-            if transaction.get_connection().in_atomic_block
-            else Document.objects
-        )
-        root = qs.filter(pk=root_id).first()
-        if (
-            root is None
-            or _revision(root) != job.input["revision"]
-            or latest_version(root).pk != job.input["latest_id"]
-        ):
-            raise RejectedResult("Version root changed after admission")
-        _check_permission(root, actor_id)
-    elif actor_id is not None:
-        actor = User.objects.filter(pk=actor_id, is_active=True).first()
-        if actor is None or not actor.has_perm("documents.add_document"):
-            raise RejectedResult("The requesting user can no longer add documents")
-
-
-def record_progress(job_id: str, phase: str) -> None:
-    """Keep phase progress available after worker or websocket loss."""
-    job = DocumentJob.objects.get(pk=job_id)
-    job.result["progress"] = phase
-    job.save(update_fields=["result"])
-
-
-def stage_outputs(
-    job_id: str, *, original: Path, thumbnail: Path, archive: Path | None, text: str
-) -> tuple[Path, Path, Path | None]:
-    """Retain validated outputs before temporary parser cleanup or publication."""
-    job = DocumentJob.objects.get(pk=job_id)
-    directory = job_directory(job.pk)
-    if not isinstance(text, str):
-        raise RejectedResult("Parser text must be a string")
-    result = {
-        "original": _file_result(directory, original, "original"),
-        "thumbnail": _file_result(directory, thumbnail, "thumbnail.webp"),
-        "archive": _file_result(directory, archive, "archive.pdf") if archive else None,
-        "content": text,
-    }
-    copy_basic_file_stats(original, directory / "original")
-    _validate_file(directory, result["thumbnail"], "image/webp")
-    if archive:
-        _validate_file(directory, result["archive"], "application/pdf")
-    for name, value in _configuration(mailrule_id=job.input["mailrule_id"]).items():
-        if value != job.configuration[name]:
-            raise RejectedResult("Processing configuration changed during ingestion")
-    job.result.update(result)
-    job.result["progress"] = "publication"
-    job.save(update_fields=["result"])
-    return (
-        directory / "original",
-        directory / "thumbnail.webp",
-        directory / "archive.pdf" if archive else None,
-    )
-
-
-def record_publication(job_id: str, entry: dict) -> None:
-    """Persist file publication or relocation intent independently of DB rollback."""
-    import os
-
-    directory = job_directory(job_id)
-    manifest_path = directory / "publication.json"
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else []
-    manifest.append(entry)
-    temporary = directory / "publication.pending"
-    with temporary.open("w") as output:
-        json.dump(manifest, output)
-        output.flush()
-        os.fsync(output.fileno())
-    temporary.replace(manifest_path)
-    _sync_directory(directory)
-
-
-def commit_consumption(job_id: str, document: Document) -> None:
-    """Record document ownership and required completion in its database commit."""
-    job = DocumentJob.objects.get(pk=job_id)
-    document = Document.global_objects.get(pk=document.pk)
-    job.result["published"] = {
-        "original": {"path": str(document.source_path), "checksum": document.checksum},
-        "archive": {
-            "path": str(document.archive_path),
-            "checksum": document.archive_checksum,
-        }
-        if document.archive_path
-        else None,
-        "thumbnail": {
-            "path": str(document.thumbnail_path),
-            "checksum": compute_checksum(document.thumbnail_path),
-        },
-    }
-    job.result.update(
-        {
-            "payload": {"document_id": document.pk},
-            "remove_source": True,
-            "progress": "completion",
-            "root_id": document.root_document_id or document.pk,
-            "followup": [
-                "metadata",
-                "workflows",
-                "extensions",
-                "post_consume",
-                "index",
-                "cache",
-                "delivery",
-                "cleanup",
-            ],
-            "post_consume": "pending"
-            if job.result.get("scripts", {}).get(
-                "post", job.configuration.get("post_consume_script")
-            )
-            else "done",
-        }
-    )
-    if job.result.get("lifecycle"):
-        from documents.ingestion_state import transition
-
-        job.save(update_fields=["result"])
-        transition(job, "committed")
-    else:
-        job.status = DocumentJob.Status.COMMITTED
-        job.save(update_fields=["status", "result"])
-
-
-def run_post_consume(job_id: str, callback: Callable[[], None]) -> None:
-    """Never rerun a script whose external effects have an ambiguous outcome."""
-    job = DocumentJob.objects.get(pk=job_id)
-    state = job.result.get("post_consume", "done")
-    if state in {"done", "cancelled"}:
-        return
-    if state == "started":
-        raise NeedsAttention("Post-consume script may already have run")
-    if (
-        job.result.get("scripts", {}).get(
-            "post", job.configuration.get("post_consume_script")
-        )
-        != settings.POST_CONSUME_SCRIPT
-    ):
-        raise NeedsAttention("Post-consume script configuration changed")
-
-    def execute(_identifier: str) -> None:
-        """Retain the legacy marker alongside the identified hook outcome."""
-        job.refresh_from_db()
-        job.result["post_consume"] = "started"
-        job.save(update_fields=["result"])
-        callback()
-        job.refresh_from_db()
-        job.result["post_consume"] = "done"
-        job.save(update_fields=["result"])
-
-    if job.result.get("lifecycle"):
-        from documents.ingestion_state import invoke
-
-        invoke(
-            job,
-            "complete:post_consume",
-            "paperless.post_consume",
-            {"script": settings.POST_CONSUME_SCRIPT},
-            execute,
-        )
-    else:
-        execute(str(job.pk))
-
-
-def _input(job: DocumentJob) -> tuple[ConsumableDocument, DocumentMetadataOverrides]:
-    """Reconstitute legacy parser input only inside the execution adapter."""
-    directory = job_directory(job.pk)
-    working = directory / "work" / job.input["filename"]
-    if not working.exists() and (directory / "input").exists():
-        _copy(directory / "input", working)
-        copy_basic_file_stats(directory / "input", working)
-    metadata = dict(job.input["overrides"])
-    if metadata.get("created"):
-        metadata["created"] = datetime.date.fromisoformat(metadata["created"])
-    input_doc = ConsumableDocument(
-        source=DocumentSource(job.input["source"]),
-        original_file=working,
-        original_path=Path(job.input["original_path"])
-        if job.input["original_path"]
-        else None,
-        source_path=Path(job.input["source_path"]),
-        root_document_id=job.input["root_document_id"],
-        mailrule_id=job.input["mailrule_id"],
-        job_id=str(job.pk),
-        defer_mime_type=True,
-    )
-    return input_doc, DocumentMetadataOverrides(**metadata)
-
-
 def finish_consumption(job: DocumentJob) -> None:
     """Resume required safe completion without replaying consumption workflows."""
     from documents.caching import clear_document_caches
@@ -374,7 +163,7 @@ def finish_consumption(job: DocumentJob) -> None:
     if isinstance(payload, dict) and "document_id" in payload:
         document = Document.objects.filter(pk=payload["document_id"]).first()
         if document:
-            input_doc, overrides = _input(job)
+            input_doc, overrides = restore_input(job)
             with ProgressManager(
                 overrides.filename or job.input["filename"], str(job.pk)
             ) as progress:
@@ -427,16 +216,15 @@ def finish_consumption(job: DocumentJob) -> None:
         else:
             index_and_cache(str(job.pk))
     if modern and isinstance(payload, dict) and "document_id" in payload:
-        from documents import tasks
         from documents.consumer import ConsumerStatusShortMessage
         from documents.ingestion import metadata_from_json
         from documents.plugins.helpers import ProgressStatusOptions
 
         def notify(_identifier: str) -> None:
             """Report completion after required effects and derived-state updates."""
-            input_doc, _ = _input(job)
+            input_doc, _ = restore_input(job)
             overrides = metadata_from_json(job.result["metadata"])
-            with tasks.ProgressManager(
+            with ProgressManager(
                 overrides.filename or job.input["filename"], str(job.pk)
             ) as progress:
                 consumer = ConsumerPlugin(

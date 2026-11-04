@@ -56,7 +56,7 @@ class ConsumeTaskPlugin(abc.ABC):
 
     def reconcile(self, invocation_id: str) -> dict:
         """Return a retained coordinator outcome for an interrupted call, or refuse."""
-        from documents.ingestion_jobs import NeedsAttention
+        from documents.ingestion_state import NeedsAttention
 
         raise NeedsAttention(
             f"Plugin invocation {invocation_id} requires manual reconciliation"

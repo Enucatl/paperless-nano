@@ -606,7 +606,7 @@ class ConsumerPlugin(
 
                 publication_original = self.unmodified_original or self.working_copy
                 if self.input_doc.job_id:
-                    from documents.ingestion_jobs import stage_outputs
+                    from documents.ingestion_storage import stage_outputs
 
                     publication_original, thumbnail, archive_path = stage_outputs(
                         self.input_doc.job_id,
@@ -1029,7 +1029,7 @@ class ConsumerPlugin(
 
     def _write(self, source, target) -> None:
         if self.input_doc.job_id:
-            from documents.ingestion_jobs import publish_file
+            from documents.ingestion_storage import publish_file
 
             publish_file(self.input_doc.job_id, Path(source), Path(target))
         else:

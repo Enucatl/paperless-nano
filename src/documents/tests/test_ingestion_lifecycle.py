@@ -11,6 +11,7 @@ from filelock import FileLock
 from documents import ingestion
 from documents import ingestion_jobs
 from documents import ingestion_state
+from documents import ingestion_storage
 from documents.jobs import job_directory
 from documents.models import Document
 from documents.models import DocumentJob
@@ -72,7 +73,7 @@ def test_setup_can_stop_ingestion_without_an_unknown_outcome(incoming, mocker):
         def cleanup(self):
             cleaned()
 
-    mocker.patch("documents.tasks.consumption_plugins", return_value=[Plugin])
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     job = ingestion_jobs.stage_consumption(incoming)
     assert ingestion_jobs.run_consumption(job.pk) == {
         "reason": "setup chose not to consume"
@@ -187,7 +188,7 @@ def test_opaque_preparation_outcome_never_replays(incoming, mocker, failure):
         def run(self):
             effect(self.invocation_id)
 
-    mocker.patch("documents.tasks.consumption_plugins", return_value=[Plugin])
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     job = ingestion_jobs.stage_consumption(incoming)
     with pytest.raises(failure):
         ingestion_jobs.run_consumption(job.pk)
@@ -216,7 +217,7 @@ def test_safe_invocation_retries_after_result_persistence_loss(incoming, mocker)
 
             raise StopConsumeTaskError("safe stop")
 
-    mocker.patch("documents.tasks.consumption_plugins", return_value=[Plugin])
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     job = ingestion_jobs.stage_consumption(incoming)
     with pytest.raises(WorkerStopped):
         ingestion_jobs.run_consumption(job.pk)
@@ -263,13 +264,13 @@ def test_concurrent_delivery_cannot_claim_a_locked_job(incoming, parser):
 def test_storage_does_not_remove_replaced_target(incoming, parser, mocker):
     """A checksum match alone never establishes ownership of an unrelated file."""
     job = ingestion_jobs.stage_consumption(incoming)
-    original_publish = ingestion_jobs.publish_file
+    original_publish = ingestion_storage.publish_file
 
     def stop(identifier, source, target):
         original_publish(identifier, source, target)
         raise WorkerStopped
 
-    stopped = mocker.patch.object(ingestion_jobs, "publish_file", side_effect=stop)
+    stopped = mocker.patch.object(ingestion_storage, "publish_file", side_effect=stop)
     with pytest.raises(WorkerStopped):
         ingestion_jobs.run_consumption(job.pk)
     mocker.stop(stopped)
@@ -310,7 +311,7 @@ def test_reconciliation_uses_stable_invocation_without_repeating_effect(
             assert invocation_id == entry["id"]
             return {**entry["input"], "stopped": {"reason": "externally reconciled"}}
 
-    mocker.patch("documents.tasks.consumption_plugins", return_value=[Plugin])
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     job = ingestion_jobs.stage_consumption(incoming)
     with pytest.raises(WorkerStopped):
         ingestion_jobs.run_consumption(job.pk)
@@ -328,7 +329,7 @@ def test_result_recording_crash_keeps_opaque_effect_unknown(incoming, mocker):
         def run(self):
             effect()
 
-    mocker.patch("documents.tasks.consumption_plugins", return_value=[Plugin])
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     save = DocumentJob.save
 
     def stop_before_result(instance, *args, **kwargs):
@@ -367,7 +368,7 @@ def test_in_place_plugin_mutation_does_not_destroy_previous_checkpoint(
                 output.write(b"\n% changed by plugin\n")
 
     mocker.patch(
-        "documents.tasks.consumption_plugins", return_value=[Plugin, ConsumerPlugin]
+        "documents.ingestion.consumption_plugins", return_value=[Plugin, ConsumerPlugin]
     )
     parser.replay_safe = True
     stopped = mocker.patch.object(ConsumerPlugin, "prepare", side_effect=WorkerStopped)
@@ -542,3 +543,32 @@ def test_admission_interruption_retains_source_and_marks_attention(incoming, moc
     recover_document_jobs()
     job.refresh_from_db()
     assert job.status == "attention"
+
+
+def test_ingestion_implementations_do_not_import_task_adapters():
+    """Keep processing and retained state usable without task orchestration imports."""
+    import ast
+    import inspect
+
+    from documents import consumer
+    from documents.plugins import base
+    from documents.plugins import pipeline
+
+    forbidden = {"documents.tasks", "documents.ingestion_jobs"}
+    for module in (
+        ingestion,
+        ingestion_state,
+        ingestion_storage,
+        consumer,
+        base,
+        pipeline,
+    ):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, ast.ImportFrom):
+                imports = {node.module}
+                imports.update(f"{node.module}.{alias.name}" for alias in node.names)
+                assert not imports & forbidden, module.__name__
+            elif isinstance(node, ast.Import):
+                assert not {alias.name for alias in node.names} & forbidden, (
+                    module.__name__
+                )

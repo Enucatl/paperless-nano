@@ -16,6 +16,8 @@ from documents.jobs import _copy
 from documents.jobs import job_directory
 from documents.models import DocumentJob
 from documents.models import PaperlessTask
+from documents.plugins.helpers import ProgressManager
+from documents.plugins.pipeline import consumption_plugins
 from documents.utils import copy_basic_file_stats
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import resolve_reference
@@ -35,20 +37,19 @@ def metadata_from_json(value: dict) -> DocumentMetadataOverrides:
 
 def prepare(job: DocumentJob, task_id: str) -> None:
     """Retain each plugin outcome before advancing the durable Prepared boundary."""
-    from documents import tasks
     from documents.consumer import AsnCheckPlugin
     from documents.consumer import ConsumeFileDuplicateError
     from documents.consumer import ConsumerPlugin
     from documents.consumer import ConsumerPreflightPlugin
-    from documents.ingestion_jobs import NeedsAttention
-    from documents.ingestion_jobs import _input
-    from documents.ingestion_jobs import _json
+    from documents.ingestion_state import NeedsAttention
+    from documents.ingestion_state import json_value
+    from documents.ingestion_state import restore_input
     from documents.plugins.base import NoCleanupPluginMixin
     from documents.plugins.base import StopConsumeTaskError
 
     started = timezone.now()
     directory = job_directory(job.pk)
-    input_doc, metadata = _input(job)
+    input_doc, metadata = restore_input(job)
     input_doc.mime_type = magic.from_file(input_doc.original_file, mime=True)
     if job.result.get("scripts", {}).get("pre") != settings.PRE_CONSUME_SCRIPT:
         raise NeedsAttention("Pre-consume script configuration changed")
@@ -56,8 +57,8 @@ def prepare(job: DocumentJob, task_id: str) -> None:
     if receipt is not None:
         receipt.input_data["mime_type"] = input_doc.mime_type
         receipt.save(update_fields=["input_data"])
-    plugins = tasks.consumption_plugins(input_doc)
-    with tasks.ProgressManager(
+    plugins = consumption_plugins(input_doc)
+    with ProgressManager(
         metadata.filename or job.input["filename"], task_id
     ) as progress:
         for index, cls in enumerate(plugins):
@@ -69,7 +70,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
             temporary.mkdir(exist_ok=True)
             plugin = cls(input_doc, metadata, progress, temporary, task_id)
             inputs = {
-                "metadata": _json(dataclasses.asdict(metadata)),
+                "metadata": json_value(dataclasses.asdict(metadata)),
                 "mime_type": input_doc.mime_type,
                 "source": file_reference(directory, input_doc.original_file),
             }
@@ -148,7 +149,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                         "Plugin removed its input without stopping ingestion"
                     )
                 result = {
-                    "metadata": _json(dataclasses.asdict(plugin.metadata)),
+                    "metadata": json_value(dataclasses.asdict(plugin.metadata)),
                     "source": source,
                     "mime_type": input_doc.mime_type,
                     "stopped": stopped,
@@ -283,11 +284,10 @@ def prepare(job: DocumentJob, task_id: str) -> None:
 
 def publish(job: DocumentJob, task_id: str) -> None:
     """Commit document, permanent references and completion intents atomically."""
-    from documents import tasks
     from documents.consumer import ConsumerPlugin
-    from documents.ingestion_jobs import _input
-    from documents.ingestion_jobs import commit_consumption
-    from documents.ingestion_jobs import validate_application
+    from documents.ingestion_state import commit_consumption
+    from documents.ingestion_state import restore_input
+    from documents.ingestion_state import validate_application
     from documents.ingestion_storage import reconcile_publication
 
     reconcile_publication(job)
@@ -306,9 +306,9 @@ def publish(job: DocumentJob, task_id: str) -> None:
             for name in ("original", "thumbnail", "archive")
         },
     }
-    input_doc, _ = _input(job)
+    input_doc, _ = restore_input(job)
     metadata = metadata_from_json(job.result["metadata"])
-    with tasks.ProgressManager(
+    with ProgressManager(
         metadata.filename or job.input["filename"], task_id
     ) as progress:
         plugin = ConsumerPlugin(input_doc, metadata, progress, directory, task_id)
