@@ -278,7 +278,7 @@ def test_workflow_failure_stops_notifications_and_index_until_retry(
     document_updated.connect(notification)
     try:
         with mock.patch(
-            "documents.signals.handlers.run_workflows",
+            "documents.workflows.runner.run_workflows",
             side_effect=RuntimeError("workflow failed"),
         ):
             with pytest.raises(RuntimeError, match="workflow failed"):
@@ -290,7 +290,7 @@ def test_workflow_failure_stops_notifications_and_index_until_retry(
         assert document.title == "after"
         assert list(backend.search_ids("title:before", user=None)) == [document.pk]
 
-        with mock.patch("documents.signals.handlers.run_workflows") as workflows:
+        with mock.patch("documents.workflows.runner.run_workflows") as workflows:
             with document_update(document):
                 pass
         workflows.assert_called_once()
@@ -374,7 +374,7 @@ def test_completion_failure_does_not_return_the_prepared_api_response(
     backend = get_backend()
     backend.add_or_update(document)
     with (
-        mock.patch("documents.signals.handlers.run_workflows") as workflows,
+        mock.patch("documents.workflows.runner.run_workflows") as workflows,
         mock.patch.object(document_updated, "send") as notification,
         mock.patch.object(backend, "add_or_update") as index,
     ):
@@ -408,7 +408,7 @@ def test_version_mutation_survives_completion_failure(
     original_modified = root.modified
     with (
         mock.patch(
-            "documents.signals.handlers.run_workflows",
+            "documents.workflows.runner.run_workflows",
             side_effect=RuntimeError("workflow failed"),
         ),
         mock.patch.object(document_updated, "send") as notification,

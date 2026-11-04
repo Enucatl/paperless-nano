@@ -284,7 +284,7 @@ def test_bulk_completion_reconciles_after_workflows_before_batched_indexes(
         assert kwargs["skip_ai_index"] is True
 
     with (
-        mock.patch("documents.signals.handlers.run_workflows", side_effect=workflow),
+        mock.patch("documents.workflows.runner.run_workflows", side_effect=workflow),
         mock.patch(
             "documents.file_handling.reconcile_document_files", side_effect=reconcile
         ),

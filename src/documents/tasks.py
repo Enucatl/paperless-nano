@@ -39,10 +39,10 @@ from documents.plugins.base import StopConsumeTaskError
 from documents.plugins.helpers import ProgressManager
 from documents.plugins.helpers import ProgressStatusOptions
 from documents.signals.handlers import cleanup_document_deletion
-from documents.signals.handlers import run_workflows
 from documents.signals.handlers import send_websocket_document_updated
 from documents.utils import IterWrapper
 from documents.utils import identity
+from documents.workflows.runner import run_workflows
 from documents.workflows.utils import get_workflows_for_trigger
 from paperless.config import AIConfig
 from paperless.config import BarcodeConfig

@@ -257,6 +257,24 @@ version-conditional, workflow, and file-handling suites in a disposable
 Python 3.14.10, Django 5.2.17, SQLite, and frozen uv dependencies. Ruff formatting,
 changed-file lint, and `git diff --check` passed.
 
+## Workflow orchestration (#32)
+
+`documents.workflows.runner.run_workflows` now owns matching and ordered action
+execution. Document updates, consumption overrides, and scheduled workflows call
+it directly. `signals.handlers.run_workflows_added` remains a thin adapter for
+the document-consumption signal. The runner keeps the existing metadata scopes,
+fresh-state/effective-content matching, action ordering, deletion handling,
+exception propagation, and logger name. This extraction changes no completion
+or retry guarantees from #30.
+
+Verification: **470 passed** across workflows, document and bulk updates,
+maintenance updates, version and document APIs, ingestion follow-ups, tag
+hierarchy, tasks, and consumers. Tests used Python 3.14.10, Django 5.2.17, SQLite,
+frozen uv dependencies, and `pytest -o addopts="" --tb=short -n 4 --dist=loadscope
+--randomly-seed=1` in a non-root disposable `docker run --rm --userns=host`
+container. Ruff formatting/checks and `git diff --check` passed. The full suite
+and other database engines were not run for this relocation.
+
 ## Implemented update boundary (#22)
 
 `documents.updates` now owns metadata application and ordered update completion:

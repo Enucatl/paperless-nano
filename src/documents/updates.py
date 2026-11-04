@@ -84,7 +84,7 @@ def document_update(
     """
     from documents.search import get_backend
     from documents.signals import document_updated
-    from documents.signals.handlers import run_workflows
+    from documents.workflows.runner import run_workflows
 
     yield
 

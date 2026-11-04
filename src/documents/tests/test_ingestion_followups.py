@@ -23,8 +23,8 @@ from documents.models import Workflow
 from documents.models import WorkflowAction
 from documents.models import WorkflowActionWebhook
 from documents.models import WorkflowTrigger
-from documents.signals.handlers import run_workflows
 from documents.tasks import apply_ai_suggestions
+from documents.workflows.runner import run_workflows
 from documents.workflows.webhooks import send_webhook
 from paperless_ai.exceptions import LLMTimeoutError
 from paperless_testing.factories import DocumentFactory

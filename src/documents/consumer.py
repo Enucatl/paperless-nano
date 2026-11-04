@@ -56,13 +56,13 @@ from documents.plugins.helpers import ProgressManager
 from documents.plugins.helpers import ProgressStatusOptions
 from documents.signals import document_consumption_finished
 from documents.signals import document_consumption_started
-from documents.signals.handlers import run_workflows
 from documents.templating.workflows import parse_w_workflow_placeholders
 from documents.updates import document_update
 from documents.utils import compute_checksum
 from documents.utils import copy_basic_file_stats
 from documents.utils import copy_file_with_basic_stats
 from documents.utils import run_subprocess
+from documents.workflows.runner import run_workflows
 from paperless.config import BarcodeConfig
 from paperless.config import OcrConfig
 from paperless.config import RemoteOCRConfig

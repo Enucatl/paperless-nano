@@ -30,8 +30,8 @@ from rest_framework.test import APITestCase
 from documents.file_handling import create_source_path_directory
 from documents.file_handling import generate_filename
 from documents.file_handling import generate_unique_filename
-from documents.signals.handlers import run_workflows
 from documents.workflows.ai import apply_ai_suggestions_to_document
+from documents.workflows.runner import run_workflows
 from documents.workflows.webhooks import send_webhook
 from paperless_ai.base_model import ClassificationSuggestions
 from paperless_ai.exceptions import LLMTimeoutError
@@ -4105,7 +4105,7 @@ class TestWorkflows(
             },
         )
 
-    @mock.patch("documents.signals.handlers.execute_webhook_action")
+    @mock.patch("documents.workflows.runner.execute_webhook_action")
     def test_workflow_webhook_action_does_not_overwrite_concurrent_tags(
         self,
         mock_execute_webhook_action,
@@ -4159,7 +4159,7 @@ class TestWorkflows(
         doc.refresh_from_db()
         self.assertCountEqual(doc.tags.all(), [inbox_tag, error_tag])
 
-    @mock.patch("documents.signals.handlers.execute_webhook_action")
+    @mock.patch("documents.workflows.runner.execute_webhook_action")
     def test_workflow_tag_actions_do_not_overwrite_concurrent_tags(
         self,
         mock_execute_webhook_action,

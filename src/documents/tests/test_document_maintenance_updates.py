@@ -45,7 +45,7 @@ def test_admin_indexes_persisted_scalar_and_related_changes(
 
     with (
         mock.patch("documents.search.get_backend") as backend,
-        mock.patch("documents.signals.handlers.run_workflows") as workflows,
+        mock.patch("documents.workflows.runner.run_workflows") as workflows,
         mock.patch("documents.signals.document_updated.send") as notifications,
     ):
         backend.return_value.add_or_update.side_effect = capture_index
@@ -91,7 +91,7 @@ def test_retagger_preserves_apply_and_suggestion_policies(
             "documents.management.commands.document_retagger.load_classifier",
             return_value=None,
         ),
-        mock.patch("documents.signals.handlers.run_workflows") as workflows,
+        mock.patch("documents.workflows.runner.run_workflows") as workflows,
         mock.patch("documents.signals.document_updated.send") as notifications,
     ):
         call_command("document_retagger", *args, skip_checks=True)
@@ -127,7 +127,7 @@ def test_renamer_invalidates_suggestions_without_update_workflows(
     cache.set(get_suggestion_cache_key(document.pk), "cached suggestions")
 
     with (
-        mock.patch("documents.signals.handlers.run_workflows") as workflows,
+        mock.patch("documents.workflows.runner.run_workflows") as workflows,
         mock.patch("documents.signals.document_updated.send") as notifications,
     ):
         call_command("document_renamer", skip_checks=True)
@@ -157,7 +157,7 @@ def test_notes_update_index_without_document_update_workflows(
 
     with (
         mock.patch("documents.search.get_backend") as backend,
-        mock.patch("documents.signals.handlers.run_workflows") as workflows,
+        mock.patch("documents.workflows.runner.run_workflows") as workflows,
         mock.patch("documents.signals.document_updated.send") as notifications,
     ):
         backend.return_value.add_or_update.side_effect = capture_index
