@@ -34,7 +34,13 @@ class ClassificationResult(TypedDict):
 
 
 class ClassificationProvider(Protocol):
-    """Inference interface with no HTTP, task, or database inputs."""
+    """Inference interface with no HTTP, task, or database inputs.
+
+    Implementations may expose a JSON-object ``configuration`` snapshot. A
+    ``current_identity`` property can validate an active model without loading
+    it; otherwise core compares a fresh selected provider's identity. Legacy
+    construction adapters belong to the implementation, not the orchestrator.
+    """
 
     @property
     def identity(self) -> tuple[str, str]:

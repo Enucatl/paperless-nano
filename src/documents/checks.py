@@ -1,27 +1,16 @@
 from django.conf import settings
-from django.core.checks import Error
 from django.core.checks import Warning
 from django.core.checks import register
 
 from documents.templating.utils import convert_format_str_to_template_format
-from paperless.parsers.registry import get_parser_registry
 
 
 @register()
 def parser_check(app_configs, **kwargs):
-    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
-        from documents.parser_operations import parser_class
+    from documents.parser_operations import parser_class
 
-        parser_class()
-        return []
-    if not get_parser_registry().all_parsers():
-        return [
-            Error(
-                "No parsers found. This is a bug. The consumer won't be "
-                "able to consume any documents without parsers.",
-            ),
-        ]
-    return []
+    check = getattr(parser_class(), "check", None)
+    return check() if check else []
 
 
 @register()

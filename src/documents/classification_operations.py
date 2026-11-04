@@ -15,7 +15,6 @@ from django.utils.module_loading import import_string
 from documents.classification import ClassificationRequest
 from documents.classification import InvalidClassificationResult
 from documents.classification import validate_result
-from documents.classification_providers import SklearnProvider
 from documents.models import Correspondent
 from documents.models import Document
 from documents.models import DocumentType
@@ -97,40 +96,56 @@ def candidates_for(document: Document, field: str, user=None) -> list:
     return list(queryset)
 
 
+def configured_provider():
+    """Construct the selected implementation through its public contract."""
+    provider = import_string(
+        settings.CLASSIFICATION_PROVIDER
+        or "documents.classification_providers.SklearnProvider"
+    )()
+    identity = provider.identity
+    if identity is not None and (
+        not isinstance(identity, tuple)
+        or len(identity) != 2
+        or any(not isinstance(value, str) or not value for value in identity)
+    ):
+        raise InvalidClassificationResult("Invalid classification provider identity")
+    return provider
+
+
 def provider_configuration() -> tuple:
-    """Identify selection and effective inference settings outside the contract."""
+    """Snapshot selection and implementation-declared effective configuration."""
+    provider = configured_provider()
+    configuration = getattr(provider, "configuration", {})
+    if not isinstance(configuration, dict):
+        raise InvalidClassificationResult(
+            "Classification configuration must be an object"
+        )
+    try:
+        configuration = json.loads(json.dumps(configuration, allow_nan=False))
+    except (ValueError, TypeError) as error:
+        raise InvalidClassificationResult(
+            "Classification configuration must be JSON"
+        ) from error
     return (
         settings.CLASSIFICATION_PROVIDER,
         settings.CLASSIFIER_ENABLED,
-        settings.CLASSIFIER_LANGUAGE,
-        settings.CLASSIFIER_MATCH_THRESHOLD,
+        configuration,
     )
 
 
 def active_provider_identity() -> tuple[str, str] | None:
-    """Read an activation token without loading the built-in model into memory."""
+    """Read the selected implementation's current activation identity."""
     if not settings.CLASSIFIER_ENABLED:
         return None
-    if settings.CLASSIFICATION_PROVIDER:
-        provider = import_string(settings.CLASSIFICATION_PROVIDER)()
-        return provider.identity
-    from documents.classifier import active_model_identity
-
-    model = active_model_identity()
-    return (
-        ("sklearn:1", fingerprint([model, provider_configuration()])) if model else None
-    )
+    return configured_provider().identity
 
 
 def load_classification_provider():
-    """Select inference independently from training and synchronous execution."""
+    """Select inference independently from training and execution transport."""
     if not settings.CLASSIFIER_ENABLED:
         return None
-    if settings.CLASSIFICATION_PROVIDER:
-        return import_string(settings.CLASSIFICATION_PROVIDER)()
-    from documents.classifier import load_classifier
-
-    return load_classifier()
+    provider = configured_provider()
+    return provider if provider.identity is not None else None
 
 
 def proposed_assignments(
@@ -146,14 +161,14 @@ def proposed_assignments(
     configuration = provider_configuration()
     revision = snapshot_document(document)
     assert_document_unchanged(document, revision)
-    identity = getattr(classifier, "identity", None)
-    if not isinstance(identity, tuple):
-        model = getattr(classifier, "model_identity", None)
-        model = model if isinstance(model, str) else None
-        identity = ("sklearn:1", fingerprint([model, configuration]))
-        provider = SklearnProvider(classifier, identity)
-    else:
-        provider = classifier
+    provider = classifier
+    identity = provider.identity
+    if (
+        not isinstance(identity, tuple)
+        or len(identity) != 2
+        or any(not isinstance(value, str) or not value for value in identity)
+    ):
+        raise InvalidClassificationResult("Invalid classification provider identity")
     request = ClassificationRequest(
         version=1,
         revision=revision,
@@ -192,14 +207,12 @@ def proposed_assignments(
         raise InvalidClassificationResult(
             "Classification candidates or provider changed"
         )
-    # A loaded model stays immutable, but an activation invalidates its proposals.
-    if isinstance(provider, SklearnProvider):
-        if (
-            isinstance(classifier.model_identity, str)
-            and active_provider_identity() != identity
-        ):
-            raise InvalidClassificationResult("Classification model was replaced")
-    elif active_provider_identity() != identity:
+    current_identity = (
+        provider.current_identity
+        if hasattr(provider, "current_identity")
+        else active_provider_identity()
+    )
+    if current_identity != identity:
         raise InvalidClassificationResult("Classification provider was replaced")
     return candidates, result["assignments"][field]
 

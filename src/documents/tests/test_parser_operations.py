@@ -257,7 +257,7 @@ def test_thumbnail_fallback_cannot_launder_mutated_input(
             """Accept legacy auxiliary configuration."""
 
     mocker.patch(
-        "documents.parser_operations.get_parser_registry",
+        "paperless.parsers.providers.get_parser_registry",
     ).return_value.get_parser_for_file.return_value = ThumbnailProvider
     apply = mocker.spy(jobs, "_apply")
     original = sample_doc.source_path.read_bytes()
@@ -654,11 +654,11 @@ def test_returned_thumbnail_avoids_registry_in_ingestion_and_reprocessing(
         side_effect=AssertionError("default registry loaded"),
     )
     mocker.patch(
-        "documents.parsers.get_parser_registry",
+        "paperless.parsers.providers.get_parser_registry",
         side_effect=AssertionError("default registry loaded"),
     )
     mocker.patch(
-        "documents.parser_operations.get_parser_registry",
+        "paperless.parsers.providers.get_parser_registry",
         side_effect=AssertionError("default registry loaded"),
     )
     provider.process.side_effect = lambda request, root: {
@@ -683,7 +683,7 @@ def test_missing_local_thumbnail_fails_without_publishing(
 ) -> None:
     """Optional provider thumbnails do not weaken final publication requirements."""
     mocker.patch(
-        "documents.parser_operations.get_parser_registry"
+        "paperless.parsers.providers.get_parser_registry"
     ).return_value.get_parser_for_file.return_value = None
     job = jobs.stage_reprocess(sample_doc.pk)
     with pytest.raises(jobs.RejectedResult, match="No local thumbnail"):
@@ -709,3 +709,31 @@ def test_metadata_inspection_never_authorizes_remote_processing(
     )
     assert select.call_args.kwargs["allow_remote"] is False
     assert select.call_args.kwargs["required_capabilities"] == ("metadata",)
+
+
+@pytest.mark.parametrize("changed", ["identity", "configuration", "result"])
+def test_internal_engine_declaration_is_enforced(sample_doc, provider, changed):
+    """Independent engines use the same frozen declaration checks as built-ins."""
+    engine = {"identity": "engine:1", "configuration": {"language": "eng"}}
+    provider.selection = lambda self, request, root: {
+        **engine,
+        "replay_safe": False,
+        "uses_remote_service": False,
+    }
+
+    def output(request, root):
+        result = {**provider.output(request, root), "execution": "engine:1"}
+        if changed == "result":
+            result["execution"] = "engine:2"
+        elif changed == "identity":
+            engine["identity"] = "engine:2"
+        else:
+            engine["configuration"] = {"language": "deu"}
+        return result
+
+    provider.process.side_effect = output
+    job = jobs.stage_reprocess(sample_doc.pk)
+    with pytest.raises(jobs.RejectedResult, match="Selected parser changed"):
+        jobs.run_reprocess(job.pk)
+    sample_doc.refresh_from_db()
+    assert sample_doc.content == "test content"

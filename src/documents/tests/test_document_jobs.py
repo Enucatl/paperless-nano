@@ -109,7 +109,7 @@ def test_staged_input_survives_loss_of_original(
     assert job.provider["implementation"]["version"] == "1.0"
     assert (
         job.result["parser_request"]["invocation_id"]
-        == job.result["invocations"]["parser"]["id"]
+        == job.result["invocations"]["parser.process"]["id"]
     )
     assert "remote_ocr_api_key" not in job.configuration["settings"]["remote"]
 
@@ -679,5 +679,5 @@ def test_opaque_parser_failure_is_not_replayed(sample_doc, parser) -> None:
     parser.parse.assert_called_once()
     job.refresh_from_db()
     assert job.status == DocumentJob.Status.ATTENTION
-    assert job.result["invocations"]["parser"]["status"] == "unknown"
+    assert job.result["invocations"]["parser.process"]["status"] == "unknown"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).exists()

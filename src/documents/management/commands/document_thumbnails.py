@@ -12,11 +12,11 @@ from documents.jobs import _revision
 from documents.jobs import job_directory
 from documents.management.commands.base import PaperlessCommand
 from documents.models import Document
-from documents.parser_operations import configured_parser
-from documents.parser_operations import default_configuration
 from documents.parser_operations import run_parser
 from documents.utils import compute_checksum
 from paperless.parsers.contract import resolve_reference
+from paperless.parsers.providers import LocalThumbnailProvider
+from paperless.parsers.providers import default_configuration
 from paperless.parsers.registry import get_parser_registry
 
 logger = logging.getLogger("paperless.management.thumbnails")
@@ -47,20 +47,20 @@ def _process_document(doc_id: int) -> None:
     configuration = default_configuration()
     directory = job_directory(uuid4())
     try:
-        with configured_parser(parser_class, configuration) as parser:
-            result = run_parser(
-                parser,
-                source,
-                document.mime_type,
-                document.original_filename or source.name,
-                {
-                    "settings": configuration,
-                    "archive_policy": configuration["ocr"]["archive_file_generation"],
-                    "output_type": configuration["ocr"]["output_type"],
-                },
-                directory,
-                operation="thumbnail",
-            )
+        parser = LocalThumbnailProvider()
+        result = run_parser(
+            parser,
+            source,
+            document.mime_type,
+            document.original_filename or source.name,
+            {
+                "settings": configuration,
+                "archive_policy": configuration["ocr"]["archive_file_generation"],
+                "output_type": configuration["ocr"]["output_type"],
+            },
+            directory,
+            operation="thumbnail",
+        )
         with FileLock(settings.MEDIA_LOCK, timeout=0):
             document.refresh_from_db()
             if (

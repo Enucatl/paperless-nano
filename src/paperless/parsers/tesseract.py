@@ -74,6 +74,8 @@ class RasterisedDocumentParser:
     image, whether it's a PDF, or other graphical format (JPEG, TIFF, etc.)
     """
 
+    replay_safe = True
+
     name: str = "Paperless-ngx Tesseract OCR Parser"
     version: str = __full_version_str__
     author: str = "Paperless-ngx Contributors"

@@ -1,25 +1,23 @@
 """Core policy for explicit parser requests and durable provider outputs."""
 
-import dataclasses
 import hashlib
 import json
 import os
 from pathlib import Path
 from uuid import uuid4
+from uuid import uuid5
 
 from django.conf import settings
 
 from paperless.config import OcrConfig
 from paperless.config import RemoteOCRConfig
 from paperless.parsers.contract import InvalidParserResult
+from paperless.parsers.contract import configuration_snapshot
+from paperless.parsers.contract import execution_snapshot
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import resolve_reference
 from paperless.parsers.contract import validate_result
-from paperless.parsers.providers import DefaultParser
-from paperless.parsers.providers import LegacyParserProvider
-from paperless.parsers.providers import configured_parser
-from paperless.parsers.providers import default_configuration
-from paperless.parsers.registry import get_parser_registry
+from paperless.parsers.providers import LocalThumbnailProvider
 
 
 def parser_class() -> type:
@@ -31,11 +29,8 @@ def parser_class() -> type:
 
 def effective_configuration(*, mailrule_id: int | None = None) -> dict:
     """Snapshot common preferences and implementation-owned, secret-free settings."""
-    cls = parser_class()
-    implementation = (
-        default_configuration(mailrule_id=mailrule_id)
-        if cls is DefaultParser
-        else cls().configuration_snapshot()
+    implementation = configuration_snapshot(
+        parser_class()(), {"mailrule_id": mailrule_id}
     )
     preferences = OcrConfig()
     return {
@@ -57,26 +52,19 @@ def parser_replay_safe(
     allow_remote: bool,
 ) -> bool:
     """Use an implementation's explicit replay promise, including the default adapter."""
-    if parser is DefaultParser:
-        try:
-            parser = parser().selected_class(
-                {
-                    "source": file_reference(directory, source),
-                    "mime_type": mime_type,
-                    "filename": filename,
-                    "allow_remote": allow_remote,
-                },
-                directory,
-            )
-        except InvalidParserResult as error:
-            from documents.jobs import RejectedResult
+    from documents.jobs import RejectedResult
 
-            raise RejectedResult(str(error)) from error
-    return getattr(parser, "replay_safe", False) is True or parser.__module__ in {
-        "paperless.parsers.tesseract",
-        "paperless.parsers.text",
-        "paperless.parsers.mail",
-    }
+    try:
+        request = {
+            "source": file_reference(directory, source),
+            "mime_type": mime_type,
+            "filename": filename,
+            "allow_remote": allow_remote,
+            "settings": effective_configuration()["settings"],
+        }
+        return execution_snapshot(parser(), request, directory)["replay_safe"]
+    except InvalidParserResult as error:
+        raise RejectedResult(str(error)) from error
 
 
 def run_parser(
@@ -100,50 +88,43 @@ def run_parser(
     from documents.models import DocumentJob
     from documents.utils import compute_checksum
 
-    provider = (
-        parser
-        if operation != "thumbnail" and hasattr(type(parser), "process")
-        else LegacyParserProvider(parser)
-    )
+    provider = parser
     configuration = json.loads(json.dumps(configuration))
-    if isinstance(provider, LegacyParserProvider) and isinstance(
-        getattr(parser, "settings", None), OcrConfig
-    ):
-        configuration["settings"]["ocr"] = dataclasses.asdict(parser.settings)
-    if getattr(parser, "uses_remote_service", False) and not allow_remote:
-        raise RejectedResult("Remote processing is not permitted for this document")
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    output_dir = f"parser-{uuid4()}"
-    staged = directory / (output_dir + "-input") / source.name
-    _copy(source, staged)
-    source = staged
-    request = {
-        "version": 1,
-        "revision": "",
-        "source": file_reference(directory, source),
-        "mime_type": mime_type,
-        "filename": filename,
-        "settings": configuration["settings"],
-        "operation": operation,
-        "archive_policy": configuration["archive_policy"],
-        "output_type": configuration["output_type"],
-        "output_dir": output_dir,
-        "allow_remote": allow_remote,
-    }
-    if invocation_id or job_id:
-        request["invocation_id"] = invocation_id or str(job_id)
-    request["revision"] = hashlib.sha256(
-        json.dumps(request, sort_keys=True).encode()
-    ).hexdigest()
+    request = None
+    if job_id:
+        job = DocumentJob.objects.get(pk=job_id)
+        request = job.result.get("parser_request")
+    if request is None:
+        output_dir = f"parser-{uuid4()}"
+        staged = directory / (output_dir + "-input") / source.name
+        _copy(source, staged)
+        source = staged
+        request = {
+            "version": 1,
+            "revision": "",
+            "source": file_reference(directory, source),
+            "mime_type": mime_type,
+            "filename": filename,
+            "settings": configuration["settings"],
+            "operation": operation,
+            "archive_policy": configuration["archive_policy"],
+            "output_type": configuration["output_type"],
+            "output_dir": output_dir,
+            "allow_remote": allow_remote,
+        }
+        if invocation_id or job_id:
+            request["invocation_id"] = (
+                str(uuid5(job.pk, "parser.process")) if job_id else invocation_id
+            )
+        request["revision"] = hashlib.sha256(
+            json.dumps(request, sort_keys=True).encode()
+        ).hexdigest()
+    else:
+        resolve_reference(directory, request["source"])
     identity = provider.identity
-    if not isinstance(identity, str) or not identity:
-        raise RejectedResult("Parser identity must be a nonempty string")
     try:
-        selection = (
-            provider.selection(request, directory)
-            if isinstance(provider, DefaultParser)
-            else None
-        )
+        selection = execution_snapshot(provider, request, directory)
     except InvalidParserResult as error:
         raise RejectedResult(str(error)) from error
     if job_id:
@@ -152,8 +133,7 @@ def run_parser(
             "class": f"{type(parser).__module__}.{type(parser).__qualname__}",
             "identity": identity,
         }
-        if selection is not None:
-            selected_provider["implementation"] = selection
+        selected_provider["implementation"] = selection
         previous_request = job.result.get("parser_request")
         if previous_request is not None and (
             job.configuration != configuration or job.provider != selected_provider
@@ -167,9 +147,56 @@ def run_parser(
         job.save(update_fields=["provider", "configuration", "result"])
     # Keep a separate snapshot so provider mutation cannot rewrite validation policy.
     frozen_request = json.loads(json.dumps(request))
+
+    def validate_output(result: dict) -> None:
+        """Apply the same domain checks to immediate and deferred outputs."""
+        try:
+            validate_result(frozen_request, result, directory, identity)
+            if result.get("execution", result["provider"]) != selection["identity"]:
+                raise InvalidParserResult("Selected parser changed during execution")
+            if execution_snapshot(provider, frozen_request, directory) != selection:
+                raise InvalidParserResult("Selected parser changed during execution")
+            if provider.identity != identity:
+                raise InvalidParserResult("Parser identity changed during execution")
+        except (ValueError, TypeError, KeyError, OSError) as error:
+            raise RejectedResult(str(error)) from error
+
+    def execute(identifier: str) -> dict:
+        """Run one admitted attempt using private output files."""
+        import shutil
+
+        from paperless.parsers.contract import relative_path
+
+        output = relative_path(directory, frozen_request["output_dir"])
+        if output.exists():
+            shutil.rmtree(output)
+        runtime_request = json.loads(json.dumps(frozen_request))
+        runtime_request["invocation_id"] = identifier
+        return provider.process(runtime_request, directory)
+
     try:
-        runtime_request = json.loads(json.dumps(request))
-        result = provider.process(runtime_request, directory)
+        if job_id:
+            from documents.ingestion_state import invoke
+
+            result = invoke(
+                job,
+                "parser.process",
+                identity,
+                {"request": frozen_request, "selection": selection},
+                execute,
+                replay_safe=selection["replay_safe"],
+                reconcile=(
+                    lambda identifier: provider.reconcile(
+                        {**frozen_request, "invocation_id": identifier}, directory
+                    )
+                )
+                if callable(getattr(provider, "reconcile", None))
+                else None,
+                validate=validate_output,
+            )
+        else:
+            result = execute(invocation_id or "immediate")
+        validate_output(result)
     except InvalidParserResult as error:
         raise RejectedResult(str(error)) from error
     try:
@@ -177,45 +204,45 @@ def run_parser(
         resolve_reference(directory, frozen_request["source"])
     except (ValueError, TypeError, KeyError, OSError) as error:
         raise RejectedResult(str(error)) from error
-    if selection is not None and result.get("implementation") != selection["identity"]:
-        raise RejectedResult("Selected parser changed during execution")
+    try:
+        if execution_snapshot(provider, frozen_request, directory) != selection:
+            raise RejectedResult("Selected parser changed during execution")
+    except InvalidParserResult as error:
+        raise RejectedResult(str(error)) from error
     if provider.identity != identity:
         raise RejectedResult("Parser identity changed during execution")
     if result["thumbnail"] is None:
-        fallback = get_parser_registry().get_parser_for_file(
-            mime_type,
-            filename,
-            source,
-            allow_remote=False,
-            required_capabilities=("thumbnail",),
-        )
-        if fallback is None:
-            raise RejectedResult("No local thumbnail parser is available")
-        thumbnail_configuration = default_configuration()
-        with configured_parser(fallback, thumbnail_configuration) as thumbnail_parser:
-            thumbnail_provider = LegacyParserProvider(thumbnail_parser)
-            thumbnail_request = {
-                **frozen_request,
-                "operation": "thumbnail",
-                "settings": thumbnail_configuration,
-                "allow_remote": False,
-            }
-            thumbnail_identity = thumbnail_provider.identity
-            try:
-                thumbnail_result = thumbnail_provider.process(
-                    json.loads(json.dumps(thumbnail_request)), directory
-                )
-                validate_result(
-                    thumbnail_request, thumbnail_result, directory, thumbnail_identity
-                )
-            except (ValueError, TypeError, KeyError, OSError) as error:
-                raise RejectedResult(str(error)) from error
-            if thumbnail_provider.identity != thumbnail_identity:
+        thumbnail_provider = LocalThumbnailProvider()
+        thumbnail_request = {
+            **frozen_request,
+            "operation": "thumbnail",
+            "settings": configuration_snapshot(thumbnail_provider, {}),
+            "allow_remote": False,
+        }
+        try:
+            selection_before = execution_snapshot(
+                thumbnail_provider, thumbnail_request, directory
+            )
+            thumbnail_result = thumbnail_provider.process(
+                json.loads(json.dumps(thumbnail_request)), directory
+            )
+            validate_result(
+                thumbnail_request,
+                thumbnail_result,
+                directory,
+                thumbnail_provider.identity,
+            )
+            if (
+                execution_snapshot(thumbnail_provider, thumbnail_request, directory)
+                != selection_before
+            ):
                 raise RejectedResult(
                     "Thumbnail parser identity changed during execution"
                 )
-            result["thumbnail"] = thumbnail_result["thumbnail"]
-            result["thumbnail_provider"] = thumbnail_identity
+        except (ValueError, TypeError, KeyError, OSError) as error:
+            raise RejectedResult(str(error)) from error
+        result["thumbnail"] = thumbnail_result["thumbnail"]
+        result["thumbnail_provider"] = selection_before["identity"]
     try:
         validate_result(
             frozen_request,
@@ -268,12 +295,9 @@ def validate_parser_job(job: object) -> None:
         or cls().identity != job.provider["identity"]
     ):
         raise RejectedResult("Selected parser changed before publication")
-    if cls is DefaultParser:
-        try:
-            selection = cls().selection(request, directory)
-        except InvalidParserResult as error:
-            raise RejectedResult(
-                "Selected parser changed before publication"
-            ) from error
-        if selection != job.provider.get("implementation"):
-            raise RejectedResult("Selected parser changed before publication")
+    try:
+        selection = execution_snapshot(cls(), request, directory)
+    except InvalidParserResult as error:
+        raise RejectedResult("Selected parser changed before publication") from error
+    if selection != job.provider.get("implementation"):
+        raise RejectedResult("Selected parser changed before publication")

@@ -14,7 +14,6 @@ from django.conf import settings
 from documents.loggers import LoggingMixin
 from documents.utils import copy_file_with_basic_stats
 from documents.utils import run_subprocess
-from paperless.parsers.registry import get_parser_registry
 
 if TYPE_CHECKING:
     import datetime
@@ -26,9 +25,16 @@ def is_mime_type_supported(mime_type: str) -> bool:
     """
     Returns True if the mime type is supported, False otherwise
     """
-    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
-        return bool(mime_type)
-    return get_parser_registry().get_parser_for_file(mime_type, "") is not None
+    supported = _supported_mime_types()
+    return mime_type in supported if supported is not None else bool(mime_type)
+
+
+def _supported_mime_types() -> dict | None:
+    """Read optional format declarations without loading another implementation."""
+    from documents.parser_operations import parser_class
+
+    method = getattr(parser_class(), "accepted_mime_types", None)
+    return method() if method else None
 
 
 def get_default_file_extension(mime_type: str) -> str:
@@ -36,15 +42,9 @@ def get_default_file_extension(mime_type: str) -> str:
     Returns the default file extension for a mimetype, or
     an empty string if it could not be determined
     """
-    parser_class = (
-        get_parser_registry().get_parser_for_file(mime_type, "")
-        if settings.PARSER == "paperless.parsers.providers.DefaultParser"
-        else None
-    )
-    if parser_class is not None:
-        supported = parser_class.supported_mime_types()
-        if mime_type in supported:
-            return supported[mime_type]
+    supported = _supported_mime_types() or {}
+    if mime_type in supported:
+        return supported[mime_type]
 
     ext = mimetypes.guess_extension(mime_type)
     return ext if ext else ""
@@ -62,18 +62,13 @@ def is_file_ext_supported(ext: str) -> bool:
 
 
 def get_supported_file_extensions() -> set[str]:
-    if settings.PARSER != "paperless.parsers.providers.DefaultParser":
+    supported = _supported_mime_types()
+    if supported is None:
         mimetypes.init()
         return set(mimetypes.types_map)
-    extensions = set()
-    for parser_class in get_parser_registry().all_parsers():
-        for mime_type, ext in parser_class.supported_mime_types().items():
-            extensions.update(mimetypes.guess_all_extensions(mime_type))
-            # Python's stdlib might be behind, so also add what the parser
-            # says is the default extension
-            # This makes image/webp supported on Python < 3.11
-            extensions.add(ext)
-
+    extensions = set(supported.values())
+    for mime_type in supported:
+        extensions.update(mimetypes.guess_all_extensions(mime_type))
     return extensions
 
 

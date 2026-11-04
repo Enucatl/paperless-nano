@@ -782,7 +782,7 @@ class TestConsumer(
 
     @mock.patch("documents.consumer.load_classifier")
     def test_version_label_override_applies(self, m) -> None:
-        m.return_value = MagicMock()
+        m.return_value = None
 
         with self.get_consumer(
             self.get_test_file(),
@@ -801,7 +801,7 @@ class TestConsumer(
     @override_settings(AUDIT_LOG_ENABLED=True)
     @mock.patch("documents.consumer.load_classifier")
     def test_consume_version_creates_new_version(self, m) -> None:
-        m.return_value = MagicMock()
+        m.return_value = None
 
         with self.get_consumer(self.get_test_file()) as consumer:
             consumer.run()
@@ -880,7 +880,7 @@ class TestConsumer(
         self,
         m: mock.Mock,
     ) -> None:
-        m.return_value = MagicMock()
+        m.return_value = None
 
         with self.get_consumer(self.get_test_file()) as consumer:
             consumer.run()
@@ -937,7 +937,7 @@ class TestConsumer(
     @override_settings(AUDIT_LOG_ENABLED=True)
     @mock.patch("documents.consumer.load_classifier")
     def test_consume_version_index_monotonic_after_version_deletion(self, m) -> None:
-        m.return_value = MagicMock()
+        m.return_value = None
 
         with self.get_consumer(self.get_test_file()) as consumer:
             consumer.run()
@@ -1004,7 +1004,13 @@ class TestConsumer(
         t1 = Tag.objects.create(name="t1", matching_algorithm=Tag.MATCH_AUTO)
         t2 = Tag.objects.create(name="t2", matching_algorithm=Tag.MATCH_AUTO)
 
-        m.return_value = MagicMock()
+        from documents.classifier import DocumentClassifier
+
+        m.return_value = DocumentClassifier()
+        m.return_value.predict_correspondent = MagicMock()
+        m.return_value.predict_document_type = MagicMock()
+        m.return_value.predict_tags = MagicMock()
+        m.return_value.predict_storage_path = MagicMock(return_value=None)
         m.return_value.predict_correspondent.return_value = correspondent.pk
         m.return_value.predict_document_type.return_value = dtype.pk
         m.return_value.predict_tags.return_value = [t1.pk]

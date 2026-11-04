@@ -79,6 +79,8 @@ class MailDocumentParser:
         Issue tracker / source URL.
     """
 
+    replay_safe = True
+
     name: str = "Paperless-ngx Mail Parser"
     version: str = __full_version_str__
     author: str = "Paperless-ngx Contributors"

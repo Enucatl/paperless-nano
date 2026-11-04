@@ -42,6 +42,7 @@ class ParserResult(TypedDict):
     version: int
     revision: str
     provider: str
+    execution: NotRequired[str]
     text: str
     page_count: int | None
     date: str | None
@@ -60,6 +61,18 @@ class ParserProvider(Protocol):
         """Return JSON settings without secrets, checked on retry and publication."""
         return {}
 
+    def configuration_for(self, context: dict) -> dict:
+        """Snapshot configuration for core-supplied document context."""
+        return self.configuration_snapshot()
+
+    def selection(self, request: ParserRequest, root: Path) -> dict:
+        """Declare effective execution identity and conservative replay policy."""
+        return {
+            "identity": self.identity,
+            "replay_safe": getattr(self, "replay_safe", False),
+            "uses_remote_service": self.uses_remote_service,
+        }
+
     def process(self, request: ParserRequest, root: Path) -> ParserResult:
         """Return output references within this operation's private directory."""
         ...
@@ -67,6 +80,53 @@ class ParserProvider(Protocol):
 
 class InvalidParserResult(ValueError):
     """An incompatible, stale, missing or unsafe result cannot be published."""
+
+
+def configuration_snapshot(provider: ParserProvider, context: dict) -> dict:
+    """Validate and detach an implementation's effective configuration."""
+    method = getattr(provider, "configuration_for", None)
+    value = method(context) if method else provider.configuration_snapshot()
+    if not isinstance(value, dict):
+        raise InvalidParserResult("Parser configuration must be an object")
+    try:
+        return json.loads(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise InvalidParserResult("Parser configuration must be JSON") from error
+
+
+def execution_snapshot(provider: ParserProvider, request: dict, root: Path) -> dict:
+    """Validate declarations equally for direct providers and internal engines."""
+    identity = getattr(provider, "identity", None)
+    method = getattr(provider, "selection", None)
+    value = (
+        method(json.loads(json.dumps(request)), root)
+        if method
+        else {
+            "identity": identity,
+            "replay_safe": getattr(provider, "replay_safe", False),
+            "uses_remote_service": getattr(provider, "uses_remote_service", True),
+        }
+    )
+    if (
+        not isinstance(identity, str)
+        or not identity
+        or not isinstance(value, dict)
+        or not isinstance(value.get("identity"), str)
+        or not value["identity"]
+        or type(value.get("replay_safe")) is not bool
+        or type(value.get("uses_remote_service")) is not bool
+    ):
+        raise InvalidParserResult("Invalid parser execution declaration")
+    if value["uses_remote_service"] and not request["allow_remote"]:
+        raise InvalidParserResult(
+            "Remote processing is not permitted for this document"
+        )
+    try:
+        return json.loads(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise InvalidParserResult(
+            "Parser execution declaration must be JSON"
+        ) from error
 
 
 def relative_path(root: Path, name: str) -> Path:

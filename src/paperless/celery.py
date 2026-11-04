@@ -2,7 +2,6 @@ import os
 
 from celery import Celery
 from celery.signals import worker_process_init
-from django.conf import settings
 from kombu.serialization import register
 
 from paperless.signed_pickle import signed_pickle_dumps
@@ -42,8 +41,9 @@ app.autodiscover_tasks()
 
 @worker_process_init.connect
 def on_worker_process_init(**kwargs) -> None:  # pragma: no cover
-    """Initialize legacy parsers only when the default implementation is selected."""
-    if settings.PARSER == "paperless.parsers.providers.DefaultParser":
-        from paperless.parsers.registry import init_builtin_parsers
+    """Initialize the configured implementation inside its worker process."""
+    from documents.parser_operations import parser_class
 
-        init_builtin_parsers()
+    initialize = getattr(parser_class(), "initialize_worker", None)
+    if initialize:
+        initialize()

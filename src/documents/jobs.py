@@ -27,7 +27,6 @@ from documents.models import Document
 from documents.models import DocumentBarcode
 from documents.models import DocumentJob
 from documents.models import PaperlessTask
-from documents.parser_operations import configured_parser
 from documents.parser_operations import effective_configuration as _configuration
 from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
@@ -37,6 +36,7 @@ from documents.utils import compute_checksum
 from documents.versioning import latest_version
 from paperless.config import RemoteOCRConfig
 from paperless.parsers.contract import resolve_reference
+from paperless.parsers.providers import configured_parser
 
 logger = logging.getLogger("paperless.jobs")
 MAX_ATTEMPTS = 3

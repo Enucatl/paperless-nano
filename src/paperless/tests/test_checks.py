@@ -619,7 +619,9 @@ class TestTesseractChecks:
         settings.PARSER = "paperless.parsers.providers.PlainTextProvider"
         settings.OCR_LANGUAGE = "unavailable"
         get_languages = mocker.patch("paperless.checks.get_tesseract_langs")
-        assert check_default_language_available(None) == []
+        from documents.checks import parser_check
+
+        assert parser_check(None) == []
         get_languages.assert_not_called()
 
     def test_default_language(self) -> None:

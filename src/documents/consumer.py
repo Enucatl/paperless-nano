@@ -40,7 +40,6 @@ from documents.models import DocumentType
 from documents.models import StoragePath
 from documents.models import Tag
 from documents.models import WorkflowTrigger
-from documents.parser_operations import configured_parser
 from documents.parser_operations import effective_configuration
 from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
@@ -69,6 +68,7 @@ from paperless.config import OcrConfig
 from paperless.config import RemoteOCRConfig
 from paperless.models import ArchiveFileGenerationChoices
 from paperless.parsers.contract import resolve_reference
+from paperless.parsers.providers import configured_parser
 from paperless.parsers.utils import pdf_born_digital_text
 
 if TYPE_CHECKING:

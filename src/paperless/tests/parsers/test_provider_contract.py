@@ -317,3 +317,48 @@ def test_legacy_configuration_preserves_mailrule_context():
 
     with configured_parser(Parser, {"mailrule_id": 42}) as parser:
         assert parser.context.mailrule_id == 42
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("identity", ""),
+        ("replay_safe", "yes"),
+        ("uses_remote_service", None),
+    ],
+)
+def test_execution_declarations_are_validated(request_data, tmp_path, field, value):
+    """All implementations must provide well-typed identity and safety claims."""
+    from paperless.parsers.contract import execution_snapshot
+
+    class Provider(PlainTextProvider):
+        def selection(self, request, root):
+            return {**super().selection(request, root), field: value}
+
+    with pytest.raises(InvalidParserResult, match="declaration"):
+        execution_snapshot(Provider(), request_data, tmp_path)
+
+
+def test_unknown_provider_effects_are_not_replay_safe(request_data, tmp_path):
+    """A replacement without a replay promise retains conservative semantics."""
+    from paperless.parsers.contract import execution_snapshot
+
+    class Provider:
+        identity = "independent:1"
+        uses_remote_service = False
+
+    assert (
+        execution_snapshot(Provider(), request_data, tmp_path)["replay_safe"] is False
+    )
+
+
+def test_configuration_declarations_reject_non_json_values():
+    """Configuration snapshots cannot hide unstable values outside JSON."""
+    from paperless.parsers.contract import configuration_snapshot
+
+    class Provider(PlainTextProvider):
+        def configuration_snapshot(self):
+            return {"threshold": float("nan")}
+
+    with pytest.raises(InvalidParserResult, match="JSON"):
+        configuration_snapshot(Provider(), {})

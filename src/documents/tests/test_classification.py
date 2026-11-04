@@ -237,3 +237,38 @@ def test_api_failure_is_not_cached(
     assert response.status_code == 200
     assert response.data["tags"] == [tag.pk]
     assert not doc.tags.exists()
+
+
+@pytest.mark.django_db
+def test_provider_configuration_change_rejects_result(provider, paperless_dirs, mocker):
+    """Independent providers declare settings with the same freshness checks."""
+    document = DocumentFactory(content="Invoice")
+    TagFactory(name="Invoice", matching_algorithm=Tag.MATCH_AUTO)
+    mocker.patch.object(
+        NameTaggingProvider, "configuration", {"model": "first"}, create=True
+    )
+    classify = provider.classify
+
+    def changed(request):
+        result = classify(request)
+        NameTaggingProvider.configuration["model"] = "second"
+        return result
+
+    mocker.patch.object(provider, "classify", side_effect=changed)
+    with pytest.raises(InvalidClassificationResult):
+        proposed_assignments(document, "tags", provider)
+
+
+@pytest.mark.django_db
+def test_builtin_activation_rejects_old_model(paperless_dirs, mocker):
+    """Legacy construction uses the public contract for activation validation."""
+    from documents.classifier import DocumentClassifier
+
+    document = DocumentFactory(content="Invoice")
+    tag = TagFactory(name="Invoice", matching_algorithm=Tag.MATCH_AUTO)
+    classifier = DocumentClassifier()
+    classifier.model_identity = "old"
+    mocker.patch.object(classifier, "predict_tags", return_value=[tag.pk])
+    mocker.patch("documents.classifier.active_model_identity", return_value="new")
+    with pytest.raises(InvalidClassificationResult):
+        proposed_assignments(document, "tags", classifier)

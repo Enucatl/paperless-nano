@@ -13,6 +13,7 @@ from paperless.parsers.contract import InvalidParserResult
 from paperless.parsers.contract import ParserProvider
 from paperless.parsers.contract import ParserRequest
 from paperless.parsers.contract import ParserResult
+from paperless.parsers.contract import configuration_snapshot
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import relative_path
 from paperless.parsers.contract import resolve_reference
@@ -201,9 +202,40 @@ class DefaultParser(ParserProvider):
     identity = "paperless.default:1"
     uses_remote_service = False
 
+    @staticmethod
+    def accepted_mime_types() -> dict[str, str]:
+        """Expose formats from this implementation's engine registry."""
+        return {
+            mime: extension
+            for parser in get_parser_registry().all_parsers()
+            for mime, extension in parser.supported_mime_types().items()
+        }
+
+    @staticmethod
+    def initialize_worker() -> None:
+        """Initialize engines owned by this implementation."""
+        from paperless.parsers.registry import init_builtin_parsers
+
+        init_builtin_parsers()
+
+    @staticmethod
+    def check() -> list:
+        """Check this implementation's registry and OCR installation."""
+        from django.core.checks import Error
+
+        from paperless.checks import check_default_language_available
+
+        if not get_parser_registry().all_parsers():
+            return [Error("No parsers found. The consumer cannot consume documents.")]
+        return check_default_language_available(None)
+
     def configuration_snapshot(self) -> dict:
         """Snapshot the default implementation's effective engine settings."""
         return default_configuration()
+
+    def configuration_for(self, context: dict) -> dict:
+        """Include mail layout in this implementation's configuration."""
+        return default_configuration(mailrule_id=context.get("mailrule_id"))
 
     def selected_class(self, request: ParserRequest, root: Path) -> type:
         """Resolve only the default implementation's legacy dispatch."""
@@ -229,7 +261,12 @@ class DefaultParser(ParserProvider):
             return {
                 "class": f"{cls.__module__}.{cls.__qualname__}",
                 "version": parser.version,
+                "configuration": configuration_snapshot(provider, {})
+                if hasattr(provider, "configuration_snapshot")
+                else request["settings"],
                 "identity": provider.identity,
+                "replay_safe": getattr(parser, "replay_safe", False),
+                "uses_remote_service": provider.uses_remote_service,
             }
 
     def process(self, request: ParserRequest, root: Path) -> ParserResult:
@@ -270,7 +307,37 @@ class DefaultParser(ParserProvider):
             validate_result(request, result, root, identity)
             if provider.identity != identity:
                 raise InvalidParserResult("Parser identity changed during execution")
-            return {**result, "provider": self.identity, "implementation": identity}
+            return {**result, "provider": self.identity, "execution": identity}
+
+
+class LocalThumbnailProvider(DefaultParser):
+    """Own local auxiliary rendering independently of the main parser selection."""
+
+    identity = "paperless.local-thumbnail:1"
+
+    def selected_class(self, request: ParserRequest, root: Path) -> type:
+        """Select only implementations declaring local thumbnail support."""
+        cls = get_parser_registry().get_parser_for_file(
+            request["mime_type"],
+            request["filename"],
+            resolve_reference(root, request["source"]),
+            allow_remote=False,
+            required_capabilities=("thumbnail",),
+        )
+        if cls is None:
+            raise InvalidParserResult("No local thumbnail parser is available")
+        return cls
+
+    def process(self, request: ParserRequest, root: Path) -> ParserResult:
+        """Adapt legacy rendering within the auxiliary implementation boundary."""
+        cls = self.selected_class(request, root)
+        with configured_parser(cls, request["settings"]) as parser:
+            provider = LegacyParserProvider(parser)
+            result = provider.process(request, root)
+            from paperless.parsers.contract import validate_result
+
+            validate_result(request, result, root, provider.identity)
+            return {**result, "provider": self.identity, "execution": provider.identity}
 
 
 class PlainTextProvider(ParserProvider):
@@ -285,6 +352,7 @@ class PlainTextProvider(ParserProvider):
     author = "Paperless-ngx Contributors"
     url = "https://github.com/paperless-ngx/paperless-ngx"
     uses_remote_service = False
+    replay_safe = True
 
     @classmethod
     def supported_mime_types(cls) -> dict[str, str]:

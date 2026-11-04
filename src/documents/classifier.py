@@ -267,6 +267,26 @@ class DocumentClassifier:
         self.document_type_classifier = None
         self.storage_path_classifier = None
 
+    @property
+    def identity(self) -> tuple[str, str]:
+        """Expose legacy classifier instances through the inference contract."""
+        from documents.classification_providers import SklearnProvider
+
+        return SklearnProvider(self).identity
+
+    @property
+    def current_identity(self) -> tuple[str, str] | None:
+        """Expose activation validation through the same provider contract."""
+        from documents.classification_providers import SklearnProvider
+
+        return SklearnProvider(self).current_identity
+
+    def classify(self, request):
+        """Adapt legacy construction behind the built-in implementation boundary."""
+        from documents.classification_providers import SklearnProvider
+
+        return SklearnProvider(self).classify(request)
+
     def _update_data_vectorizer_hash(self) -> None:
         self.data_vectorizer_hash = sha256(
             pickle.dumps(self.data_vectorizer),
