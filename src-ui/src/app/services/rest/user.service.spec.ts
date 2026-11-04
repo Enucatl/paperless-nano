@@ -198,4 +198,28 @@ describe('Additional service tests for UserService', () => {
     )
     expect(req.request.method).toEqual('POST')
   })
+
+  it('should allow revoking processor permissions', () => {
+    subscription = service.listAll().subscribe()
+    httpTestingController
+      .expectOne(`${environment.apiBaseUrl}${endpoint}/?page=1&page_size=100000`)
+      .flush({
+        results: [
+          {
+            ...user,
+            user_permissions: [
+              'process_parser',
+              'process_metadata',
+              'process_search',
+              'process_ingestion',
+            ],
+          },
+        ],
+      })
+    subscription = service.update({ ...user, user_permissions: [] }).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/${user.id}/`
+    )
+    expect(req.request.body.user_permissions).toEqual([])
+  })
 })

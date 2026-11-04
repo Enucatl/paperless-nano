@@ -700,3 +700,69 @@ def test_remote_post_consume_receipt_updates_legacy_marker(incoming, settings, m
     job.refresh_from_db()
     assert job.result["post_consume"] == "done"
     callback.assert_not_called()
+
+
+def test_external_plugin_declaration_keeps_cleanup_local(incoming, settings, mocker):
+    """A finite plugin call waits externally while cleanup retains its contract."""
+    from django.contrib.auth.models import Permission
+
+    from documents.deferred_operations import claim
+    from documents.deferred_operations import submit_result
+    from paperless_testing.factories import UserFactory
+
+    cleaned = Mock()
+
+    class Plugin(AlwaysRunPluginMixin, NoSetupPluginMixin):
+        execution_mode = "external"
+        replay_safe = True
+
+        def run(self):
+            pytest.fail("External plugin must not run locally")
+
+        def cleanup(self):
+            cleaned()
+
+    settings.DEFERRED_OPERATIONS = {}
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
+    mocker.patch("documents.jobs._dispatch")
+    processor = UserFactory()
+    processor.user_permissions.add(Permission.objects.get(codename="process_ingestion"))
+    from documents.data_models import DocumentMetadataOverrides
+
+    job = ingestion_jobs.stage_consumption(
+        incoming, DocumentMetadataOverrides(remote_ocr=True)
+    )
+    with pytest.raises(Ignore):
+        ingestion_jobs.run_consumption(job.pk)
+    lease = claim(job.pk, "prepare:0", processor)
+    outcome = {
+        **lease["input"],
+        "stopped": {"reason": "handled externally"},
+        "message": None,
+    }
+    submit_result(job.pk, "prepare:0", processor, lease["token"], outcome)
+    assert ingestion_jobs.run_consumption(job.pk) == {"reason": "handled externally"}
+    cleaned.assert_called_once()
+    job.refresh_from_db()
+    assert "policy" not in job.result["invocations"]["prepare:0:cleanup"]
+
+
+def test_external_plugin_cannot_export_local_only_input(incoming, settings, mocker):
+    """Processor access does not override the requester's remote restriction."""
+    from documents.job_state import RejectedResult
+
+    class Plugin(AlwaysRunPluginMixin, NoSetupPluginMixin, NoCleanupPluginMixin):
+        execution_mode = "external"
+
+        def run(self):
+            pytest.fail("Must not silently fall back to local execution")
+
+    settings.REMOTE_OCR_MODE = "workflow_only"
+    settings.DEFERRED_OPERATIONS = {}
+    mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
+    job = ingestion_jobs.stage_consumption(incoming)
+    with pytest.raises(RejectedResult, match="Remote processing"):
+        ingestion_jobs.run_consumption(job.pk)
+    job.refresh_from_db()
+    assert job.status != DocumentJob.Status.WAITING
+    assert "prepare:0" not in job.result.get("invocations", {})

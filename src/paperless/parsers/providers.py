@@ -267,6 +267,11 @@ class DefaultParser(ParserProvider):
                 "identity": provider.identity,
                 "replay_safe": getattr(parser, "replay_safe", False),
                 "uses_remote_service": provider.uses_remote_service,
+                **(
+                    {"execution_mode": parser.execution_mode}
+                    if hasattr(parser, "execution_mode")
+                    else {}
+                ),
             }
 
     def process(self, request: ParserRequest, root: Path) -> ParserResult:

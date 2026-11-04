@@ -59,8 +59,26 @@ def requester_id(job: DocumentJob) -> int | None:
     return job.input.get("actor_id", job.input.get("overrides", {}).get("actor_id"))
 
 
-def execution_policy(operation: str, identity: str) -> dict | None:
-    """Select remote execution once, retaining its access grant in the journal."""
+def execution_policy(operation: str, identity: str, provider=None) -> dict | None:
+    """Select provider execution; retain old configuration only for migration."""
+    mode = (
+        provider.get("execution_mode")
+        if isinstance(provider, dict)
+        else getattr(provider, "execution_mode", None)
+    )
+    if mode is not None:
+        if mode == "local":
+            return None
+        if mode != "external":
+            raise ValueError("Provider execution_mode must be local or external")
+        capability = (
+            "ingestion"
+            if operation.startswith("prepare:")
+            else operation.split(".", 1)[0]
+        )
+        if capability not in {"parser", "metadata", "search", "ingestion"}:
+            raise ValueError("This operation has no external processor capability")
+        return {"permission": f"documents.process_{capability}"}
     policies = getattr(settings, "DEFERRED_OPERATIONS", {})
     return policies.get(operation, policies.get(identity))
 

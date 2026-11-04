@@ -94,7 +94,9 @@ def configuration_snapshot(provider: ParserProvider, context: dict) -> dict:
         raise InvalidParserResult("Parser configuration must be JSON") from error
 
 
-def execution_snapshot(provider: ParserProvider, request: dict, root: Path) -> dict:
+def execution_snapshot(
+    provider: ParserProvider, request: dict, root: Path, *, retained: dict | None = None
+) -> dict:
     """Validate declarations equally for direct providers and internal engines."""
     identity = getattr(provider, "identity", None)
     method = getattr(provider, "selection", None)
@@ -117,7 +119,18 @@ def execution_snapshot(provider: ParserProvider, request: dict, root: Path) -> d
         or type(value.get("uses_remote_service")) is not bool
     ):
         raise InvalidParserResult("Invalid parser execution declaration")
-    if value["uses_remote_service"] and not request["allow_remote"]:
+    mode = value.get("execution_mode", getattr(provider, "execution_mode", None))
+    if mode is not None:
+        if mode not in {"local", "external"}:
+            raise InvalidParserResult("Parser execution_mode must be local or external")
+        value = {**value, "execution_mode": mode}
+    # Pre-migration selections retain their original routing outside this snapshot.
+    if retained is not None and "execution_mode" not in retained:
+        value.pop("execution_mode", None)
+        mode = None
+    if (value["uses_remote_service"] or mode == "external") and not request[
+        "allow_remote"
+    ]:
         raise InvalidParserResult(
             "Remote processing is not permitted for this document"
         )

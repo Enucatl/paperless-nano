@@ -7,6 +7,7 @@ export enum PermissionAction {
   View = 'view',
   Change = 'change',
   Delete = 'delete',
+  Process = 'process',
 }
 
 export enum PermissionType {
@@ -32,6 +33,10 @@ export enum PermissionType {
   ProcessedMail = '%s_processedmail',
   GlobalStatistics = '%s_global_statistics',
   SystemMonitoring = '%s_system_monitoring',
+  ParserProcessor = '%s_parser',
+  MetadataProcessor = '%s_metadata',
+  SearchProcessor = '%s_search',
+  IngestionProcessor = '%s_ingestion',
 }
 
 @Injectable({

@@ -23,6 +23,7 @@ def invoke(
     validate: Callable[[Any], None] | None = None,
     operation: str | None = None,
     allow_deferred: bool = True,
+    provider=None,
 ) -> Any:
     """Record an opaque call; an exception never proves absence of external effects.
 
@@ -37,6 +38,7 @@ def invoke(
 
     job.refresh_from_db()
     invocations = job.result.setdefault("invocations", {})
+    new_invocation = key not in invocations
     entry = invocations.setdefault(
         key,
         {
@@ -62,8 +64,8 @@ def invoke(
         raise NeedsAttention(f"Invocation {key} implementation or inputs changed")
     if entry["status"] == "succeeded":
         return entry["result"]
-    if "policy" not in entry and entry["status"] == "pending" and allow_deferred:
-        policy = execution_policy(operation or key, identity)
+    if new_invocation and allow_deferred:
+        policy = execution_policy(operation or key, identity, provider)
         if policy is not None:
             entry["policy"] = json_value(policy)
     if "policy" in entry:

@@ -11,6 +11,13 @@ const VIEW_ONLY_PERMISSION_TYPES = new Set<PermissionType>([
   PermissionType.SystemMonitoring,
 ])
 
+const PROCESS_PERMISSION_TYPES = new Set<PermissionType>([
+  PermissionType.ParserProcessor,
+  PermissionType.MetadataProcessor,
+  PermissionType.SearchProcessor,
+  PermissionType.IngestionProcessor,
+])
+
 describe('PermissionsService', () => {
   let permissionsService: PermissionsService
 
@@ -293,6 +300,10 @@ describe('PermissionsService', () => {
         'view_applicationconfiguration',
         'view_global_statistics',
         'view_system_monitoring',
+        'process_parser',
+        'process_metadata',
+        'process_search',
+        'process_ingestion',
       ],
       {
         username: 'testuser',
@@ -304,8 +315,11 @@ describe('PermissionsService', () => {
     Object.values(PermissionType).forEach((type) => {
       Object.values(PermissionAction).forEach((action) => {
         expect(permissionsService.currentUserCan(action, type)).toBe(
-          !VIEW_ONLY_PERMISSION_TYPES.has(type) ||
-            action === PermissionAction.View
+          PROCESS_PERMISSION_TYPES.has(type)
+            ? action === PermissionAction.Process
+            : action !== PermissionAction.Process &&
+                (!VIEW_ONLY_PERMISSION_TYPES.has(type) ||
+                  action === PermissionAction.View)
         )
       })
     })

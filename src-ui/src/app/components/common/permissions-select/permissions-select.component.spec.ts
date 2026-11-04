@@ -184,4 +184,31 @@ describe('PermissionsSelectComponent', () => {
     expect(changeInput.nativeElement.disabled).toBeTruthy()
     expect(viewInput.nativeElement.disabled).toBeFalsy()
   })
+
+  it.each([
+    ['ParserProcessor', 'process_parser'],
+    ['MetadataProcessor', 'process_metadata'],
+    ['SearchProcessor', 'process_search'],
+    ['IngestionProcessor', 'process_ingestion'],
+  ])('grants and revokes %s through the process action', (type, permission) => {
+    const onChange = jest.fn()
+    component.registerOnChange(onChange)
+    component.writeValue([permission])
+    expect(component.form.get(type).get('Process').value).toBe(true)
+    expect(component.form.get(type).get('Change').disabled).toBe(true)
+    expect(component.form.get('Document').get('Process').disabled).toBe(true)
+
+    component.toggleAll({ target: { checked: false } }, type)
+    expect(onChange).toHaveBeenLastCalledWith([])
+    component.toggleAll({ target: { checked: true } }, type)
+    expect(onChange).toHaveBeenLastCalledWith([permission])
+
+    component.writeValue([])
+    component.inheritedPermissions = [`documents.${permission}`]
+    expect(component.form.get(type).get('Process').value).toBe(true)
+    expect(component.form.get(type).get('Process').disabled).toBe(true)
+    component.inheritedPermissions = []
+    expect(component.form.get(type).get('Process').value).toBe(false)
+    expect(component.form.get(type).get('Process').disabled).toBe(false)
+  })
 })

@@ -46,8 +46,8 @@ class RemoteMetadata:
         raise AssertionError("Remote classifier must not run locally")
 
 
-@pytest.fixture
-def remote(settings, mocker):
+@pytest.fixture(params=["legacy", "provider"])
+def remote(settings, mocker, request, monkeypatch):
     """Grant a processor both finite operations and disable real broker sends."""
     user = UserFactory(is_superuser=True, is_staff=True)
     settings.PARSER = "documents.tests.test_deferred_operations.RemoteParser"
@@ -59,6 +59,10 @@ def remote(settings, mocker):
         "parser.process": {"users": [user.pk]},
         "metadata.classify": {"users": [user.pk]},
     }
+    if request.param == "provider":
+        monkeypatch.setattr(RemoteParser, "execution_mode", "external", raising=False)
+        monkeypatch.setattr(RemoteMetadata, "execution_mode", "external", raising=False)
+        settings.DEFERRED_OPERATIONS = {}
     mocker.patch("documents.jobs._dispatch")
     mocker.patch("documents.search.get_backend")
     return user
@@ -157,6 +161,7 @@ def pending_job(remote, *, replay_safe=True):
             lambda _: None,
             replay_safe=replay_safe,
             operation="metadata.classify",
+            provider=RemoteMetadata(),
         )
     return job
 
@@ -350,8 +355,36 @@ def test_remote_policy_cannot_override_document_opt_out(sample_doc, remote, sett
     """Provider selection does not grant permission to export a local-only input."""
     settings.REMOTE_OCR_MODE = "workflow_only"
     job = jobs.stage_reprocess(sample_doc.pk, actor_id=remote.pk, remote_ocr=False)
+    if getattr(RemoteParser, "execution_mode", None) == "external":
+        with pytest.raises(jobs.RejectedResult, match="Remote processing"):
+            jobs.run_reprocess(job.pk)
+        return
     with pytest.raises(AssertionError, match="must not run locally"):
         jobs.run_reprocess(job.pk)
     job.refresh_from_db()
     assert job.status != "waiting"
     assert "policy" not in job.result["invocations"]["parser.process"]
+
+
+def test_legacy_parser_lease_survives_provider_declaration(
+    sample_doc, remote, thumbnail_webp_file, monkeypatch, settings
+):
+    """A mode declaration added during migration cannot invalidate legacy OCR."""
+    monkeypatch.delattr(RemoteParser, "execution_mode", raising=False)
+    settings.DEFERRED_OPERATIONS = {"parser.process": {"users": [remote.pk]}}
+    job = jobs.stage_reprocess(sample_doc.pk, actor_id=remote.pk, remote_ocr=True)
+    jobs.run_reprocess(job.pk)
+    claim, result = complete_parser(job, remote, thumbnail_webp_file)
+    monkeypatch.setattr(RemoteParser, "execution_mode", "external", raising=False)
+    settings.DEFERRED_OPERATIONS = {}
+    assert jobs.run_reprocess(job.pk) is True
+    job.refresh_from_db()
+    assert job.result["invocations"]["parser.process"]["policy"] == {
+        "users": [remote.pk]
+    }
+    assert (
+        operations.submit_result(
+            job.pk, "parser.process", remote, claim["token"], result
+        )["status"]
+        == "succeeded"
+    )

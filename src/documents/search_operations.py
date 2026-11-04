@@ -26,13 +26,21 @@ def provider_snapshot(provider) -> dict:
             "implementation": settings.SEARCH_PROVIDER,
             "identity": getattr(provider, "identity", settings.SEARCH_PROVIDER),
             "configuration": getattr(provider, "configuration", {}),
+            **(
+                {"execution_mode": provider.execution_mode}
+                if hasattr(provider, "execution_mode")
+                else {}
+            ),
         }
     )
 
 
 def should_defer(provider, operation: str) -> bool:
     """Select asynchronous maintenance without changing interactive reads."""
-    return execution_policy(f"search.{operation}", settings.SEARCH_PROVIDER) is not None
+    return (
+        execution_policy(f"search.{operation}", settings.SEARCH_PROVIDER, provider)
+        is not None
+    )
 
 
 def submit_search(provider, operation: str, inputs: dict) -> DocumentJob:
@@ -160,10 +168,13 @@ def run_search(job_id: str) -> None:
 
                 def validate(result) -> None:
                     """Reject changed implementations and malformed completion receipts."""
+                    current = provider_snapshot(provider)
                     if (
-                        result is not None
-                        or provider_snapshot(provider) != job.configuration
+                        "execution_mode" not in job.configuration
+                        and "maintenance" in job.result.get("invocations", {})
                     ):
+                        current.pop("execution_mode", None)
+                    if result is not None or current != job.configuration:
                         raise NeedsAttention(
                             "Search provider configuration or result changed"
                         )
@@ -179,6 +190,7 @@ def run_search(job_id: str) -> None:
                     lambda invocation: _execute(provider, operation, job.input),
                     replay_safe=getattr(provider, "replay_safe", False) is True,
                     operation=f"search.{operation}",
+                    provider=provider,
                     validate=validate,
                 )
                 job.refresh_from_db()

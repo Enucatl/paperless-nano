@@ -1902,13 +1902,53 @@ worker delivers it. No new generic workflow or plugin registry is introduced.
 
 ### Durable execution and processor API
 
-`PAPERLESS_DEFERRED_OPERATIONS` selects remote execution by stable operation name
-(or provider identity). For example, a processor user with ID 12 can receive OCR
-and metadata work:
+Providers declare `execution_mode = "local"` (the default when omitted) or
+`execution_mode = "external"`. External execution uses the durable coordinator;
+provider computation methods remain synchronous and reusable on the processor.
+There is no operation-name routing map or numeric user-ID configuration to set
+up for new providers. For example, an installed provider module can reuse an
+existing implementation:
 
-```ini
-PAPERLESS_DEFERRED_OPERATIONS={"parser.process":{"users":[12]},"metadata.classify":{"users":[12]}}
+```python
+from paperless.parsers.providers import PlainTextProvider
+
+class WorkstationTextProvider(PlainTextProvider):
+    execution_mode = "external"
 ```
+
+Select it with `PAPERLESS_PARSER=my_providers.WorkstationTextProvider`. An OCR
+provider follows the same declaration alongside its existing `process`,
+configuration and selection methods. Default parser dispatch also honors the
+selected engine's declaration. Set `execution_mode = "local"` to execute through
+the existing local journal and validators. External parsing still requires the
+original request to allow remote processing; it never falls back to local work
+when remote processing is prohibited or a workstation is offline.
+
+Classification providers selected with `PAPERLESS_CLASSIFICATION_PROVIDER`,
+search providers selected with `PAPERLESS_SEARCH_PROVIDER`, and ingestion plugin
+classes use the same attribute. It applies to durable metadata inference,
+search write/rebuild/optimize/wipe, and finite ingestion plugin execution.
+Interactive queries/suggestions, plugin cleanup, and service lifetime methods
+keep their synchronous contracts.
+
+Create a regular service account in Users & Groups and grant its group the
+**Process** permission for the required processor capability:
+
+| Permission row | API permission |
+| --- | --- |
+| ParserProcessor | `process_parser` |
+| MetadataProcessor | `process_metadata` |
+| SearchProcessor | `process_search` |
+| IngestionProcessor | `process_ingestion` |
+
+These are `documents` permissions; they do not grant the service account document
+editing rights. A parser grant covers parser work, not metadata or search work.
+Superusers retain administrative access. Use the account's normal API token on
+the workstation: list `/api/operations/`, claim a job/key at `claim/`, fetch only
+its declared inputs from `files/` with `X-Operation-Token`, upload private outputs
+to `files/` with that token, then POST `token` and `result` to `result/`. The
+processor uses the returned invocation identity, configuration and inputs with
+its synchronous provider implementation. No new processor client is included.
 
 Policies are retained with each accepted invocation. Provider identity, effective
 configuration, input references, requester, successful dependencies, attempt token
@@ -1926,8 +1966,8 @@ broker outage cannot lose the second stage. Once OCR is committed, metadata
 failure does not rerun OCR. Current documents remain readable throughout optional
 enrichment; conflicting edits are preserved and the stale proposal is rejected.
 
-Processors use the ordinary API authentication plus the operation's explicit
-user grant. Operation listing exposes status; claim, input-file retrieval,
+Processors use the ordinary API authentication plus the operation's retained
+processor capability. Operation listing exposes status; claim, input-file retrieval,
 output-file upload and result submission require the matching operation and
 claim token. Output files are staged privately; processors never receive an API
 that writes authoritative document fields. Result submission only records a
@@ -1951,6 +1991,38 @@ identical result is idempotent. Changing an implementation, model, configuration
 source revision or permission while work is pending produces a visible conflict;
 submit fresh work after reviewing the change. Keep the database and private
 `DATA_DIR/jobs` storage together across restarts and backups.
+
+### Migration from operation/user-ID configuration
+
+The deprecated setting remains a compatibility fallback for providers that do
+not declare `execution_mode`:
+
+```ini
+PAPERLESS_DEFERRED_OPERATIONS={"parser.process":{"users":[12]}}
+```
+
+To migrate, install/select a provider declaring `execution_mode = "external"`,
+grant the workstation account the corresponding Process permission, and remove
+the legacy environment mapping. Explicit local/external declarations take
+precedence over that mapping for new invocations. The migration adds permission
+records without rewriting existing jobs, tokens, inputs, results or grants.
+
+Pending and leased invocations retain their recorded policy, including legacy
+user-ID grants. New capability grants do not authorize those legacy jobs; their
+original listed accounts (or an administrator) must finish them. Keep their
+provider/model and computation configuration available until they finish, or
+cancel and submit fresh work. Already recorded local invocations remain local.
+Changed provider snapshots produce a visible conflict, never silent rerouting.
+
+Removing a Process permission or group membership takes effect on the next
+claim, file transfer, or result submission, including an identical retry of an
+already submitted result. Account deactivation blocks legacy grants too.
+Revocation does not erase a lease or undo a previously accepted result. A revoked
+processor cannot use its token; pure work can be reclaimed by an authorized
+processor after expiry, while uncertain effects require reconciliation.
+Cancellation and stale-token checks still apply after permissions are restored.
+Requester document permissions and remote-processing restrictions are checked
+independently of processor access.
 
 ### Provider declarations
 

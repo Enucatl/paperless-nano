@@ -161,6 +161,30 @@ const group = {
 commonAbstractNameFilterPaperlessServiceTests(endpoint, GroupService)
 
 describe('Additional service tests for GroupService', () => {
+  it('should allow revoking processor permissions', () => {
+    subscription = service.listAll().subscribe()
+    httpTestingController
+      .expectOne(`${environment.apiBaseUrl}${endpoint}/?page=1&page_size=100000`)
+      .flush({
+        results: [
+          {
+            ...group,
+            permissions: [
+              'process_parser',
+              'process_metadata',
+              'process_search',
+              'process_ingestion',
+            ],
+          },
+        ],
+      })
+    subscription = service.update({ ...group, permissions: [] }).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/${group.id}/`
+    )
+    expect(req.request.body.permissions).toEqual([])
+  })
+
   it('should retain permissions on update', () => {
     subscription = service.listAll().subscribe()
     let req = httpTestingController.expectOne(

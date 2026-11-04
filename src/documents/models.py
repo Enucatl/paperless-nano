@@ -63,6 +63,14 @@ class DocumentJob(models.Model):
     updated = models.DateTimeField(default=timezone.now, db_index=True)
     cleaned = models.BooleanField(default=False)
 
+    class Meta:
+        permissions = [
+            ("process_parser", "Can process external parser work"),
+            ("process_metadata", "Can process external metadata work"),
+            ("process_search", "Can process external search maintenance"),
+            ("process_ingestion", "Can process external ingestion extensions"),
+        ]
+
     def __str__(self) -> str:
         """Identify an operation without exposing document contents."""
         return f"Document job {self.pk}: {self.status}"

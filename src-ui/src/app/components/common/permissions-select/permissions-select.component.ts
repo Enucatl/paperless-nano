@@ -63,6 +63,7 @@ export class PermissionsSelectComponent
     PermissionAction.Change,
     PermissionAction.Delete,
     PermissionAction.View,
+    PermissionAction.Process,
   ]
 
   _inheritedPermissions: string[] = []
@@ -260,6 +261,15 @@ export class PermissionsSelectComponent
     type: PermissionType,
     action: PermissionAction
   ): boolean {
+    if (
+      type === PermissionType.ParserProcessor ||
+      type === PermissionType.MetadataProcessor ||
+      type === PermissionType.SearchProcessor ||
+      type === PermissionType.IngestionProcessor
+    ) {
+      return action === PermissionAction.Process
+    }
+
     // Global statistics and system status only support view
     if (
       type === PermissionType.GlobalStatistics ||
@@ -268,7 +278,7 @@ export class PermissionsSelectComponent
       return action === PermissionAction.View
     }
 
-    return true
+    return action !== PermissionAction.Process
   }
 
   private getSelectedPermissions(formValue: object): string[] {

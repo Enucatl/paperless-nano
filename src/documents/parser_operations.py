@@ -29,9 +29,8 @@ def parser_class() -> type:
 
 def effective_configuration(*, mailrule_id: int | None = None) -> dict:
     """Snapshot common preferences and implementation-owned, secret-free settings."""
-    implementation = configuration_snapshot(
-        parser_class()(), {"mailrule_id": mailrule_id}
-    )
+    provider = parser_class()()
+    implementation = configuration_snapshot(provider, {"mailrule_id": mailrule_id})
     preferences = OcrConfig()
     return {
         "parser": settings.PARSER,
@@ -124,7 +123,12 @@ def run_parser(
         resolve_reference(directory, request["source"])
     identity = provider.identity
     try:
-        selection = execution_snapshot(provider, request, directory)
+        selection = execution_snapshot(
+            provider,
+            request,
+            directory,
+            retained=job.provider.get("implementation") if job_id else None,
+        )
     except InvalidParserResult as error:
         raise RejectedResult(str(error)) from error
     if job_id:
@@ -154,7 +158,12 @@ def run_parser(
             validate_result(frozen_request, result, directory, identity)
             if result.get("execution", result["provider"]) != selection["identity"]:
                 raise InvalidParserResult("Selected parser changed during execution")
-            if execution_snapshot(provider, frozen_request, directory) != selection:
+            if (
+                execution_snapshot(
+                    provider, frozen_request, directory, retained=selection
+                )
+                != selection
+            ):
                 raise InvalidParserResult("Selected parser changed during execution")
             if provider.identity != identity:
                 raise InvalidParserResult("Parser identity changed during execution")
@@ -185,6 +194,7 @@ def run_parser(
                 {"request": frozen_request, "selection": selection},
                 execute,
                 replay_safe=selection["replay_safe"],
+                provider=selection,
                 allow_deferred=frozen_request["allow_remote"],
                 reconcile=(
                     lambda identifier: provider.reconcile(
@@ -206,7 +216,10 @@ def run_parser(
     except (ValueError, TypeError, KeyError, OSError) as error:
         raise RejectedResult(str(error)) from error
     try:
-        if execution_snapshot(provider, frozen_request, directory) != selection:
+        if (
+            execution_snapshot(provider, frozen_request, directory, retained=selection)
+            != selection
+        ):
             raise RejectedResult("Selected parser changed during execution")
     except InvalidParserResult as error:
         raise RejectedResult(str(error)) from error
@@ -328,7 +341,9 @@ def validate_parser_job(job: object) -> None:
     ):
         raise RejectedResult("Selected parser changed before publication")
     try:
-        selection = execution_snapshot(cls(), request, directory)
+        selection = execution_snapshot(
+            cls(), request, directory, retained=job.provider.get("implementation")
+        )
     except InvalidParserResult as error:
         raise RejectedResult("Selected parser changed before publication") from error
     if selection != job.provider.get("implementation"):

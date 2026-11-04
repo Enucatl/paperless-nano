@@ -213,6 +213,18 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                         if name != "archive" or prepared_result[name]:
                             resolve_reference(directory, prepared_result[name])
 
+            from documents.job_state import RejectedResult
+            from paperless.config import RemoteOCRConfig
+
+            if (
+                key not in job.result.get("invocations", {})
+                and getattr(plugin, "execution_mode", None) == "external"
+                and not (metadata.remote_ocr or RemoteOCRConfig().remote_ocr_by_default)
+            ):
+                raise RejectedResult(
+                    "Remote processing is not permitted for this document"
+                )
+
             result = invoke(
                 job,
                 key,
@@ -223,6 +235,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 reconcile=plugin.reconcile,
                 validate=validate_outcome,
                 allow_deferred=cls is not ConsumerPlugin,
+                provider=plugin,
             )
             if (
                 not isinstance(result, dict)
@@ -257,6 +270,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 identity,
                 {},
                 cleanup,
+                allow_deferred=False,
                 replay_safe=cls is BarcodePlugin
                 or type(plugin).cleanup is NoCleanupPluginMixin.cleanup
                 or getattr(plugin, "cleanup_replay_safe", False) is True,
@@ -340,7 +354,11 @@ def complete_document(job: DocumentJob) -> None:
         deferred = None
         if (
             settings.CLASSIFIER_ENABLED
-            and execution_policy("metadata.classify", settings.CLASSIFICATION_PROVIDER)
+            and execution_policy(
+                "metadata.classify",
+                settings.CLASSIFICATION_PROVIDER,
+                configured_provider(),
+            )
             is not None
         ):
             provider = configured_provider()

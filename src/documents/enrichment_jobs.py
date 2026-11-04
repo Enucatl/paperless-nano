@@ -128,8 +128,18 @@ def run_enrichment(job_id: str) -> None:
             return
         try:
             provider = configured_provider()
+
+            def configuration_matches() -> bool:
+                """Keep recorded legacy routing when a provider gains a declaration."""
+                current = json_value(provider_configuration())
+                if len(job.configuration) == 3 and "metadata" in job.result.get(
+                    "invocations", {}
+                ):
+                    current = current[:3]
+                return current == job.configuration
+
             if (
-                json_value(provider_configuration()) != job.configuration
+                not configuration_matches()
                 or json_value(provider.identity) != job.provider["identity"]
             ):
                 raise RejectedResult("Metadata provider changed before execution")
@@ -149,7 +159,7 @@ def run_enrichment(job_id: str) -> None:
                     snapshot_document(document) != request["revision"]
                     or candidate_snapshot(document, job.input["actor_id"])
                     != request["candidates"]
-                    or json_value(provider_configuration()) != job.configuration
+                    or not configuration_matches()
                     or list(provider.identity) != job.provider["identity"]
                     or json_value(current_identity) != job.provider["identity"]
                 ):
@@ -166,6 +176,7 @@ def run_enrichment(job_id: str) -> None:
                 replay_safe=True,
                 validate=validate,
                 operation="metadata.classify",
+                provider=provider,
             )
             with transaction.atomic():
                 Document.objects.filter(pk=job.input["document_id"]).update(

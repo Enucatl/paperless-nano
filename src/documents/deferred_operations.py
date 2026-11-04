@@ -4,6 +4,7 @@ import datetime
 import secrets
 from contextlib import contextmanager
 
+from django.contrib.auth.models import User
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.utils import timezone
@@ -23,8 +24,16 @@ class OperationConflict(ValueError):
 
 def authorize(entry: dict, user) -> None:
     """Require an explicit operation grant even for trusted actorless jobs."""
-    if not user.is_active or not (
-        user.is_superuser or user.pk in entry.get("policy", {}).get("users", [])
+    # Reload to avoid cached permissions surviving a grant or account revocation.
+    actor = User.objects.filter(pk=user.pk, is_active=True).first()
+    policy = entry.get("policy", {})
+    if actor is None or not (
+        actor.is_superuser
+        or (
+            actor.has_perm(policy["permission"])
+            if "permission" in policy
+            else actor.pk in policy.get("users", [])
+        )
     ):
         raise PermissionDenied("This processor is not authorized for the operation")
 
