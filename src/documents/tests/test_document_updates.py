@@ -20,7 +20,6 @@ from documents.search import get_backend
 from documents.signals import document_updated
 from documents.updates import document_metadata_update
 from documents.updates import document_update
-from documents.updates import file_updates_deferred
 from documents.updates import save_document_metadata
 from paperless_testing.factories import DocumentFactory
 from paperless_testing.factories import TagFactory
@@ -252,15 +251,12 @@ def test_metadata_scope_is_nested_document_local_and_restored_after_failure(
             with document_metadata_update(first):
                 first.title = "changed-first"
                 first.save(update_fields=["title"])
-            assert file_updates_deferred(first.pk)
             assert first.source_path.is_file()
-            second.title = "changed-second"
-            second.save(update_fields=["title"])
+            save_document_metadata(second, {"title": "changed-second"})
             assert second.filename == "changed-second.pdf"
             assert second.source_path.read_bytes() == b"original"
             raise RuntimeError("interrupted")
 
-    assert not file_updates_deferred(first.pk)
     save_document_metadata(first, {"title": "retry"})
     assert first.filename == "retry.pdf"
     assert first.source_path.read_bytes() == b"original"
@@ -285,7 +281,6 @@ def test_workflow_failure_stops_notifications_and_index_until_retry(
                 with document_update(document):
                     save_document_metadata(document, {"title": "after"})
         notification.assert_not_called()
-        assert not file_updates_deferred(document.pk)
         document.refresh_from_db()
         assert document.title == "after"
         assert list(backend.search_ids("title:before", user=None)) == [document.pk]
@@ -428,3 +423,35 @@ def test_version_mutation_survives_completion_failure(
         assert version.version_label == "after"
     else:
         assert not Document.objects.filter(pk=version.pk).exists()
+
+
+def test_raw_orm_writes_do_not_move_files(
+    paperless_dirs: PaperlessDirs,
+    settings: Settings,
+) -> None:
+    """Only an explicit operation owns filename reconciliation."""
+    from documents.models import CustomField
+    from documents.models import CustomFieldInstance
+    from documents.models import Tag
+
+    settings.FILENAME_FORMAT = "{title}"
+    document = DocumentFactory(title="before", mime_type="application/pdf")
+    original = paperless_dirs.originals_dir / "before.pdf"
+    original.write_bytes(b"original")
+    Document.objects.filter(pk=document.pk).update(filename=original.name)
+    document.refresh_from_db()
+    with mock.patch("documents.file_handling.reconcile_document_files") as reconcile:
+        document.title = "after"
+        document.save(update_fields=["title"])
+        document.tags.add(Tag.objects.create(name="tag"))
+        CustomFieldInstance.objects.create(
+            document=document,
+            field=CustomField.objects.create(name="field", data_type="string"),
+            value_text="value",
+        )
+        reconcile.assert_not_called()
+    assert original.read_bytes() == b"original"
+    with document_metadata_update(document):
+        pass
+    assert document.filename == "after.pdf"
+    assert document.source_path.read_bytes() == b"original"

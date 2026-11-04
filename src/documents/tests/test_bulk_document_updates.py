@@ -227,11 +227,7 @@ def test_reciprocal_link_removal_reconciles_target_without_legacy_receiver(
     original.write_bytes(b"keep the target")
     Document.objects.filter(pk=target.pk).update(filename="1/target.pdf")
 
-    with mock.patch(
-        "documents.signals.handlers.reconcile_document_files",
-        side_effect=AssertionError("Core writes must not rely on the legacy receiver"),
-    ):
-        remove_doclink(source, field, target.pk)
+    remove_doclink(source, field, target.pk)
 
     target.refresh_from_db()
     assert target.custom_fields.get(field=field).value == []
@@ -315,3 +311,36 @@ def test_bulk_completion_reconciles_after_workflows_before_batched_indexes(
         ]
     )
     assert document.source_path.read_bytes() == b"original"
+
+
+def test_reciprocal_link_addition_reconciles_both_documents(
+    paperless_dirs: PaperlessDirs,
+) -> None:
+    """Creating links reconciles each target after all reciprocal writes."""
+    from documents.updates import save_custom_field_value
+
+    field = CustomField.objects.create(
+        name="related",
+        data_type=CustomField.FieldDataType.DOCUMENTLINK,
+    )
+    storage = StoragePathFactory(
+        path="{{ custom_fields|get_cf_value('related', [])|length }}/{{ title }}",
+    )
+    source = DocumentFactory(
+        title="source", storage_path=storage, mime_type="application/pdf"
+    )
+    target = DocumentFactory(
+        title="target", storage_path=storage, mime_type="application/pdf"
+    )
+    for document in (source, target):
+        path = paperless_dirs.originals_dir / f"{document.title}.pdf"
+        path.write_bytes(document.title.encode())
+        Document.objects.filter(pk=document.pk).update(filename=path.name)
+        document.refresh_from_db()
+
+    save_custom_field_value(source, field, [target.pk])
+
+    for document in (source, target):
+        document.refresh_from_db()
+        assert document.filename == f"1/{document.title}.pdf"
+        assert document.source_path.read_bytes() == document.title.encode()

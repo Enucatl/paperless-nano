@@ -20,6 +20,7 @@ from documents.file_handling import create_source_path_directory
 from documents.file_handling import delete_empty_directories
 from documents.file_handling import generate_filename
 from documents.file_handling import generate_unique_filename
+from documents.file_handling import reconcile_document_files
 from documents.file_handling import validate_path_in_root
 from documents.models import Correspondent
 from documents.models import CustomField
@@ -29,6 +30,7 @@ from documents.models import DocumentType
 from documents.models import StoragePath
 from documents.serialisers import DocumentSerializer
 from documents.tasks import empty_trash
+from documents.updates import save_custom_field_value
 from paperless_testing.assertions import FileSystemAssertsMixin
 from paperless_testing.dirs import DirectoriesMixin
 from paperless_testing.dirs import PaperlessDirs
@@ -72,6 +74,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document = Document()
         document.mime_type = "application/pdf"
         document.save()
+        reconcile_document_files(document)
 
         self.assertEqual(generate_filename(document), Path(f"{document.pk:07d}.pdf"))
 
@@ -80,6 +83,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document = Document()
         document.mime_type = "application/pdf"
         document.save()
+        reconcile_document_files(document)
 
         # Test default source_path
         self.assertEqual(
@@ -93,6 +97,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         self.assertEqual(document.filename, Path("none/none.pdf"))
 
         document.save()
+        reconcile_document_files(document)
 
         # test that creating dirs for the source_path creates the correct directory
         create_source_path_directory(document.source_path)
@@ -102,6 +107,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         # Set a correspondent and save the document
         document.correspondent = Correspondent.objects.get_or_create(name="test")[0]
         document.save()
+        reconcile_document_files(document)
 
         # Check proper handling of files
         self.assertIsDir(
@@ -155,6 +161,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
         root_doc.storage_path = new_storage_path
         root_doc.save()
+        reconcile_document_files(root_doc)
 
         root_doc.refresh_from_db()
         version_doc.refresh_from_db()
@@ -172,6 +179,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
@@ -191,6 +199,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         # Set a correspondent and save the document
         document.correspondent = Correspondent.objects.get_or_create(name="test")[0]
         document.save()
+        reconcile_document_files(document)
 
         # Check proper handling of files
         self.assertIsFile(
@@ -212,6 +221,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.checksum = "BBBBB"
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
@@ -227,12 +237,13 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
         with (
             mock.patch(
-                "documents.signals.handlers.Document.global_objects.filter",
+                "documents.file_handling.Document.global_objects.filter",
             ) as m,
             disable_auditlog(),
         ):
             m.side_effect = DatabaseError()
             document.save()
+            reconcile_document_files(document)
 
             # Check proper handling of files
             self.assertIsFile(document.source_path)
@@ -263,6 +274,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
             archive_filename="old/document.pdf",
             storage_path=old_storage_path,
         )
+        reconcile_document_files(doc)
         create_source_path_directory(doc.source_path)
         doc.source_path.write_bytes(original_bytes)
         create_source_path_directory(doc.archive_path)
@@ -272,12 +284,14 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         fresh_doc = Document.objects.get(pk=doc.pk)
         fresh_doc.storage_path = new_storage_path
         fresh_doc.save()
+        reconcile_document_files(fresh_doc)
         doc.refresh_from_db()
         self.assertEqual(doc.filename, "new/document.pdf")
         self.assertEqual(doc.archive_filename, "new/document.pdf")
 
         stale_doc.storage_path = new_storage_path
         stale_doc.save()
+        reconcile_document_files(stale_doc)
 
         doc.refresh_from_db()
         self.assertEqual(doc.filename, "new/document.pdf")
@@ -297,6 +311,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
             checksum=hashlib.sha256(b"").hexdigest(),
             filename="original.pdf",
         )
+        reconcile_document_files(doc)
 
         first_instance = Document.objects.get(pk=doc.pk)
         stale_instance = Document.objects.get(pk=doc.pk)
@@ -333,10 +348,12 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
         document.save()
+        reconcile_document_files(document)
         self.assertEqual(document.filename, "none/none.pdf")
 
         create_source_path_directory(document.source_path)
@@ -359,10 +376,12 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
         document.save()
+        reconcile_document_files(document)
         self.assertEqual(document.filename, "none/none.pdf")
 
         create_source_path_directory(document.source_path)
@@ -384,8 +403,10 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
         document.filename = generate_filename(document)
         document.save()
+        reconcile_document_files(document)
         create_source_path_directory(document.source_path)
         Path(document.source_path).touch()
         document.delete()
@@ -398,6 +419,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
 
         document.delete()
         empty_trash([document.pk])
@@ -408,6 +430,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
@@ -422,6 +445,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         # Set a correspondent and save the document
         document.correspondent = Correspondent.objects.get_or_create(name="test")[0]
         document.save()
+        reconcile_document_files(document)
 
         # Check proper handling of files
         self.assertIsDir(settings.ORIGINALS_DIR / "test")
@@ -477,6 +501,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         doc = Document.objects.create(title="doc1", mime_type="application/pdf")
         doc.filename = generate_filename(doc)
         doc.save()
+        reconcile_document_files(doc)
 
         self.assertEqual(
             doc.source_path,
@@ -529,10 +554,12 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         document.mime_type = "application/pdf"
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
         document.save()
+        reconcile_document_files(document)
         self.assertEqual(document.filename, "none/none/none.pdf")
         create_source_path_directory(document.source_path)
         Path(document.source_path).touch()
@@ -621,12 +648,14 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         Path(document2.source_path).touch()
         document.filename = "0000001.pdf"
         document.save()
+        reconcile_document_files(document)
 
         self.assertIsFile(document.source_path)
         self.assertEqual(document.filename, "qwe.pdf")
 
         document2.filename = "0000002.pdf"
         document2.save()
+        reconcile_document_files(document2)
 
         self.assertIsFile(document.source_path)
         self.assertEqual(document2.filename, "qwe_01.pdf")
@@ -634,11 +663,13 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         # saving should not change the file names.
 
         document.save()
+        reconcile_document_files(document)
 
         self.assertIsFile(document.source_path)
         self.assertEqual(document.filename, "qwe.pdf")
 
         document2.save()
+        reconcile_document_files(document2)
 
         self.assertIsFile(document.source_path)
         self.assertEqual(document2.filename, "qwe_01.pdf")
@@ -651,12 +682,13 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         # filename free, should remove _01 suffix
 
         document2.save()
+        reconcile_document_files(document2)
 
         self.assertIsFile(document.source_path)
         self.assertEqual(document2.filename, "qwe.pdf")
 
     @override_settings(FILENAME_FORMAT="{title}")
-    @mock.patch("documents.signals.handlers.Document.objects.filter")
+    @mock.patch("documents.file_handling.Document.objects.filter")
     @mock.patch("documents.file_handling.shutil.move")
     def test_no_move_only_save(self, mock_move, mock_filter) -> None:
         """
@@ -679,11 +711,13 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
                 archive_checksum="B",
                 mime_type="application/pdf",
             )
+            reconcile_document_files(doc)
             original_modified = doc.modified
             Path(doc.source_path).touch()
             Path(doc.archive_path).touch()
 
             doc.save()
+            reconcile_document_files(doc)
             doc.refresh_from_db()
 
             mock_filter.assert_called()
@@ -702,7 +736,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         WHEN:
             - The custom field select options are updated
         THEN:
-            - The update_filename_and_move_files handler is called and the document filename is updated
+            - Explicit reconciliation updates the document filename
         """
         cf = CustomField.objects.create(
             name="test",
@@ -723,6 +757,7 @@ class TestFileHandling(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
             archive_checksum="B",
             mime_type="application/pdf",
         )
+        reconcile_document_files(doc)
         CustomFieldInstance.objects.create(
             field=cf,
             document=doc,
@@ -761,6 +796,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_filename="0000001.pdf",
             archive_checksum="B",
         )
+        reconcile_document_files(doc)
 
         self.assertIsFile(original)
         self.assertIsFile(archive)
@@ -781,6 +817,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="0000001.pdf",
         )
+        reconcile_document_files(doc)
 
         self.assertIsNotFile(original)
         self.assertIsNotFile(archive)
@@ -808,6 +845,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="0000001.pdf",
         )
+        reconcile_document_files(doc)
 
         self.assertIsFile(original)
         self.assertIsNotFile(archive)
@@ -831,6 +869,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="0000001.pdf",
         )
+        reconcile_document_files(doc)
 
         self.assertIsNotFile(original)
         self.assertIsNotFile(archive)
@@ -854,6 +893,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="document.pdf",
         )
+        reconcile_document_files(doc)
 
         self.assertEqual(doc.filename, "document.pdf")
         self.assertEqual(doc.archive_filename, "document.pdf")
@@ -876,6 +916,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="document_01.pdf",
         )
+        reconcile_document_files(doc)
 
         self.assertEqual(doc.filename, "document.pdf")
         self.assertEqual(doc.archive_filename, "document.pdf")
@@ -907,6 +948,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="0000001.pdf",
         )
+        reconcile_document_files(doc)
 
         m.assert_called()
         self.assertIsFile(original)
@@ -928,6 +970,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             checksum="A",
             archive_checksum="B",
         )
+        reconcile_document_files(doc)
 
         self.assertIsNotFile(original)
         self.assertIsFile(archive)
@@ -958,6 +1001,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             checksum="A",
             archive_checksum="B",
         )
+        reconcile_document_files(doc)
 
         m.assert_called()
         self.assertIsFile(original)
@@ -979,6 +1023,7 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="0000001.pdf",
         )
+        reconcile_document_files(doc)
 
         self.assertIsFile(original)
         self.assertIsFile(archive)
@@ -1010,12 +1055,14 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
             archive_filename="0000001.pdf",
         )
+        reconcile_document_files(doc1)
         doc2 = Document.objects.create(
             mime_type="application/pdf",
             title="0000001",
             filename="0000001.pdf",
             checksum="C",
         )
+        reconcile_document_files(doc2)
 
         self.assertIsFile(doc1.source_path)
         self.assertIsFile(doc1.archive_path)
@@ -1043,10 +1090,11 @@ class TestFileHandlingWithArchive(DirectoriesMixin, FileSystemAssertsMixin, Test
             archive_checksum="B",
         )
         with mock.patch(
-            "documents.signals.handlers.Document.global_objects.filter",
+            "documents.file_handling.Document.global_objects.filter",
         ) as m:
             m.side_effect = DatabaseError()
             doc.save()
+            reconcile_document_files(doc)
 
         self.assertIsFile(original)
         self.assertIsFile(archive)
@@ -1510,6 +1558,7 @@ class TestFilenameGeneration(DirectoriesMixin, TestCase):
         )
 
         document.save()
+        reconcile_document_files(document)
 
         # Ensure that filename is properly generated
         document.filename = generate_filename(document)
@@ -1681,6 +1730,7 @@ class TestFilenameGeneration(DirectoriesMixin, TestCase):
         )
         doc_a.archive_serial_number = 301
         doc_a.save()
+        reconcile_document_files(doc_a)
         self.assertEqual(
             generate_filename(doc_a),
             Path("somepath/asn-201-400/asn-3xx/Does Matter.pdf"),
@@ -1984,6 +2034,7 @@ class TestFilenameGeneration(DirectoriesMixin, TestCase):
             name="John's @ Office / Workplace",
         )
         doc.save()
+        reconcile_document_files(doc)
 
         with override_settings(
             FILENAME_FORMAT="{{ correspondent | slugify }}/{{ title | slugify }}",
@@ -2040,6 +2091,7 @@ class TestCustomFieldFilenameUpdates(
         storage_path = StoragePath.objects.create(path="{{created}}/{{ title }}")
         self.doc.storage_path = storage_path
         self.doc.save()
+        reconcile_document_files(self.doc)
         initial_filename = generate_filename(self.doc)
         Document.objects.filter(pk=self.doc.pk).update(filename=str(initial_filename))
         self.doc.refresh_from_db()
@@ -2049,7 +2101,7 @@ class TestCustomFieldFilenameUpdates(
         with mock.patch("documents.file_handling.generate_unique_filename") as m:
             m.side_effect = generate_unique_filename
             self.cfi.value_text = "updated"
-            self.cfi.save()
+            save_custom_field_value(self.doc, self.cf, self.cfi.value_text)
 
         self.doc.refresh_from_db()
         self.assertEqual(Path(self.doc.filename), initial_filename)
@@ -2062,6 +2114,7 @@ class TestCustomFieldFilenameUpdates(
         )
         self.doc.storage_path = storage_path
         self.doc.save()
+        reconcile_document_files(self.doc)
         initial_filename = generate_filename(self.doc)
         Document.objects.filter(pk=self.doc.pk).update(filename=str(initial_filename))
         self.doc.refresh_from_db()
@@ -2071,7 +2124,7 @@ class TestCustomFieldFilenameUpdates(
         with mock.patch("documents.file_handling.generate_unique_filename") as m:
             m.side_effect = generate_unique_filename
             self.cfi.value_text = "updated"
-            self.cfi.save()
+            save_custom_field_value(self.doc, self.cf, self.cfi.value_text)
 
         self.doc.refresh_from_db()
         expected_filename = Path("updated/document.pdf")
@@ -2089,6 +2142,7 @@ class TestCustomFieldFilenameUpdates(
 
         self.doc.storage_path = StoragePath.objects.create(path="a" * 1100)
         self.doc.save()
+        reconcile_document_files(self.doc)
 
         self.doc.refresh_from_db()
         self.assertEqual(Path(self.doc.filename), initial_filename)
@@ -2161,3 +2215,4 @@ def test_refresh_failure_surfaces_database_error(
         pytest.raises(DatabaseError, match="database is locked"),
     ):
         document.save()
+        reconcile_document_files(document)

@@ -57,6 +57,7 @@ from documents.plugins.helpers import ProgressStatusOptions
 from documents.signals import document_consumption_finished
 from documents.signals import document_consumption_started
 from documents.templating.workflows import parse_w_workflow_placeholders
+from documents.updates import document_metadata_update
 from documents.updates import document_update
 from documents.utils import compute_checksum
 from documents.utils import copy_basic_file_stats
@@ -766,10 +767,9 @@ class ConsumerPlugin(
                                     document.archive_path,
                                 )
 
-                        # Don't save with the lock active. Saving will cause the file
-                        # renaming logic to acquire the lock as well.
-                        # This triggers things like file renaming
-                        document.save()
+                        # Reconciliation takes the media lock after publication releases it.
+                        with document_metadata_update(document):
+                            document.save()
 
                         if document.root_document_id:
                             with document_update(

@@ -30,15 +30,10 @@ if TYPE_CHECKING:
     from django.contrib.auth.models import User
 
 logger = logging.getLogger("paperless.updates")
-_deferred_file_updates: ContextVar[frozenset[int]] = ContextVar(
-    "deferred_document_file_updates",
+_metadata_update_documents: ContextVar[frozenset[int]] = ContextVar(
+    "document_metadata_update_documents",
     default=frozenset(),
 )
-
-
-def file_updates_deferred(document_id: int) -> bool:
-    """Tell legacy receivers whether an explicit operation owns this document."""
-    return document_id in _deferred_file_updates.get()
 
 
 @contextmanager
@@ -49,18 +44,18 @@ def document_metadata_update(*documents: Document) -> Iterator[None]:
     documents retain their own file handling. No database transaction is added:
     rollback cannot undo a published file move.
     """
-    token = _deferred_file_updates.set(
-        _deferred_file_updates.get() | {document.pk for document in documents},
+    token = _metadata_update_documents.set(
+        _metadata_update_documents.get() | {document.pk for document in documents},
     )
     try:
         yield
     finally:
-        _deferred_file_updates.reset(token)
+        _metadata_update_documents.reset(token)
 
     from documents.file_handling import reconcile_document_files
 
     for document in documents:
-        if not file_updates_deferred(document.pk):
+        if document.pk not in _metadata_update_documents.get():
             reconcile_document_files(document)
 
 
@@ -346,13 +341,20 @@ def save_custom_field_value(
     value: Any,
 ) -> CustomFieldInstance:
     """Store a validated field value and maintain reciprocal document links."""
-    if field.data_type == CustomField.FieldDataType.DOCUMENTLINK:
-        reflect_doclinks(document, field, value)
-    instance, _created = CustomFieldInstance.objects.update_or_create(
-        document=document,
-        field=field,
-        defaults={CustomFieldInstance.get_value_field_name(field.data_type): value},
-    )
+    from documents.file_handling import filename_uses_custom_fields
+
+    with (
+        document_metadata_update(document)
+        if filename_uses_custom_fields(document)
+        else nullcontext()
+    ):
+        if field.data_type == CustomField.FieldDataType.DOCUMENTLINK:
+            reflect_doclinks(document, field, value)
+        instance, _created = CustomFieldInstance.objects.update_or_create(
+            document=document,
+            field=field,
+            defaults={CustomFieldInstance.get_value_field_name(field.data_type): value},
+        )
     return instance
 
 
@@ -518,12 +520,18 @@ def reflect_doclinks(
             target_doc_field_instance.value_document_ids.append(document.id)
             custom_field_instances_to_update.append(target_doc_field_instance)
 
-    CustomFieldInstance.objects.bulk_create(custom_field_instances_to_create)
-    CustomFieldInstance.objects.bulk_update(
-        custom_field_instances_to_update,
-        ["value_document_ids"],
-    )
-    Document.objects.filter(id__in=target_doc_ids).update(modified=timezone.now())
+    from documents.file_handling import filename_uses_custom_fields
+
+    targets = Document.objects.filter(pk__in=target_doc_ids)
+    with document_metadata_update(
+        *(target for target in targets if filename_uses_custom_fields(target)),
+    ):
+        CustomFieldInstance.objects.bulk_create(custom_field_instances_to_create)
+        CustomFieldInstance.objects.bulk_update(
+            custom_field_instances_to_update,
+            ["value_document_ids"],
+        )
+        Document.objects.filter(id__in=target_doc_ids).update(modified=timezone.now())
 
 
 def remove_doclink(

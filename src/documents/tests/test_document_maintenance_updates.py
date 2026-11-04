@@ -206,3 +206,33 @@ def test_retagger_without_matches_does_not_reconcile_files(
     assert document.source_path == original
     assert original.read_bytes() == b"keep the original"
     assert not (paperless_dirs.originals_dir / "invoice.pdf").exists()
+
+
+def test_retagger_removing_only_tags_reconciles_files(
+    paperless_dirs: PaperlessDirs,
+    settings: Settings,
+) -> None:
+    """Removal without a replacement tag still owns the resulting filename."""
+    from documents.signals.handlers import set_tags
+
+    settings.FILENAME_FORMAT = "{title} {tag_list}"
+    document = DocumentFactory(title="invoice", mime_type="application/pdf")
+    tag = TagFactory(
+        name="old", match="unmatched", matching_algorithm=MatchingModel.MATCH_LITERAL
+    )
+    document.tags.add(tag)
+    original = paperless_dirs.originals_dir / "invoice old.pdf"
+    original.write_bytes(b"original")
+    Document.objects.filter(pk=document.pk).update(filename=original.name)
+    document.refresh_from_db()
+
+    with mock.patch("documents.matching.match_tags", return_value=[]):
+        added, removed = set_tags(None, document, replace=True)
+
+    assert not added
+    assert removed == {tag}
+    document.refresh_from_db()
+    assert not document.tags.exists()
+    assert document.filename != original.name
+    assert document.source_path.read_bytes() == b"original"
+    assert not original.exists()

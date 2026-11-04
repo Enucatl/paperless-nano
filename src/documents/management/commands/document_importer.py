@@ -27,7 +27,6 @@ from django.db import models as django_models
 from django.db import transaction
 from django.db.models import GeneratedField
 from django.db.models import Model
-from django.db.models.signals import m2m_changed
 from django.db.models.signals import post_save
 from filelock import FileLock
 from guardian.shortcuts import clear_ct_cache
@@ -51,7 +50,6 @@ from documents.settings import EXPORTER_FILE_NAME
 from documents.settings import EXPORTER_SHARE_LINK_BUNDLE_NAME
 from documents.settings import EXPORTER_THUMBNAIL_NAME
 from documents.signals.handlers import check_paths_and_prune_custom_fields
-from documents.signals.handlers import update_filename_and_move_files
 from documents.utils import copy_file_with_basic_stats
 from paperless import version
 
@@ -489,24 +487,6 @@ class Command(CryptMixin, PaperlessCommand):
 
         # see /src/documents/signals/handlers.py
         with (
-            disable_signal(
-                post_save,
-                receiver=update_filename_and_move_files,
-                sender=Document,
-                weak=False,
-            ),
-            disable_signal(
-                m2m_changed,
-                receiver=update_filename_and_move_files,
-                sender=Document.tags.through,
-                weak=False,
-            ),
-            disable_signal(
-                post_save,
-                receiver=update_filename_and_move_files,
-                sender=CustomFieldInstance,
-                weak=False,
-            ),
             disable_signal(
                 post_save,
                 receiver=check_paths_and_prune_custom_fields,

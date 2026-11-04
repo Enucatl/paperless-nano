@@ -960,7 +960,7 @@ class TestWorkflows(
         """
         GIVEN:
             - A document whose filename has been updated in the DB by a concurrent
-              bulk_update_documents task (simulating update_filename_and_move_files
+              bulk_update_documents task (simulating reconcile_document_files
               completing and writing the new filename to the DB)
             - A stale in-memory document instance still holding the old filename
             - An active DOCUMENT_UPDATED workflow
@@ -992,7 +992,7 @@ class TestWorkflows(
             filename="old/path/old.pdf",
         )
 
-        # Simulate BUD-1 completing update_filename_and_move_files:
+        # Simulate BUD-1 completing reconcile_document_files:
         # the DB now holds the new filename while BUD-2's in-memory instance is stale.
         new_filename = "new/path/new.pdf"
         Document.global_objects.filter(pk=doc.pk).update(filename=new_filename)
@@ -1000,7 +1000,7 @@ class TestWorkflows(
         # The stale instance still has filename="old/path/old.pdf" in memory.
         # Mock refresh_from_db so the stale value persists through run_workflows,
         # replicating the race window between refresh and save.
-        # Mock update_filename_and_move_files to prevent file-not-found errors
+        # Mock reconcile_document_files to prevent file-not-found errors
         # since we are only testing DB state here.
         with (
             mock.patch(
@@ -3745,7 +3745,7 @@ class TestWorkflows(
             original_filename="workflow-orig.pdf",
         )
 
-        # eg what happens in update_filename_and_move_files
+        # eg what happens in reconcile_document_files
         generated = generate_unique_filename(doc)
         destination = (settings.ORIGINALS_DIR / generated).resolve()
         create_source_path_directory(destination)
@@ -5861,11 +5861,9 @@ class TestApplyAISuggestionsWorkflowAction(
         THEN:
             - The document type is still set after the tags are added
 
-        Adding tags fires m2m_changed, and update_filename_and_move_files
-        refreshes the document from the database. Assigning fields and then
-        adding tags before saving loses those assignments, and only for
-        documents with a filename, so it does not reproduce on a bare
-        Document.objects.create().
+        Reconciliation refreshes the document from the database. The explicit
+        metadata scope must save scalar assignments and tags before that refresh;
+        the historical signal path lost unsaved assignments for published files.
         """
         self.doc.filename = "originals/original.pdf"
         self.doc.save(update_fields=["filename"])

@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import logging
 import shutil
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
@@ -32,11 +33,8 @@ from documents.caching import invalidate_llm_suggestions_cache
 from documents.caching import invalidate_suggestions_cache
 from documents.classification_operations import classification_assignment
 from documents.file_handling import delete_empty_directories
-from documents.file_handling import filename_uses_custom_fields
-from documents.file_handling import reconcile_document_files
 from documents.models import Correspondent
 from documents.models import CustomField
-from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import DocumentType
 from documents.models import PaperlessTask
@@ -48,7 +46,6 @@ from documents.models import WorkflowTrigger
 from documents.permissions import restrict_queryset_to_visible
 from documents.plugins.helpers import DocumentsStatusManager
 from documents.updates import document_metadata_update
-from documents.updates import file_updates_deferred
 from documents.utils import copy_file_with_basic_stats
 from paperless.config import AIConfig
 
@@ -67,7 +64,8 @@ def add_inbox_tags(sender, document: Document, logging_group=None, **kwargs) -> 
         document.owner,
         "view_tag",
     )
-    document.add_nested_tags(inbox_tags)
+    with document_metadata_update(document):
+        document.add_nested_tags(inbox_tags)
 
 
 @classification_assignment
@@ -243,22 +241,27 @@ def set_tags(
 
     matched_tags = matching.match_tags(document, classifier)
 
-    if replace and not dry_run:
-        Document.tags.through.objects.filter(document=document).exclude(
-            Q(tag__is_inbox_tag=True),
-        ).exclude(
-            Q(tag__match="") & ~Q(tag__matching_algorithm=Tag.MATCH_AUTO),
-        ).delete()
-
     current_tags = set(document.tags.all())
+    if replace and not dry_run:
+        current_tags -= tags_to_remove
     tags_to_add = set(matched_tags) - current_tags
+    with (
+        document_metadata_update(document)
+        if not dry_run and (tags_to_add or tags_to_remove)
+        else nullcontext()
+    ):
+        if replace and not dry_run:
+            Document.tags.through.objects.filter(document=document).exclude(
+                Q(tag__is_inbox_tag=True),
+            ).exclude(
+                Q(tag__match="") & ~Q(tag__matching_algorithm=Tag.MATCH_AUTO),
+            ).delete()
 
-    if tags_to_add and not dry_run:
-        logger.info(
-            f'Tagging "{document}" with "{", ".join(t.name for t in tags_to_add)}"',
-            extra={"group": logging_group},
-        )
-        with document_metadata_update(document):
+        if tags_to_add and not dry_run:
+            logger.info(
+                f'Tagging "{document}" with "{", ".join(t.name for t in tags_to_add)}"',
+                extra={"group": logging_group},
+            )
             document.add_nested_tags(tags_to_add)
 
     return tags_to_add, tags_to_remove
@@ -393,24 +396,6 @@ def cleanup_document_deletion(sender, instance, **kwargs) -> None:
                 Path(instance.archive_path).parent,
                 root=settings.ARCHIVE_DIR,
             )
-
-
-# The importer disables these compatibility receivers during restoration.
-@receiver(models.signals.post_save, sender=CustomFieldInstance, weak=False)
-@receiver(models.signals.m2m_changed, sender=Document.tags.through, weak=False)
-@receiver(models.signals.post_save, sender=Document, weak=False)
-def update_filename_and_move_files(
-    sender,
-    instance: Document | CustomFieldInstance,
-    **kwargs,
-) -> None:
-    """Bridge legacy ORM writes to explicit file reconciliation."""
-    if isinstance(instance, CustomFieldInstance):
-        if not filename_uses_custom_fields(instance.document):
-            return
-        instance = instance.document
-    if not file_updates_deferred(instance.pk):
-        reconcile_document_files(instance)
 
 
 @shared_task

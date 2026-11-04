@@ -1307,3 +1307,53 @@ The final migration check found no model changes. All applicable changed-file
 hooks passed (12 passed, seven with no matching files), including Ruff, Prettier,
 codespell and Dockerfile checks. Independent review found no material correctness
 or safety issue. Preexisting workflow and memory-report diffs were preserved.
+
+
+## Explicit file reconciliation ownership (#33)
+
+The legacy `Document.post_save`, document-tag `m2m_changed`, and
+`CustomFieldInstance.post_save` filename bridge has been removed. Raw ORM writes
+now persist data only; code that changes filename-dependent metadata must use
+`document_metadata_update` or call `reconcile_document_files` after its writes.
+The importer no longer disconnects those receivers. This supersedes the legacy
+receiver described in the earlier #22/#30 snapshots.
+
+The public signal-suppression helper is gone. A private context-local set remains
+only to coalesce nested explicit metadata scopes: an inner scope for the same
+document waits for its outer scope; a different linked document has its own
+boundary. Failed scopes restore that ownership and do not reconcile incomplete
+writes. The scopes do not add transactions or replay workflows.
+
+### Write-path inventory
+
+| Writes | Reconciliation owner |
+| --- | --- |
+| Document API metadata, tags, permissions and custom fields | `save_document_metadata` completes the root scope after all writes. Selected-version content and version labels have explicit scopes. Notes retain their own scope. |
+| Admin scalar and related document edits | `DocumentAdmin.save_model` / `save_related`; full-text indexing follows related writes. Custom-field instance values are read-only in admin. |
+| Workflow assignment/removal and AI suggestions | The workflow runner encloses each matched workflow; AI assignment uses a nested metadata scope. Consumption overrides remain values until the consumer publishes the document. |
+| Inbox/classifier tags and scalar classification | Assignment adapters own explicit scopes, including tag removal with no replacement. Dry-run/no-change classification does not reconcile. |
+| Bulk scalar/tag/owner/ASN writes and tag-parent propagation | Existing queued `complete_document_updates` reconciles after workflows. Through-table/queryset writes already bypassed signals. Merging versions retains that batched completion owner. |
+| Individual custom-field serializer writes | `save_custom_field_value` owns a scope when the filename template uses custom fields; nested API/bulk scopes coalesce it. |
+| Bulk custom fields and reciprocal links | Bulk fields reconcile after the complete batch. Reciprocal additions and removals explicitly reconcile affected targets; source ownership remains with its operation. Select-option updates use their existing background operation. |
+| New ingestion and version ingestion | Initial documents have no published filename. The consumer computes paths after metadata/workflows, publishes under the media lock, then explicitly saves/reconciles outside that lock. |
+| Reprocessing/external archive publication | Existing publication code owns generated archive paths and protected database reference updates; metadata completion is unchanged. |
+| Export/import and maintenance | Import restores manifest paths and files without renaming; renamer directly reconciles each document. Retagger uses assignment operations. Trash/delete retain their separate cleanup owners. |
+| Root timestamps, job state, caches, audit, notes and non-document models | Their existing operations retain ownership; these are not replacement implicit filename hooks. |
+
+`reconcile_document_files` itself is unchanged: it refreshes persisted metadata
+under the media lock, protects root paths, handles collisions, recovers moved
+files/checksums, and reconciles version paths. Filename columns are still excluded
+from stale serializer writes. A raw extension/plugin ORM write must now explicitly
+request reconciliation; restoring the signal as a compatibility workaround would
+reintroduce partial-write moves.
+
+Verification: **627 tests passed**, plus **10 maintenance tests** after adding
+the removal-only tag regression (nine overlap). Coverage includes explicit file
+moves, collisions, path rejection, filesystem
+and database failure recovery, interleaved/stale filename edits, nested and
+failed scopes, reciprocal link additions/removals, admin and classifier writes,
+consumer publication, import, workflows, and durable document jobs. Raw ORM
+regression coverage proves there is no remaining filename receiver. Tests run
+in non-root disposable `docker run --rm --userns=host` containers with Python
+3.14.10, Django 5.2.17, SQLite and frozen uv dependencies. Full-suite and other
+database-engine testing remain outside this focused change.
