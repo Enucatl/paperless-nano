@@ -41,9 +41,18 @@ class Command(BaseCommand):
             user = User.objects.get(username=options["user"], is_active=True)
         except User.DoesNotExist as error:
             raise CommandError("Processor account is missing or inactive") from error
-        for job in DocumentJob.objects.filter(
-            status=DocumentJob.Status.WAITING
-        ).iterator():
+        # Task publication can close the connection; retain IDs, not a database cursor.
+        identifiers = list(
+            DocumentJob.objects.filter(status=DocumentJob.Status.WAITING).values_list(
+                "pk", flat=True
+            )
+        )
+        for identifier in identifiers:
+            job = DocumentJob.objects.filter(
+                pk=identifier, status=DocumentJob.Status.WAITING
+            ).first()
+            if job is None:
+                continue
             for key, entry in job.result.get("invocations", {}).items():
                 if entry.get("status") != "pending":
                     continue

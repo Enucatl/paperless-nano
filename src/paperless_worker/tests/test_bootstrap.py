@@ -59,6 +59,8 @@ def test_parent_metadata_and_real_child_app(worker_env: dict[str, str]) -> None:
 import os, sys
 from paperless_worker.bootstrap import create_app, read_metadata, MetadataTask
 metadata = read_metadata()
+assert {'documents.enrichment_jobs.execute_enrichment',
+        'documents.search_operations.run_search'} <= metadata['tasks'].keys()
 assert metadata['configuration']['worker_concurrency'] == 2
 assert metadata['secret_key'] == os.environ['PAPERLESS_SECRET_KEY']
 app = create_app(metadata)

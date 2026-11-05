@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
     from paperless_testing.dirs import PaperlessDirs
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("queued_search_processor")]
 
 
 @pytest.mark.parametrize("trash", [False, True])

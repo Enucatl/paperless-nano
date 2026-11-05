@@ -706,6 +706,7 @@ logging.config.dictConfig(LOGGING)
 CELERY_IMPORTS = ("documents.bulk_edit",)
 
 CELERY_BROKER_URL = _CELERY_REDIS_URL
+CELERY_IMPORTS = ("documents.enrichment_jobs", "documents.search_operations")
 CELERY_RESULT_BACKEND = _CELERY_REDIS_URL
 CELERY_RESULT_SERIALIZER = "signed-pickle"
 # Results are only needed for chord synchronization

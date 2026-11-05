@@ -16,6 +16,44 @@ pytestmark = [
 ]
 
 
+def test_sweep_releases_cursor_before_task_publication(mocker):
+    """Task publication may close the connection without invalidating the sweep."""
+    from django.core.management import call_command
+    from django.db import connection
+
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL server-side cursor regression")
+    user = UserFactory(is_superuser=True)
+    jobs = [
+        DocumentJob.objects.create(
+            kind="search",
+            timeout=30,
+            status=DocumentJob.Status.WAITING,
+            result={
+                "invocations": {
+                    "maintenance": {
+                        "status": "pending",
+                        "operation": "search.write",
+                        "plugin": "search:1",
+                    }
+                }
+            },
+        )
+        for _ in range(2)
+    ]
+    execute = mocker.patch(
+        "documents.management.commands.document_processor.process",
+        side_effect=lambda *args: connection.close(),
+    )
+    call_command(
+        "document_processor",
+        user=user.username,
+        configured=True,
+        capability=["search"],
+    )
+    assert {call.args[0] for call in execute.call_args_list} == {job.pk for job in jobs}
+
+
 def test_server_stages_before_coordinator_applies(mocker):
     """Computation happens once; authoritative completion follows submission."""
     provider = SimpleNamespace(identity="search:1", configuration={})
