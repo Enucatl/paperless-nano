@@ -1,0 +1,62 @@
+{
+  "request": {
+    "version": 1,
+    "revision": "sha256:retained-document-and-content-revision",
+    "content": "Example Energy AG\nInvoice dated 2026-10-01 for electricity: CHF 42.00.",
+    "metadata": {
+      "document_id": 101,
+      "title": "scan.pdf",
+      "created": "2026-10-02",
+      "correspondent_id": null,
+      "tags": [5, 8],
+      "custom_fields": [{"field": 90, "value": "Keep this unrelated note"}]
+    },
+    "candidates": {
+      "correspondents": [{"id": 7, "name": "Example Energy"}],
+      "tags": [{"id": 5, "name": "inbox"}, {"id": 8, "name": "language:de"}]
+    },
+    "managed_fields": {
+      "summary": {"id": 10, "data_type": "longtext"},
+      "processing_date": {"id": 11, "data_type": "date"},
+      "audit": {"id": 12, "data_type": "longtext"},
+      "reviewed": {"id": 13, "data_type": "boolean"}
+    },
+    "configuration": {
+      "metadata_endpoint": "https://inference.example.invalid/v1",
+      "correspondent_match_threshold": 0.8
+    },
+    "identity": {"provider": "example-metadata:1", "model": "model@immutable-revision", "prompt": "sha256:prompt-revision"},
+    "date": "2026-11-05",
+    "document_date_max": "2026-11-05"
+  },
+  "result": {
+    "version": 1,
+    "revision": "sha256:retained-document-and-content-revision",
+    "identity": {"provider": "example-metadata:1", "model": "model@immutable-revision", "prompt": "sha256:prompt-revision"},
+    "title": "Electricity Invoice October 2026",
+    "document_date": "2026-10-01",
+    "summary": "Example Energy billed CHF 42.00 for electricity.",
+    "processing_date": "2026-11-05",
+    "correspondent": {"id": 7},
+    "language": {"create": "language:en"},
+    "custom_fields": [{"field": 13, "data_type": "boolean", "value": false}],
+    "audit": {
+      "timestamp": "2026-11-05T10:00:00Z",
+      "metadata_model": "model@immutable-revision",
+      "metadata_endpoint": "https://inference.example.invalid/v1",
+      "ai_metadata": {
+        "title": "Electricity Invoice October 2026",
+        "document_date": "2026-10-01",
+        "correspondent": "Example Energy AG",
+        "summary": "Example Energy billed CHF 42.00 for electricity.",
+        "languages": ["en"]
+      },
+      "correspondent_resolution": {"version": 1, "observed": "Example Energy AG", "action": "existing", "correspondent_id": 7, "correspondent_name": "Example Energy", "score": 1.0, "second_best_score": null, "components": {"character": 1.0, "token_sort": 1.0, "jaccard": 1.0, "containment": 1.0, "containment_score": 1.0}}
+    }
+  },
+  "expected": {
+    "preserved_tag_ids": [5],
+    "removed_language_tag_ids": [8],
+    "preserved_custom_fields": [{"field": 90, "value": "Keep this unrelated note"}]
+  }
+}
