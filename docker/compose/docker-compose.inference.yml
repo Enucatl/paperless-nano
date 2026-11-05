@@ -1,0 +1,46 @@
+# Build paperless-inference:release from the matching core commit first.
+# See docs/processor-deployment.md before starting ingestion.
+services:
+  broker:
+    image: docker.io/valkey/valkey:9-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+  db:
+    image: docker.io/library/postgres:18
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: ${PAPERLESS_DBPASS:?Set PAPERLESS_DBPASS in .env}
+  webserver:
+    image: ${PAPERLESS_IMAGE:-paperless-inference:release}
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    ports:
+      - "8000:8000"
+    volumes:
+      - data:/usr/src/paperless/data
+      - media:/usr/src/paperless/media
+      - ./export:/usr/src/paperless/export
+      - ./consume:/usr/src/paperless/consume
+    env_file: inference.env
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBENGINE: postgresql
+      PAPERLESS_DBPASS: ${PAPERLESS_DBPASS:?Set PAPERLESS_DBPASS in .env}
+      PAPERLESS_PROCESSOR_USER: server-processor
+      PAPERLESS_PROCESSOR_CAPABILITIES: parser metadata search ingestion
+      PAPERLESS_PARSER: paperless_inference.providers.PaddleOCRProvider
+      PAPERLESS_ENRICHMENT_PROVIDER: paperless_inference.providers.MetadataProvider
+      PAPERLESS_ENRICHMENT_ALLOW_REMOTE: "true"
+volumes:
+  data:
+  media:
+  pgdata:
+  redisdata:

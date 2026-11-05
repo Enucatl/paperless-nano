@@ -1935,27 +1935,32 @@ to `files/` with that token, then POST `token` and `result` to `result/`. The
 processor uses the returned invocation identity, configuration and inputs with
 its synchronous provider implementation. No new processor client is included.
 
-For server-side processing, create an active capability account and supervise
-repeated executions of the management command, selecting the operations and
-provider identities that this deployment supports:
+For a supervised server deployment, follow [Supervised OCR and metadata
+processing](processor-deployment.md). The shipped opt-in service starts finite
+processor sweeps automatically, provisions a dedicated capability account through
+`document_processor_account`, and releases Django/model memory between sweeps.
+Select `PAPERLESS_PROCESSOR_USER` and the explicit whitespace-separated
+`PAPERLESS_PROCESSOR_CAPABILITIES`; unselected work remains waiting for another
+eligible processor without local fallback.
+
+Inspect pending work and account grants without claiming it:
 
 ```sh
-python manage.py document_processor --user server-processor \
-  --operation parser.process --operation parser.thumbnail \
-  --provider '<retained provider identity>'
+python manage.py document_processor --user server-processor --configured \
+  --capability parser --capability metadata --capability search \
+  --capability ingestion --diagnose
 ```
 
-`document_thumbnails` now queues thumbnail-only jobs, preserving document content
+Remove `--diagnose` to consume one snapshot manually. Exact `--operation` and
+`--provider` filters remain supported. Provider/configuration checks are owned
+by the core runners, not inferred from an operator-copied identity.
+
+`document_thumbnails` queues thumbnail-only jobs, preserving document content
 and archives. Classifier-backed `document_retagger` queues metadata jobs with its
 selected fields, overwrite policy and matching-rule snapshot, and reports the
 queued count. Follow completion in Tasks. Its interactive `--suggest` mode and
 rule-only processing without an active classifier retain their existing behavior.
 
-The command consumes one snapshot of pending work and exits. Configure periodic
-execution in the deployment; a coordinator worker alone does not compute queued
-provider work. Include metadata, search and ingestion preparation operations and
-their provider identities where this server should process them. Work remains
-waiting while no eligible processor runs; there is no automatic fallback.
 Search index changes are asynchronous: document edits become searchable after
 the queued index operation completes. Management commands that perform search
 maintenance now require access to the migrated application database.

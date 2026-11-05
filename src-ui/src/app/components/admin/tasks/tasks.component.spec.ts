@@ -246,12 +246,16 @@ describe('TasksComponent', () => {
     ['conflicted', 'Needs review', 'Paperless rejected the result'],
   ])('shows the operation lifecycle for %s', (status, label, help) => {
     component.pagedTasks.set([
-      { ...tasks[0], operation: { name: 'parser.process', status } },
+      {
+        ...tasks[0],
+        operation: { name: 'parser.process', status, error: 'Endpoint unavailable' },
+      },
     ])
     fixture.detectChanges()
     expect(fixture.nativeElement.textContent).toContain('parser.process')
     expect(fixture.nativeElement.textContent).toContain(label)
     expect(fixture.nativeElement.textContent).toContain(help)
+    expect(fixture.nativeElement.textContent).toContain('Endpoint unavailable')
   })
 
   it('should display task sections with counts', () => {

@@ -492,7 +492,7 @@ export class TasksComponent
   readonly operationStates = {
     pending: {
       label: $localize`Waiting for processor`,
-      help: $localize`Start an eligible processor with permission to handle this operation.`,
+      help: $localize`Start an eligible processor with permission to handle this operation. Intentional offline processing can remain waiting. Otherwise check processor configuration and account grants.`,
     },
     leased: {
       label: $localize`Processing`,

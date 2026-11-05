@@ -8,6 +8,7 @@ DEFAULTS = {
     "consumer": "paperless_services.traditional.Consumer",
     "scheduler": "paperless_services.traditional.Scheduler",
     "worker": "paperless.worker.Worker",
+    "processor": "paperless_services.processor.Processor",
 }
 LEGACY_FLAGS = {
     "consumer": "PAPERLESS_USE_API_CONSUMER",
@@ -19,8 +20,8 @@ LEGACY_FLAGS = {
 def run(service: str) -> None:
     """Construct and run only the selected installed implementation."""
     setting = f"PAPERLESS_{service.upper()}_CLASS"
-    legacy = LEGACY_FLAGS[service]
-    if legacy in os.environ:
+    legacy = LEGACY_FLAGS.get(service)
+    if legacy is not None and legacy in os.environ:
         raise ValueError(
             f"{legacy} was retired; remove it and select {setting} instead"
         )
@@ -31,7 +32,7 @@ def run(service: str) -> None:
 
 
 def main() -> None:
-    """Select a supervised consumer, scheduler or worker from the environment."""
+    """Select one supervised foreground service from the environment."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("service", choices=DEFAULTS)
     run(parser.parse_args().service)

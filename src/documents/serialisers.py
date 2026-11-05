@@ -2495,7 +2495,7 @@ class TaskSerializerV10(OwnedObjectSerializer):
             self._operation_jobs = {
                 str(job.pk): job
                 for job in DocumentJob.objects.filter(pk__in=identifiers).only(
-                    "id", "result"
+                    "id", "result", "error"
                 )
             }
         job = self._operation_jobs.get(str(obj.task_id))
@@ -2504,7 +2504,11 @@ class TaskSerializerV10(OwnedObjectSerializer):
         entries = list(job.result.get("invocations", {}).values())
         for entry in reversed(entries):
             if "policy" in entry:
-                return {"name": entry["operation"], "status": entry["status"]}
+                return {
+                    "name": entry["operation"],
+                    "status": entry["status"],
+                    "error": entry.get("error") or job.error,
+                }
         return None
 
     related_document_ids = serializers.ListField(

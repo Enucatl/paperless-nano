@@ -164,7 +164,11 @@ def test_processor_skips_busy_job_and_continues(mocker):
             status=DocumentJob.Status.WAITING,
             result={
                 "invocations": {
-                    "maintenance": {"operation": "search.wipe", "plugin": "provider"}
+                    "maintenance": {
+                        "status": "pending",
+                        "operation": "search.wipe",
+                        "plugin": "provider",
+                    }
                 }
             },
         )
@@ -179,3 +183,136 @@ def test_processor_skips_busy_job_and_continues(mocker):
         provider=["provider"],
     )
     assert execute.call_count == 2
+
+
+def test_capability_account_provisioning_is_idempotent():
+    """The service gets no document rights and cannot take over login users."""
+    from django.contrib.auth.models import User
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    for _ in range(2):
+        call_command(
+            "document_processor_account",
+            "--capability",
+            "parser",
+            "--capability",
+            "search",
+            user="processor",
+        )
+    processor = User.objects.get(username="processor")
+    assert not processor.has_usable_password()
+    assert processor.get_all_permissions() == {
+        "documents.process_parser",
+        "documents.process_search",
+    }
+    login = UserFactory()
+    login.set_password("test-only")
+    login.save()
+    with pytest.raises(CommandError, match="dedicated"):
+        call_command(
+            "document_processor_account", user=login.username, capability=["parser"]
+        )
+
+
+def test_configured_sweep_filters_capabilities_and_continues_after_outage(mocker):
+    """Only explicitly placed operation families run; one failure does not block others."""
+    from django.core.management import call_command
+
+    for operation in [
+        "parser.process",
+        "metadata.enrich",
+        "search.write",
+        "prepare:barcode",
+    ]:
+        DocumentJob.objects.create(
+            kind="search",
+            timeout=30,
+            status=DocumentJob.Status.WAITING,
+            result={
+                "invocations": {
+                    "work": {
+                        "status": "pending",
+                        "operation": operation,
+                        "plugin": "configured",
+                    }
+                }
+            },
+        )
+    execute = mocker.patch(
+        "documents.management.commands.document_processor.process",
+        side_effect=[RuntimeError("offline endpoint"), None, None],
+    )
+    call_command(
+        "document_processor",
+        user=UserFactory().username,
+        configured=True,
+        capability=["parser", "search", "ingestion"],
+    )
+    assert execute.call_count == 3
+
+
+def test_diagnostic_reports_revoked_permission_without_attempt(mocker):
+    """Missing grants are actionable and never consume execution attempts."""
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    job = DocumentJob.objects.create(
+        kind="search",
+        timeout=30,
+        status=DocumentJob.Status.WAITING,
+        result={
+            "invocations": {
+                "work": {
+                    "status": "pending",
+                    "operation": "search.write",
+                    "plugin": "configured",
+                    "policy": {"permission": "documents.process_search"},
+                }
+            }
+        },
+    )
+    execute = mocker.patch("documents.management.commands.document_processor.process")
+    output = StringIO()
+    call_command(
+        "document_processor",
+        user=UserFactory().username,
+        configured=True,
+        capability=["search"],
+        diagnose=True,
+        stderr=output,
+    )
+    assert "processor lacks documents.process_search" in output.getvalue()
+    execute.assert_not_called()
+    job.refresh_from_db()
+    assert job.result["invocations"]["work"].get("attempts", 0) == 0
+
+
+def test_tasks_exposes_retained_operation_failure():
+    """A retry waiting on an endpoint retains an actionable explanation."""
+    from documents.serialisers import TaskSerializerV10
+    from paperless_testing.factories import PaperlessTaskFactory
+
+    job = DocumentJob.objects.create(
+        kind="search",
+        timeout=30,
+        status=DocumentJob.Status.WAITING,
+        error="Endpoint unavailable; retry pending",
+        result={
+            "invocations": {
+                "work": {
+                    "operation": "search.write",
+                    "status": "pending",
+                    "error": "",
+                    "policy": {"permission": "documents.process_search"},
+                }
+            }
+        },
+    )
+    task = PaperlessTaskFactory(task_id=str(job.pk))
+    assert TaskSerializerV10(task).get_operation(task) == {
+        "name": "search.write",
+        "status": "pending",
+        "error": job.error,
+    }

@@ -35,7 +35,7 @@ def test_default_service(service: str, monkeypatch: pytest.MonkeyPatch) -> None:
     getattr(module.return_value, name).return_value.run.assert_called_once_with()
 
 
-@pytest.mark.parametrize("service", launcher.DEFAULTS)
+@pytest.mark.parametrize("service", launcher.LEGACY_FLAGS)
 @pytest.mark.parametrize("value", ["", "0", "1"])
 def test_retired_flag_fails(
     service: str, value: str, monkeypatch: pytest.MonkeyPatch
@@ -74,6 +74,11 @@ def test_startup_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("service", "path", "target"),
     [
+        (
+            "processor",
+            "paperless_services.processor.Processor",
+            "paperless_services.processor.Processor.run",
+        ),
         (
             "consumer",
             "paperless_services.watcher.APIConsumer",

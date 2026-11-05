@@ -43,7 +43,7 @@ export interface PaperlessTask extends ObjectWithId {
   trigger_source_display: string
   status: PaperlessTaskStatus
   status_display: string
-  operation?: { name: string; status: string }
+  operation?: { name: string; status: string; error?: string }
   date_created: Date
   date_started?: Date
   date_done?: Date

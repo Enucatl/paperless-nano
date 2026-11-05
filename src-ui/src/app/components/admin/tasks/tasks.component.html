@@ -179,6 +179,9 @@
               @if (task.operation; as operation) {
                 <div class="small">{{operation.name}}: {{operationStates[operation.status]?.label ?? operation.status}}</div>
                 <div class="small text-muted">{{operationStates[operation.status]?.help}}</div>
+                @if (operation.error) {
+                  <div class="small text-danger">{{operation.error}}</div>
+                }
               }
               <div class="small text-muted">
                 @if (taskShowsSeparateTypeLabel(task)) {
