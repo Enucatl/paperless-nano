@@ -1,6 +1,5 @@
 """Shared document revision and authorization checks for durable operations."""
 
-from django.conf import settings
 from django.contrib.auth.models import User
 from django.utils import timezone
 
@@ -60,27 +59,13 @@ def requester_id(job: DocumentJob) -> int | None:
 
 
 def execution_policy(operation: str, identity: str, provider=None) -> dict | None:
-    """Select provider execution; retain old configuration only for migration."""
-    mode = (
-        provider.get("execution_mode")
-        if isinstance(provider, dict)
-        else getattr(provider, "execution_mode", None)
+    """Queue finite provider work; lifecycle hooks remain core-owned."""
+    capability = (
+        "ingestion" if operation.startswith("prepare:") else operation.split(".", 1)[0]
     )
-    if mode is not None:
-        if mode == "local":
-            return None
-        if mode != "external":
-            raise ValueError("Provider execution_mode must be local or external")
-        capability = (
-            "ingestion"
-            if operation.startswith("prepare:")
-            else operation.split(".", 1)[0]
-        )
-        if capability not in {"parser", "metadata", "search", "ingestion"}:
-            raise ValueError("This operation has no external processor capability")
-        return {"permission": f"documents.process_{capability}"}
-    policies = getattr(settings, "DEFERRED_OPERATIONS", {})
-    return policies.get(operation, policies.get(identity))
+    if capability not in {"parser", "metadata", "search", "ingestion"}:
+        return None
+    return {"permission": f"documents.process_{capability}"}
 
 
 def wait(job: DocumentJob, entry: dict) -> None:
@@ -90,3 +75,7 @@ def wait(job: DocumentJob, entry: dict) -> None:
     job.updated = timezone.now()
     job.save(update_fields=["result", "status", "updated"])
     raise PendingOperation(entry["id"])
+
+
+class ProcessorFinished(BaseException):
+    """Stop coordinator traversal immediately after submitting computation."""

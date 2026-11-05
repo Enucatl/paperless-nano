@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from unittest import mock
 
 import celery
+import pytest
 from dateutil import parser
 from django.conf import settings
 from django.contrib.auth.models import Group
@@ -71,6 +72,7 @@ class TestDocumentApi(DirectoriesMixin, ConsumeTaskMixin, APITestCase):
         self.client.force_authenticate(user=self.user)
         cache.clear()
 
+    @pytest.mark.usefixtures("queued_search_processor")
     def test_detail_save_indexes_final_workflow_state(self) -> None:
         viewer = UserFactory()
         grant_global(viewer, "view_document")

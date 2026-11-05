@@ -27,13 +27,17 @@ def parser_class() -> type:
     return import_string(settings.PARSER)
 
 
-def effective_configuration(*, mailrule_id: int | None = None) -> dict:
+def effective_configuration(
+    *, mailrule_id: int | None = None, thumbnail_only: bool = False
+) -> dict:
     """Snapshot common preferences and implementation-owned, secret-free settings."""
-    provider = parser_class()()
+    provider = LocalThumbnailProvider() if thumbnail_only else parser_class()()
     implementation = configuration_snapshot(provider, {"mailrule_id": mailrule_id})
     preferences = OcrConfig()
     return {
-        "parser": settings.PARSER,
+        "parser": "paperless.parsers.providers.LocalThumbnailProvider"
+        if thumbnail_only
+        else settings.PARSER,
         "allow_remote_by_default": RemoteOCRConfig().remote_ocr_by_default,
         "settings": implementation,
         "archive_policy": preferences.archive_file_generation,
@@ -91,6 +95,7 @@ def run_parser(
     configuration = json.loads(json.dumps(configuration))
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     request = None
+    operation_key = "parser.thumbnail" if operation == "thumbnail" else "parser.process"
     if job_id:
         job = DocumentJob.objects.get(pk=job_id)
         request = job.result.get("parser_request")
@@ -114,21 +119,19 @@ def run_parser(
         }
         if invocation_id or job_id:
             request["invocation_id"] = (
-                str(uuid5(job.pk, "parser.process")) if job_id else invocation_id
+                str(uuid5(job.pk, operation_key)) if job_id else invocation_id
             )
         request["revision"] = hashlib.sha256(
             json.dumps(request, sort_keys=True).encode()
         ).hexdigest()
     else:
-        resolve_reference(directory, request["source"])
+        try:
+            resolve_reference(directory, request["source"])
+        except InvalidParserResult as error:
+            raise RejectedResult(str(error)) from error
     identity = provider.identity
     try:
-        selection = execution_snapshot(
-            provider,
-            request,
-            directory,
-            retained=job.provider.get("implementation") if job_id else None,
-        )
+        selection = execution_snapshot(provider, request, directory)
     except InvalidParserResult as error:
         raise RejectedResult(str(error)) from error
     if job_id:
@@ -158,12 +161,7 @@ def run_parser(
             validate_result(frozen_request, result, directory, identity)
             if result.get("execution", result["provider"]) != selection["identity"]:
                 raise InvalidParserResult("Selected parser changed during execution")
-            if (
-                execution_snapshot(
-                    provider, frozen_request, directory, retained=selection
-                )
-                != selection
-            ):
+            if execution_snapshot(provider, frozen_request, directory) != selection:
                 raise InvalidParserResult("Selected parser changed during execution")
             if provider.identity != identity:
                 raise InvalidParserResult("Parser identity changed during execution")
@@ -189,13 +187,13 @@ def run_parser(
 
             result = invoke(
                 job,
-                "parser.process",
+                operation_key,
                 identity,
                 {"request": frozen_request, "selection": selection},
                 execute,
                 replay_safe=selection["replay_safe"],
                 provider=selection,
-                allow_deferred=frozen_request["allow_remote"],
+                remote_allowed=frozen_request["allow_remote"],
                 reconcile=(
                     lambda identifier: provider.reconcile(
                         {**frozen_request, "invocation_id": identifier}, directory
@@ -216,10 +214,7 @@ def run_parser(
     except (ValueError, TypeError, KeyError, OSError) as error:
         raise RejectedResult(str(error)) from error
     try:
-        if (
-            execution_snapshot(provider, frozen_request, directory, retained=selection)
-            != selection
-        ):
+        if execution_snapshot(provider, frozen_request, directory) != selection:
             raise RejectedResult("Selected parser changed during execution")
     except InvalidParserResult as error:
         raise RejectedResult(str(error)) from error
@@ -276,7 +271,8 @@ def run_parser(
                     {"request": thumbnail_request, "selection": selection_before},
                     create_thumbnail,
                     replay_safe=selection_before["replay_safe"],
-                    allow_deferred=False,
+                    provider=thumbnail_provider,
+                    remote_allowed=frozen_request["allow_remote"],
                     validate=validate_thumbnail,
                 )
             else:
@@ -326,7 +322,8 @@ def validate_parser_job(job: object) -> None:
     if request is None:
         return  # Jobs prepared before the provider contract keep their recovery path.
     if job.configuration != effective_configuration(
-        mailrule_id=job.input.get("mailrule_id")
+        mailrule_id=job.input.get("mailrule_id"),
+        thumbnail_only=job.input.get("thumbnail_only", False),
     ):
         raise RejectedResult("Processing configuration changed before publication")
     directory = job_directory(job.pk)
@@ -334,16 +331,14 @@ def validate_parser_job(job: object) -> None:
         resolve_reference(directory, request["source"])
     except (ValueError, TypeError, KeyError, OSError) as error:
         raise RejectedResult(str(error)) from error
-    cls = parser_class()
+    cls = LocalThumbnailProvider if job.input.get("thumbnail_only") else parser_class()
     if (
         f"{cls.__module__}.{cls.__qualname__}" != job.provider["class"]
         or cls().identity != job.provider["identity"]
     ):
         raise RejectedResult("Selected parser changed before publication")
     try:
-        selection = execution_snapshot(
-            cls(), request, directory, retained=job.provider.get("implementation")
-        )
+        selection = execution_snapshot(cls(), request, directory)
     except InvalidParserResult as error:
         raise RejectedResult("Selected parser changed before publication") from error
     if selection != job.provider.get("implementation"):

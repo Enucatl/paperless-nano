@@ -54,7 +54,7 @@ def stage_consumption(
     """Own a durable input copy before any producer publishes its task."""
     identifier = UUID(job_id) if job_id else uuid4()
     directory = job_directory(identifier)
-    with FileLock(directory.with_suffix(".lock"), timeout=0):
+    with FileLock(directory.with_suffix(".lock"), timeout=0, is_singleton=True):
         existing = DocumentJob.objects.filter(pk=identifier).first()
         if existing:
             return existing
@@ -325,7 +325,7 @@ def cleanup_consumption(job: DocumentJob) -> None:
 def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     """Execute at most one ingestion attempt and recover committed completion."""
     directory = job_directory(job_id)
-    lock = FileLock(directory.with_suffix(".lock"), timeout=0)
+    lock = FileLock(directory.with_suffix(".lock"), timeout=0, is_singleton=True)
     try:
         lock.acquire()
     except Timeout:

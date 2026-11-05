@@ -864,6 +864,8 @@ class PaperlessTask(ModelWithOwner):
         BUILD_SHARE_LINK = "build_share_link", _("Build Share Link")
         BULK_DELETE = "bulk_delete", _("Bulk Delete")
         APPLY_AI_SUGGESTIONS = "apply_ai_suggestions", _("Apply AI Suggestions")
+        SEARCH_MAINTENANCE = "search_maintenance", _("Search maintenance")
+        METADATA_CLASSIFY = "metadata_classify", _("Metadata classification")
 
     COMPLETE_STATUSES = (
         Status.SUCCESS,
@@ -990,7 +992,11 @@ class PaperlessTask(ModelWithOwner):
     @property
     def related_document_ids(self) -> list[int]:  # pragma: no cover
         if not self.result_data:
-            return []
+            return (
+                [self.input_data["document_id"]]
+                if self.input_data.get("document_id")
+                else []
+            )
         if doc_id := self.result_data.get("document_id"):
             return [doc_id]
         if dup_id := self.result_data.get("duplicate_of"):

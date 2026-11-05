@@ -611,6 +611,8 @@ def send_websocket_document_updated(
 # ---------------------------------------------------------------------------
 
 TRACKED_TASKS: dict[str, PaperlessTask.TaskType] = {
+    "documents.search_operations.run_search": PaperlessTask.TaskType.SEARCH_MAINTENANCE,
+    "documents.enrichment_jobs.execute_enrichment": PaperlessTask.TaskType.METADATA_CLASSIFY,
     "documents.tasks.consume_file": PaperlessTask.TaskType.CONSUME_FILE,
     "documents.tasks.train_classifier": PaperlessTask.TaskType.TRAIN_CLASSIFIER,
     "documents.tasks.sanity_check": PaperlessTask.TaskType.SANITY_CHECK,
@@ -777,8 +779,21 @@ def before_task_publish_handler(
         task_id = headers["id"]
 
         input_data = _extract_input_data(task_type, task_kwargs)
-        trigger_source = _determine_trigger_source(headers)
         owner_id = _extract_owner_id(task_type, task_kwargs)
+        if task_type in {
+            PaperlessTask.TaskType.SEARCH_MAINTENANCE,
+            PaperlessTask.TaskType.METADATA_CLASSIFY,
+        }:
+            from documents.models import DocumentJob
+
+            job = DocumentJob.objects.get(pk=task_id)
+            input_data = {
+                key: job.input[key]
+                for key in ("document_id", "operation")
+                if key in job.input
+            }
+            owner_id = job.input.get("actor_id")
+        trigger_source = _determine_trigger_source(headers)
 
         # A retried task is republished with the same task_id, so this fires
         # again for it; get_or_create keeps the original PENDING record
@@ -851,6 +866,29 @@ def task_postrun_handler(
             task_instance = PaperlessTask.objects.get(task_id=task_id)
         except PaperlessTask.DoesNotExist:
             return
+
+        from django.core.exceptions import ValidationError
+        from documents.models import DocumentJob
+
+        try:
+            job = DocumentJob.objects.filter(pk=task_id).first()
+        except ValidationError:
+            job = None
+        if job is not None:
+            if job.status not in {
+                "succeeded",
+                "cancelled",
+                "failed",
+                "rejected",
+                "attention",
+            }:
+                task_instance.status = PaperlessTask.Status.STARTED
+                task_instance.save(update_fields=["status"])
+                return
+            new_status = {
+                "succeeded": PaperlessTask.Status.SUCCESS,
+                "cancelled": PaperlessTask.Status.REVOKED,
+            }.get(job.status, PaperlessTask.Status.FAILURE)
 
         task_instance.status = new_status
         task_instance.date_done = now

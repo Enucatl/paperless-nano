@@ -3,6 +3,8 @@
 import datetime
 import secrets
 from contextlib import contextmanager
+from contextlib import nullcontext
+from contextvars import ContextVar
 
 from django.contrib.auth.models import User
 from django.core.exceptions import PermissionDenied
@@ -17,6 +19,8 @@ from documents.job_state import requester_id
 from documents.job_state import wait  # noqa: F401
 from documents.models import DocumentJob
 
+server_operation = ContextVar("server_operation", default=None)
+
 
 class OperationConflict(ValueError):
     """An expired, cancelled or changed operation cannot accept this request."""
@@ -29,22 +33,22 @@ def authorize(entry: dict, user) -> None:
     policy = entry.get("policy", {})
     if actor is None or not (
         actor.is_superuser
-        or (
-            actor.has_perm(policy["permission"])
-            if "permission" in policy
-            else actor.pk in policy.get("users", [])
-        )
+        or (actor.has_perm(policy["permission"]) if "permission" in policy else False)
     ):
         raise PermissionDenied("This processor is not authorized for the operation")
 
 
 @contextmanager
-def locked_operation(job_id, key: str, user):
+def locked_operation(job_id, key: str, user, *, reconcile_only=False):
     """Serialize remote mutation with the core coordinator on shared storage."""
     from documents.job_storage import job_directory
 
     with (
-        FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0),
+        (
+            nullcontext()
+            if server_operation.get()
+            else FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0)
+        ),
         transaction.atomic(),
     ):
         job = DocumentJob.objects.select_for_update().get(pk=job_id)
@@ -52,14 +56,31 @@ def locked_operation(job_id, key: str, user):
         if entry is None or "policy" not in entry:
             raise OperationConflict("No remote invocation with this key")
         authorize(entry, user)
+        if (
+            not reconcile_only
+            and not server_operation.get()
+            and not entry.get("remote_allowed", True)
+        ):
+            raise PermissionDenied("This operation requires a server processor")
         yield job, entry
 
 
 def claim(job_id, key: str, user) -> dict:
     """Start a bounded attempt; time spent queued never consumes attempts."""
     with locked_operation(job_id, key, user) as (job, entry):
-        if job.status == DocumentJob.Status.CANCELLED:
-            raise OperationConflict("Job was cancelled")
+        if (
+            job.status
+            in {
+                DocumentJob.Status.CANCELLED,
+                DocumentJob.Status.ATTENTION,
+                DocumentJob.Status.FAILED,
+                DocumentJob.Status.REJECTED,
+            }
+            or entry.get("version") != 2
+        ):
+            raise OperationConflict(
+                "Job requires review or uses a legacy operation contract"
+            )
         if entry["status"] == "leased":
             if timezone.now() < datetime.datetime.fromisoformat(entry["lease_until"]):
                 raise OperationConflict("Operation already has an active claim")
@@ -141,6 +162,8 @@ def submit_result(job_id, key: str, user, token: str, result) -> dict:
             return {"status": entry["status"], "id": entry["id"]}
         check_claim(job, entry, user, token)
         entry.update(status="staged", result=result)
+        if server_operation.get():
+            entry["processor_location"] = "server"
         resume(job)
         return {"status": "staged", "id": entry["id"]}
 
@@ -170,6 +193,12 @@ def cancel(job_id, user) -> None:
                 entry["status"] = "cancelled"
         job.status = DocumentJob.Status.CANCELLED
         job.save(update_fields=["result", "status"])
+        from documents.models import PaperlessTask
+
+        PaperlessTask.objects.filter(task_id=str(job.pk)).update(
+            status=PaperlessTask.Status.REVOKED,
+            date_done=timezone.now(),
+        )
 
 
 def reconcile(job_id, key: str, user, result, evidence: str) -> dict:
@@ -182,7 +211,7 @@ def reconcile(job_id, key: str, user, result, evidence: str) -> dict:
         raise OperationConflict(
             "Reconciliation requires evidence of the external outcome"
         )
-    with locked_operation(job_id, key, user) as (job, entry):
+    with locked_operation(job_id, key, user, reconcile_only=True) as (job, entry):
         if entry["status"] != "unknown":
             raise OperationConflict("Only unknown effects can be reconciled")
         entry.update(
@@ -203,7 +232,13 @@ def recover_waiting() -> None:
     from documents.job_storage import job_directory
 
     for identifier in (
-        DocumentJob.objects.filter(status=DocumentJob.Status.WAITING)
+        DocumentJob.objects.filter(
+            status__in=[
+                DocumentJob.Status.WAITING,
+                DocumentJob.Status.RUNNING,
+                DocumentJob.Status.QUEUED,
+            ]
+        )
         .values_list("pk", flat=True)
         .iterator()
     ):
@@ -213,7 +248,11 @@ def recover_waiting() -> None:
                 transaction.atomic(),
             ):
                 job = DocumentJob.objects.select_for_update().get(pk=identifier)
-                if job.status != DocumentJob.Status.WAITING:
+                if job.status not in {
+                    DocumentJob.Status.WAITING,
+                    DocumentJob.Status.RUNNING,
+                    DocumentJob.Status.QUEUED,
+                }:
                     continue
                 for entry in job.result.get("invocations", {}).values():
                     if entry[
@@ -223,6 +262,7 @@ def recover_waiting() -> None:
                     ):
                         continue
                     entry["status"] = "pending" if entry["replay_safe"] else "unknown"
+                    job.status = DocumentJob.Status.WAITING
                     if not entry["replay_safe"]:
                         job.status = DocumentJob.Status.ATTENTION
                         job.error = "Expired effectful claim requires reconciliation"

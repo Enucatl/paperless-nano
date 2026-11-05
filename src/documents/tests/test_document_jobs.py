@@ -158,13 +158,15 @@ def test_timeout_retains_input_and_leaves_document_unchanged(
 
     parser.parse.side_effect = exceed_timeout
 
-    with pytest.raises(TimeoutError, match="recorded timeout"):
+    from documents.deferred_operations import OperationConflict
+
+    with pytest.raises(OperationConflict, match="Claim expired"):
         jobs.run_reprocess(job.pk)
 
     job.refresh_from_db()
     sample_doc.refresh_from_db()
-    assert job.status == DocumentJob.Status.QUEUED
-    assert job.attempts == 1
+    assert job.status == DocumentJob.Status.WAITING
+    assert job.result["invocations"]["parser.process"]["attempts"] == 1
     assert sample_doc.content == "test content"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).exists()
 
@@ -180,13 +182,13 @@ def test_three_processing_failures_stop_retries_without_deleting_input(
     for _ in range(3):
         with pytest.raises(RuntimeError, match="engine unavailable"):
             jobs.run_reprocess(job.pk)
-    with pytest.raises(jobs.RejectedResult, match="exhausted three attempts"):
+    with pytest.raises(jobs.RejectedResult, match="engine unavailable"):
         jobs.run_reprocess(job.pk)
 
     job.refresh_from_db()
     sample_doc.refresh_from_db()
     assert job.status == DocumentJob.Status.FAILED
-    assert job.attempts == 3
+    assert job.result["invocations"]["parser.process"]["attempts"] == 3
     assert parser.parse.call_count == 3
     assert sample_doc.content == "test content"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).exists()
@@ -681,3 +683,14 @@ def test_opaque_parser_failure_is_not_replayed(sample_doc, parser) -> None:
     assert job.status == DocumentJob.Status.ATTENTION
     assert job.result["invocations"]["parser.process"]["status"] == "unknown"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).exists()
+
+
+@pytest.fixture(autouse=True)
+def local_processors(monkeypatch):
+    """Drive separately claimed computation for publication recovery tests."""
+    from paperless_testing.queued import drive_processors
+
+    processor = UserFactory(is_superuser=True)
+    monkeypatch.setattr(
+        jobs, "run_reprocess", drive_processors(jobs.run_reprocess, processor)
+    )

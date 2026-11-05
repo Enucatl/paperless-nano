@@ -119,6 +119,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                                 },
                                 execute_hook,
                                 replay_safe=safe,
+                                allow_deferred=False,
                             )
 
                         plugin.invoke = hook
@@ -190,7 +191,8 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 returned_metadata = json_value(
                     dataclasses.asdict(metadata_from_json(outcome["metadata"]))
                 )
-                if "policy" in job.result.get("invocations", {}).get(key, {}):
+                entry = job.result.get("invocations", {}).get(key, {})
+                if "policy" in entry and entry.get("processor_location") != "server":
                     for name, value in inputs["metadata"].items():
                         if (
                             name not in {"title", "created", "filename", "barcodes"}
@@ -213,17 +215,7 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                         if name != "archive" or prepared_result[name]:
                             resolve_reference(directory, prepared_result[name])
 
-            from documents.job_state import RejectedResult
             from paperless.config import RemoteOCRConfig
-
-            if (
-                key not in job.result.get("invocations", {})
-                and getattr(plugin, "execution_mode", None) == "external"
-                and not (metadata.remote_ocr or RemoteOCRConfig().remote_ocr_by_default)
-            ):
-                raise RejectedResult(
-                    "Remote processing is not permitted for this document"
-                )
 
             result = invoke(
                 job,
@@ -236,6 +228,9 @@ def prepare(job: DocumentJob, task_id: str) -> None:
                 validate=validate_outcome,
                 allow_deferred=cls is not ConsumerPlugin,
                 provider=plugin,
+                remote_allowed=bool(
+                    metadata.remote_ocr or RemoteOCRConfig().remote_ocr_by_default
+                ),
             )
             if (
                 not isinstance(result, dict)
@@ -347,20 +342,11 @@ def complete_document(job: DocumentJob) -> None:
         return
     from documents.classification_operations import configured_provider
     from documents.classification_operations import provider_configuration
-    from documents.job_state import execution_policy
     from documents.operation_journal import json_value
 
     if "enrichment" not in job.result:
         deferred = None
-        if (
-            settings.CLASSIFIER_ENABLED
-            and execution_policy(
-                "metadata.classify",
-                settings.CLASSIFICATION_PROVIDER,
-                configured_provider(),
-            )
-            is not None
-        ):
+        if settings.CLASSIFIER_ENABLED:
             provider = configured_provider()
             if provider.identity is not None:
                 deferred = {
@@ -459,7 +445,7 @@ def complete_document(job: DocumentJob) -> None:
                 "paperless." + name,
                 {"document_id": identifier},
                 execute,
-                allow_deferred=name in {"workflows", "signal"},
+                allow_deferred=False,
                 validate=validate_completion,
                 replay_safe=name in {"inbox", "enrichment"}
                 or (

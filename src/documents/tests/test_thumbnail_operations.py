@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from paperless_testing.dirs import PaperlessDirs
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_thumbnail_regeneration_never_parses(
@@ -37,12 +37,25 @@ def test_thumbnail_regeneration_never_parses(
         "paperless.parsers.tesseract.RasterisedDocumentParser.get_thumbnail",
         return_value=thumbnail_webp_file,
     )
+    index = mocker.patch("documents.search.get_backend")
+    ai_index = mocker.patch("paperless_ai.indexing.llm_index_add_or_update_document")
     original = sample_doc.source_path.read_bytes()
+    content = sample_doc.content
+    modified = sample_doc.modified
+    archive = (sample_doc.archive_filename, sample_doc.archive_checksum)
     _process_document(sample_doc.pk)
+    sample_doc.refresh_from_db()
+    assert sample_doc.content == content
+    assert sample_doc.modified == modified
+    assert (sample_doc.archive_filename, sample_doc.archive_checksum) == archive
     parse.assert_not_called()
+    index.assert_not_called()
+    ai_index.assert_not_called()
     assert sample_doc.source_path.read_bytes() == original
     assert sample_doc.thumbnail_path.read_bytes() == thumbnail_webp_file.read_bytes()
-    assert not list((paperless_dirs.data_dir / "jobs").iterdir())
+    assert not [
+        path for path in (paperless_dirs.data_dir / "jobs").iterdir() if path.is_dir()
+    ]
 
 
 def test_changed_document_keeps_thumbnail(
@@ -61,7 +74,7 @@ def test_changed_document_keeps_thumbnail(
         "paperless.parsers.tesseract.RasterisedDocumentParser.get_thumbnail",
         side_effect=change_document,
     )
-    with pytest.raises(RejectedResult, match="changed during thumbnail"):
+    with pytest.raises(RejectedResult, match="changed or was deleted"):
         _process_document(sample_doc.pk)
     assert sample_doc.thumbnail_path.read_bytes() == previous
 
@@ -127,8 +140,31 @@ def test_lost_source_retains_staged_input(
         "paperless.parsers.tesseract.RasterisedDocumentParser.get_thumbnail",
         side_effect=remove_source,
     )
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(OSError, match="Original file missing"):
         _process_document(sample_doc.pk)
     inputs = list((paperless_dirs.data_dir / "jobs").glob("*/parser-*-input/*"))
     assert len(inputs) == 1
     assert inputs[0].read_bytes() == original
+
+
+@pytest.fixture(autouse=True)
+def local_processor(monkeypatch, mocker):
+    """Execute separately queued CLI work before checking rendered files."""
+    import sys
+
+    from documents import jobs
+    from documents.models import DocumentJob
+    from paperless_testing.factories import UserFactory
+    from paperless_testing.queued import drive_processors
+
+    mocker.patch("documents.jobs._dispatch")
+    mocker.patch("documents.search.get_backend")
+    processor = UserFactory(is_superuser=True)
+    original = _process_document
+
+    def completed(document_id):
+        original(document_id)
+        job = DocumentJob.objects.get(input__document_id=document_id)
+        return drive_processors(jobs.run_reprocess, processor)(job.pk)
+
+    monkeypatch.setattr(sys.modules[__name__], "_process_document", completed)

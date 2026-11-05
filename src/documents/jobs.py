@@ -69,11 +69,14 @@ def stage_reprocess(
     trigger_source: str = PaperlessTask.TriggerSource.MANUAL,
     job_id: str | None = None,
     metadata: bool = False,
+    thumbnail_only: bool = False,
 ) -> DocumentJob:
     """Snapshot a concrete document and its input before queue publication."""
     job_id = UUID(job_id) if job_id is not None else uuid4()
     # Legacy deliveries can race during admission as well as execution.
-    with FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0):
+    with FileLock(
+        job_directory(job_id).with_suffix(".lock"), timeout=0, is_singleton=True
+    ):
         existing = DocumentJob.objects.filter(pk=job_id).first()
         if existing is not None:
             if (
@@ -82,6 +85,7 @@ def stage_reprocess(
                 or existing.input.get("actor_id") != actor_id
                 or existing.input.get("metadata", False) != metadata
                 or existing.input.get("remote_ocr", False) != remote_ocr
+                or existing.input.get("thumbnail_only", False) != thumbnail_only
             ):
                 raise RejectedResult("Submission identifier belongs to another request")
             return existing
@@ -94,7 +98,7 @@ def stage_reprocess(
             status=DocumentJob.Status.STAGING,
             result={"invocation_contract": 1},
             timeout=settings.CELERY_TASK_TIME_LIMIT,
-            configuration=_configuration(),
+            configuration=_configuration(thumbnail_only=thumbnail_only),
             input={
                 "document_id": document.pk,
                 "root_id": root.pk,
@@ -102,6 +106,7 @@ def stage_reprocess(
                 "actor_id": actor_id,
                 "remote_ocr": remote_ocr,
                 "metadata": metadata,
+                "thumbnail_only": thumbnail_only,
                 "trigger_source": trigger_source,
                 "revision": _revision(document),
                 "filename": document.original_filename or document.source_path.name,
@@ -150,7 +155,9 @@ def _dispatch(job: DocumentJob) -> None:
     if job.kind == "enrich":
         from documents.enrichment_jobs import execute_enrichment
 
-        execute_enrichment.apply_async(args=[str(job.pk)], time_limit=job.timeout)
+        execute_enrichment.apply_async(
+            args=[str(job.pk)], task_id=str(job.pk), time_limit=job.timeout
+        )
         return
     if job.kind == "search":
         from documents.search_operations import run_search
@@ -179,6 +186,7 @@ def submit_reprocess(
     *,
     actor_id: int | None = None,
     remote_ocr: bool = False,
+    thumbnail_only: bool = False,
     trigger_source: str = PaperlessTask.TriggerSource.MANUAL,
 ) -> DocumentJob:
     """Durably admit work before best-effort Celery dispatch."""
@@ -186,6 +194,7 @@ def submit_reprocess(
         document_id,
         actor_id=actor_id,
         remote_ocr=remote_ocr,
+        thumbnail_only=thumbnail_only,
         trigger_source=trigger_source,
     )
 
@@ -210,7 +219,8 @@ def _prepare(job: DocumentJob) -> None:
     job.attempts += 1
     job.status = DocumentJob.Status.RUNNING
     job.updated = timezone.now()
-    configuration = _configuration()
+    thumbnail_only = job.input.get("thumbnail_only", False)
+    configuration = _configuration(thumbnail_only=thumbnail_only)
     if job.configuration and job.configuration != configuration:
         raise RejectedResult(
             "Processing configuration or provider changed before retry"
@@ -224,7 +234,11 @@ def _prepare(job: DocumentJob) -> None:
     started = job.updated
     if compute_checksum(source) != job.input["checksum"]:
         raise RejectedResult("Staged input has changed")
-    parser_class = configured_parser_class()
+    from paperless.parsers.providers import LocalThumbnailProvider
+
+    parser_class = (
+        LocalThumbnailProvider if thumbnail_only else configured_parser_class()
+    )
     with configured_parser(parser_class, configuration) as parser:
         from documents.operation_journal import invoke
 
@@ -238,16 +252,18 @@ def _prepare(job: DocumentJob) -> None:
                 configuration,
                 directory,
                 job_id=str(job.pk),
-                operation="reprocess",
+                operation="thumbnail" if thumbnail_only else "reprocess",
                 invocation_id=identifier,
-                allow_remote=job.input["remote_ocr"]
-                or RemoteOCRConfig().remote_ocr_by_default,
+                allow_remote=not thumbnail_only
+                and (
+                    job.input["remote_ocr"] or RemoteOCRConfig().remote_ocr_by_default
+                ),
             )
 
         parsed = invoke(
             job,
             "parser",
-            settings.PARSER,
+            configuration["parser"],
             {"configuration": configuration, "checksum": job.input["checksum"]},
             execute,
             replay_safe=True,
@@ -256,7 +272,7 @@ def _prepare(job: DocumentJob) -> None:
         job.refresh_from_db()
         result = {
             "invocation_contract": 1,
-            "content": parsed["text"],
+            "content": document.content if thumbnail_only else parsed["text"],
             "page_count": parsed["page_count"],
             "parser_request": job.result["parser_request"],
             "parser_result": parsed,
@@ -268,7 +284,7 @@ def _prepare(job: DocumentJob) -> None:
             ),
             "archive": None,
         }
-        if parsed["archive"]:
+        if parsed["archive"] and not thumbnail_only:
             result["archive"] = _file_result(
                 directory,
                 resolve_reference(directory, parsed["archive"]),
@@ -276,14 +292,16 @@ def _prepare(job: DocumentJob) -> None:
             )
         # Barcode reading uses the durable input too, without changing the ORM row.
         document.filename = str(source)
-        result["barcodes"] = read_barcodes_for_reprocess(document)
+        result["barcodes"] = (
+            None if thumbnail_only else read_barcodes_for_reprocess(document)
+        )
         _validate_file(directory, result["thumbnail"], "image/webp")
         if result["archive"]:
             _validate_file(directory, result["archive"], "application/pdf")
     if job.timeout and (timezone.now() - started).total_seconds() > job.timeout:
         raise TimeoutError("Reprocessing exceeded its recorded timeout")
     configuration = dict(job.configuration)
-    if _configuration() != configuration:
+    if _configuration(thumbnail_only=thumbnail_only) != configuration:
         raise RejectedResult("Processing configuration changed during execution")
     job.result = result
     job.result["progress"] = "publication"
@@ -327,7 +345,9 @@ def _apply(job: DocumentJob) -> None:
                 raise RejectedResult("Document changed before result application")
             document = _check_target(job)
             media_lock.acquire()
-            changes = {"content": job.result["content"], "content_job": job.pk}
+            changes = {"content_job": job.pk}
+            if not job.input.get("thumbnail_only"):
+                changes["content"] = job.result["content"]
             if archive:
                 destination = settings.ARCHIVE_DIR / job.result["archive_filename"]
                 validate_path_in_root(destination, settings.ARCHIVE_DIR)
@@ -354,9 +374,10 @@ def _apply(job: DocumentJob) -> None:
                     DocumentBarcode(document=document, **barcode)
                     for barcode in job.result["barcodes"]
                 )
-            changes["modified"] = timezone.now()
+            if not job.input.get("thumbnail_only"):
+                changes["modified"] = timezone.now()
             Document.objects.filter(pk=document.pk).update(**changes)
-            if settings.AUDIT_LOG_ENABLED:
+            if settings.AUDIT_LOG_ENABLED and not job.input.get("thumbnail_only"):
                 from auditlog.models import LogEntry
 
                 LogEntry.objects.log_create(
@@ -382,7 +403,11 @@ def _apply(job: DocumentJob) -> None:
                     expected_configuration=job.input["metadata_configuration"],
                 )
                 job.result["metadata_job"] = str(child.pk)
-            job.result["followup"] = ["thumbnail", "index", "cache"]
+            job.result["followup"] = (
+                ["thumbnail", "cache"]
+                if job.input.get("thumbnail_only")
+                else ["thumbnail", "index", "cache"]
+            )
             job.result["progress"] = "completion"
             job.status = DocumentJob.Status.COMMITTED
             job.updated = timezone.now()
@@ -412,21 +437,22 @@ def _finish(job: DocumentJob) -> None:
                         document.thumbnail_path, settings.THUMBNAIL_DIR
                     )
                     _copy(source, document.thumbnail_path)
-    from documents.search import get_backend
+    if not job.input.get("thumbnail_only"):
+        from documents.search import get_backend
 
-    # Read after acquiring the writer so a delayed completion cannot reindex a
-    # snapshot fetched before a newer operation finished indexing.
-    with get_backend().batch_update() as batch:
-        document = Document.objects.filter(pk=job.input["root_id"]).first()
-        if document is None:
-            batch.remove(job.input["root_id"])
-        else:
-            batch.add_or_update(document)
-    if document is not None and AIConfig().llm_index_enabled:
-        from paperless_ai.indexing import llm_index_add_or_update_document
+        # Read after acquiring the writer so a delayed completion cannot reindex a
+        # snapshot fetched before a newer operation finished indexing.
+        with get_backend().batch_update() as batch:
+            document = Document.objects.filter(pk=job.input["root_id"]).first()
+            if document is None:
+                batch.remove(job.input["root_id"])
+            else:
+                batch.add_or_update(document)
+        if document is not None and AIConfig().llm_index_enabled:
+            from paperless_ai.indexing import llm_index_add_or_update_document
 
-        if llm_index_add_or_update_document(document) is False:
-            raise RuntimeError("AI indexing is waiting for an index migration")
+            if llm_index_add_or_update_document(document) is False:
+                raise RuntimeError("AI indexing is waiting for an index migration")
     clear_document_caches(job.input["document_id"])
     if job.input["root_id"] != job.input["document_id"]:
         clear_document_caches(job.input["root_id"])
@@ -481,7 +507,7 @@ def run_reprocess(job_id: UUID | str) -> bool:
 
     directory = job_directory(job_id)
     # Keep the lock outside staging; deleting a live lock creates two owners.
-    lock = FileLock(directory.with_suffix(".lock"), timeout=0)
+    lock = FileLock(directory.with_suffix(".lock"), timeout=0, is_singleton=True)
     try:
         lock.acquire()
     except Timeout:

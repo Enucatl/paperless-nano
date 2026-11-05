@@ -24,6 +24,7 @@ def invoke(
     operation: str | None = None,
     allow_deferred: bool = True,
     provider=None,
+    remote_allowed: bool = True,
 ) -> Any:
     """Record an opaque call; an exception never proves absence of external effects.
 
@@ -50,7 +51,8 @@ def invoke(
             "error": "",
             "replay_safe": replay_safe,
             "operation": operation or key,
-            "version": 1,
+            "version": 2,
+            "remote_allowed": remote_allowed,
             "configuration": json_value(job.configuration),
             "authorization": {"actor_id": requester_id(job)},
             "dependencies": [
@@ -68,6 +70,49 @@ def invoke(
         policy = execution_policy(operation or key, identity, provider)
         if policy is not None:
             entry["policy"] = json_value(policy)
+    from documents.deferred_operations import server_operation
+
+    context = server_operation.get()
+    if (
+        context
+        and str(job.pk) == context["job_id"]
+        and key == context["key"]
+        and "policy" in entry
+    ):
+        from documents.deferred_operations import claim
+        from documents.deferred_operations import submit_result
+        from documents.job_state import ProcessorFinished
+
+        leased = claim(job.pk, key, context["user"])
+        if leased["status"] != "leased":
+            raise ProcessorFinished
+        try:
+            result = execute(entry["id"])
+        except Exception as error:
+            job.refresh_from_db()
+            failed = job.result["invocations"][key]
+            failed["status"] = (
+                ("pending" if failed["attempts"] < 3 else "failed")
+                if failed["replay_safe"]
+                else "unknown"
+            )
+            failed["error"] = str(error)
+            job.status = (
+                DocumentJob.Status.WAITING
+                if failed["status"] == "pending"
+                else DocumentJob.Status.FAILED
+                if failed["status"] == "failed"
+                else DocumentJob.Status.ATTENTION
+            )
+            job.error = str(error)
+            job.save(update_fields=["result", "status", "error"])
+            raise
+        submit_result(job.pk, key, context["user"], leased["token"], result)
+        raise ProcessorFinished
+    if context and "policy" in entry and entry["status"] != "succeeded":
+        raise NeedsAttention(
+            "Server replay reached an unexpected unfinished invocation"
+        )
     if "policy" in entry:
         if entry["status"] in {"unknown", "failed", "conflicted", "cancelled"}:
             raise NeedsAttention(
@@ -77,6 +122,15 @@ def invoke(
             wait(job, entry)
         result = entry["result"]
         try:
+            from django.contrib.auth.models import User
+
+            from documents.deferred_operations import authorize
+
+            if "processor" in entry and "reconciliation" not in entry:
+                processor = User.objects.filter(pk=entry["processor"]).first()
+                if processor is None:
+                    raise RejectedResult("Processor account no longer exists")
+                authorize(entry, processor)
             if validate is not None:
                 validate(result)
         except Exception as error:

@@ -332,3 +332,8 @@ class TestSelectionPathsAgreeWithSearch:
                 },
                 format="json",
             )
+
+
+@pytest.fixture(autouse=True)
+def process_search_queue(queued_search_processor):
+    """Make indexing completion explicit before interactive search assertions."""

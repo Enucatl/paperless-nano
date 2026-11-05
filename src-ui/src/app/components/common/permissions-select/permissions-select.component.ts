@@ -52,6 +52,13 @@ export class PermissionsSelectComponent
   @Input()
   error: string
 
+  readonly processorLabels = {
+    ParserProcessor: $localize`Parsing and OCR processor`,
+    MetadataProcessor: $localize`Metadata classification processor`,
+    SearchProcessor: $localize`Search indexing processor`,
+    IngestionProcessor: $localize`Ingestion preparation processor`,
+  }
+
   permissions: string[]
 
   form = new FormGroup({})

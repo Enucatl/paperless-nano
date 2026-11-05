@@ -106,17 +106,16 @@ def test_overlong_preparation_retains_outputs_without_publishing(
         )
 
     parser.parse.side_effect = exceed_timeout
-    with pytest.raises(TimeoutError, match="recorded timeout"):
+    from documents.consumer import ConsumerError
+
+    with pytest.raises(ConsumerError, match="Claim expired"):
         ingestion_jobs.run_consumption(job.pk)
     job.refresh_from_db()
-    assert job.status == "running"
-    assert job.result["phase"] == "preparing"
-    assert "prepared" in job.result
+    assert job.status == "waiting"
+    assert job.result["invocations"]["parser.process"]["status"] == "leased"
     assert not Document.objects.exists()
     assert incoming.original_file.exists()
     mocker.stop(clock)
-    result = ingestion_jobs.run_consumption(job.pk)
-    assert Document.objects.get(pk=result["document_id"]).source_path.exists()
     parser.parse.assert_called_once()
 
 
@@ -305,16 +304,27 @@ def test_reconciliation_uses_stable_invocation_without_repeating_effect(
             calls.append(self.invocation_id)
             raise WorkerStopped
 
-        def reconcile(self, invocation_id):
-            job = DocumentJob.objects.get(pk=self.input_doc.job_id)
-            entry = job.result["invocations"]["prepare:0"]
-            assert invocation_id == entry["id"]
-            return {**entry["input"], "stopped": {"reason": "externally reconciled"}}
-
     mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     job = ingestion_jobs.stage_consumption(incoming)
     with pytest.raises(WorkerStopped):
         ingestion_jobs.run_consumption(job.pk)
+    from datetime import timedelta
+    from django.utils import timezone
+    from documents.deferred_operations import recover_waiting, reconcile
+    from paperless_testing.factories import UserFactory
+
+    job.refresh_from_db()
+    entry = job.result["invocations"]["prepare:0"]
+    entry["lease_until"] = (timezone.now() - timedelta(seconds=1)).isoformat()
+    job.save(update_fields=["result"])
+    recover_waiting()
+    reconcile(
+        job.pk,
+        "prepare:0",
+        UserFactory(is_superuser=True),
+        {**entry["input"], "stopped": {"reason": "externally reconciled"}},
+        "Processor logs confirm the completed operation",
+    )
     result = ingestion_jobs.run_consumption(job.pk)
     assert result == {"reason": "externally reconciled"}
     assert len(calls) == 1
@@ -335,7 +345,7 @@ def test_result_recording_crash_keeps_opaque_effect_unknown(incoming, mocker):
     def stop_before_result(instance, *args, **kwargs):
         if (
             instance.result.get("invocations", {}).get("prepare:0", {}).get("status")
-            == "succeeded"
+            == "staged"
         ):
             raise WorkerStopped
         return save(instance, *args, **kwargs)
@@ -562,7 +572,6 @@ def test_ingestion_implementations_do_not_import_task_adapters():
         "documents.tasks",
         "documents.ingestion_jobs",
         "documents.jobs",
-        "documents.deferred_operations",
     }
     for module in (
         ingestion,
@@ -587,15 +596,11 @@ def test_ingestion_implementations_do_not_import_task_adapters():
                 )
 
 
-def test_remote_policy_cannot_skip_core_completion(incoming, parser, settings):
+def test_queued_operations_cannot_skip_core_completion(incoming, parser, settings):
     """Core metadata writes still run when a remote policy targets their names."""
     from documents.models import Tag
 
     inbox = Tag.objects.create(name="Core inbox", is_inbox_tag=True)
-    settings.DEFERRED_OPERATIONS = {
-        f"complete:{name}": {"users": []}
-        for name in ("inbox", "correspondent", "type", "tags", "storage", "version")
-    }
     job = ingestion_jobs.stage_consumption(incoming)
     result = ingestion_jobs.run_consumption(job.pk)
     document = Document.objects.get(pk=result["document_id"])
@@ -615,7 +620,6 @@ def test_deferred_metadata_keeps_import_complete_and_submits_once(
 
     settings.CLASSIFIER_ENABLED = True
     settings.CLASSIFICATION_PROVIDER = "tests.RemoteMetadata"
-    settings.DEFERRED_OPERATIONS = {"metadata.classify": {"users": []}}
     provider = SimpleNamespace(identity=("remote-metadata", "1"), configuration={})
     mocker.patch(
         "documents.classification_operations.configured_provider", return_value=provider
@@ -660,7 +664,10 @@ def test_remote_plugin_cannot_change_protected_metadata(
     from paperless_testing.factories import UserFactory
 
     processor = UserFactory()
-    settings.DEFERRED_OPERATIONS = {"prepare:0": {"users": [processor.pk]}}
+    from django.contrib.auth.models import Permission
+
+    processor.user_permissions.add(Permission.objects.get(codename="process_ingestion"))
+    settings.REMOTE_OCR_MODE = "always"
     mocker.patch("documents.jobs._dispatch")
     job = ingestion_jobs.stage_consumption(incoming)
     with pytest.raises(Ignore):
@@ -677,29 +684,18 @@ def test_remote_plugin_cannot_change_protected_metadata(
     assert job.status == DocumentJob.Status.REJECTED
 
 
-def test_remote_post_consume_receipt_updates_legacy_marker(incoming, settings, mocker):
-    """A completed remote hook records the same completion marker as a local hook."""
-    from documents.deferred_operations import PendingOperation
-    from documents.deferred_operations import claim
-    from documents.deferred_operations import submit_result
-    from paperless_testing.factories import UserFactory
-
-    processor = UserFactory()
-    settings.POST_CONSUME_SCRIPT = "/remote/post-consume"
-    settings.DEFERRED_OPERATIONS = {"complete:post_consume": {"users": [processor.pk]}}
-    mocker.patch("documents.jobs._dispatch")
+def test_post_consume_hook_stays_core_owned(incoming, settings, mocker):
+    """A hook executes locally and durably records its completion."""
+    settings.POST_CONSUME_SCRIPT = "/local/post-consume"
     job = ingestion_jobs.stage_consumption(incoming)
     job.result["post_consume"] = "pending"
     job.save(update_fields=["result"])
     callback = Mock()
-    with pytest.raises(PendingOperation):
-        ingestion_state.run_post_consume(str(job.pk), callback)
-    lease = claim(job.pk, "complete:post_consume", processor)
-    submit_result(job.pk, "complete:post_consume", processor, lease["token"], None)
+    ingestion_state.run_post_consume(str(job.pk), callback)
     ingestion_state.run_post_consume(str(job.pk), callback)
     job.refresh_from_db()
     assert job.result["post_consume"] == "done"
-    callback.assert_not_called()
+    callback.assert_called_once()
 
 
 def test_external_plugin_declaration_keeps_cleanup_local(incoming, settings, mocker):
@@ -713,7 +709,6 @@ def test_external_plugin_declaration_keeps_cleanup_local(incoming, settings, moc
     cleaned = Mock()
 
     class Plugin(AlwaysRunPluginMixin, NoSetupPluginMixin):
-        execution_mode = "external"
         replay_safe = True
 
         def run(self):
@@ -722,7 +717,6 @@ def test_external_plugin_declaration_keeps_cleanup_local(incoming, settings, moc
         def cleanup(self):
             cleaned()
 
-    settings.DEFERRED_OPERATIONS = {}
     mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     mocker.patch("documents.jobs._dispatch")
     processor = UserFactory()
@@ -749,20 +743,40 @@ def test_external_plugin_declaration_keeps_cleanup_local(incoming, settings, moc
 
 def test_external_plugin_cannot_export_local_only_input(incoming, settings, mocker):
     """Processor access does not override the requester's remote restriction."""
-    from documents.job_state import RejectedResult
+    from django.core.exceptions import PermissionDenied
+    from documents.deferred_operations import claim
+    from paperless_testing.factories import UserFactory
 
     class Plugin(AlwaysRunPluginMixin, NoSetupPluginMixin, NoCleanupPluginMixin):
-        execution_mode = "external"
-
         def run(self):
             pytest.fail("Must not silently fall back to local execution")
 
     settings.REMOTE_OCR_MODE = "workflow_only"
-    settings.DEFERRED_OPERATIONS = {}
     mocker.patch("documents.ingestion.consumption_plugins", return_value=[Plugin])
     job = ingestion_jobs.stage_consumption(incoming)
-    with pytest.raises(RejectedResult, match="Remote processing"):
+    with pytest.raises(Ignore):
         ingestion_jobs.run_consumption(job.pk)
+    with pytest.raises(PermissionDenied):
+        claim(job.pk, "prepare:0", UserFactory(is_superuser=True))
     job.refresh_from_db()
-    assert job.status != DocumentJob.Status.WAITING
-    assert "prepare:0" not in job.result.get("invocations", {})
+    assert job.status == DocumentJob.Status.WAITING
+
+
+@pytest.fixture(autouse=True)
+def local_processors(request, monkeypatch):
+    """Drive queued server work for local lifecycle and publication assertions."""
+    if "remote" in request.node.name or "external_plugin" in request.node.name:
+        return
+    from documents import jobs
+    from paperless_testing.factories import UserFactory
+    from paperless_testing.queued import drive_processors
+
+    processor = UserFactory(is_superuser=True)
+    monkeypatch.setattr(
+        jobs, "run_reprocess", drive_processors(jobs.run_reprocess, processor)
+    )
+    monkeypatch.setattr(
+        ingestion_jobs,
+        "run_consumption",
+        drive_processors(ingestion_jobs.run_consumption, processor),
+    )

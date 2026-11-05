@@ -10,6 +10,7 @@
       <pngx-bs-icon class="ms-1" width=".8em" height=".8em" name="box-arrow-up-right"></pngx-bs-icon>
     </ng-template>
   </label>
+  <p class="small text-muted" i18n>Processor permissions allow claiming queued work and submitting results. They do not grant document editing access. Remote processing restrictions still apply.</p>
   <ul class="list-group">
     <li class="list-group-item d-flex">
       <div class="col-3" i18n>Type</div>
@@ -22,7 +23,7 @@
     </li>
     @for (type of allowedTypes; track type) {
       <li class="list-group-item d-flex" [formGroupName]="type">
-        <div class="col-3">{{type}}:</div>
+        <div class="col-3">{{processorLabels[type] ?? type}}:</div>
         <div class="col form-check form-check-inline form-switch" [ngbPopover]="inheritedWarning" [disablePopover]="!isInherited(type)" placement="left" triggers="mouseenter:mouseleave">
           <input type="checkbox" class="form-check-input" id="{{type}}_all" (change)="toggleAll($event, type)" [checked]="typesWithAllActions.has(type) || isInherited(type)" [attr.disabled]="disabled || isInherited(type) ? true : null">
           <label class="form-check-label visually-hidden" for="{{type}}_all" i18n>All</label>

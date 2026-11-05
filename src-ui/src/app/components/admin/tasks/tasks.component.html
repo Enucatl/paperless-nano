@@ -176,6 +176,10 @@
             </td>
             <td class="overflow-auto name-col">
               <div>{{ taskDisplayName(task) }}</div>
+              @if (task.operation; as operation) {
+                <div class="small">{{operation.name}}: {{operationStates[operation.status]?.label ?? operation.status}}</div>
+                <div class="small text-muted">{{operationStates[operation.status]?.help}}</div>
+              }
               <div class="small text-muted">
                 @if (taskShowsSeparateTypeLabel(task)) {
                   <span class="me-2">{{ task.task_type_display }}</span>

@@ -470,3 +470,44 @@ class TestTaskRevokedHandler:
         request.id = "nonexistent-id"
 
         task_revoked_handler(request=request)  # must not raise
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "name,kind,task_type",
+    [
+        ("documents.search_operations.run_search", "search", "search_maintenance"),
+        ("documents.enrichment_jobs.execute_enrichment", "enrich", "metadata_classify"),
+    ],
+)
+def test_provider_task_tracks_waiting_until_durable_completion(name, kind, task_type):
+    """A coordinator returning while waiting must not complete its Tasks row."""
+    from documents.models import DocumentJob
+
+    actor = UserFactory()
+    job = DocumentJob.objects.create(
+        kind=kind,
+        timeout=60,
+        status="waiting",
+        input={"document_id": 123, "actor_id": actor.pk},
+    )
+    task_id = str(job.pk)
+    before_task_publish_handler(
+        headers={"task": name, "id": task_id}, body=([task_id], {}, {})
+    )
+    row = PaperlessTask.objects.get(task_id=task_id)
+    assert row.task_type == task_type
+    assert row.owner_id == actor.pk
+    assert row.related_document_ids == [123]
+    task = mock.Mock()
+    task.name = name
+    task_postrun_handler(task_id=task_id, task=task, state="SUCCESS")
+    row.refresh_from_db()
+    assert row.status == PaperlessTask.Status.STARTED
+    assert row.date_done is None
+    job.status = "succeeded"
+    job.save(update_fields=["status"])
+    task_postrun_handler(task_id=task_id, task=task, state="SUCCESS")
+    row.refresh_from_db()
+    assert row.status == PaperlessTask.Status.SUCCESS
+    assert row.date_done is not None

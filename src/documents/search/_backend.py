@@ -111,14 +111,8 @@ class SearchService:
     def batch_update(self) -> WriteBatch:
         """Apply a batch atomically; never hide partial or failed batch writes."""
         from documents.search_operations import DeferredSearchBatch
-        from documents.search_operations import should_defer
 
-        context = (
-            DeferredSearchBatch(self.provider)
-            if should_defer(self.provider, "write")
-            else self.provider.batch_update()
-        )
-        return WriteBatch(context)
+        return WriteBatch(DeferredSearchBatch(self.provider))
 
     def add_or_update(self, document: Document) -> None:
         """Defer only failures the provider explicitly declares safe to retry."""
@@ -282,21 +276,17 @@ class SearchService:
                 _DocumentViewerStream(documents, chunk_size=1000)
             )
         )
-        from documents.search_operations import should_defer
         from documents.search_operations import submit_search
 
-        if should_defer(self.provider, "rebuild"):
-            # shortcut: rebuild snapshots use memory; stage JSONL when indexes exceed worker RAM.
-            submit_search(
-                self.provider,
-                "rebuild",
-                {
-                    "records": list(records),
-                    "writer_heap_bytes": writer_heap_bytes,
-                },
-            )
-            return
-        self.provider.rebuild(records, writer_heap_bytes=writer_heap_bytes)
+        # shortcut: rebuild snapshots use memory; stage JSONL when indexes exceed worker RAM.
+        submit_search(
+            self.provider,
+            "rebuild",
+            {
+                "records": list(records),
+                "writer_heap_bytes": writer_heap_bytes,
+            },
+        )
 
     def last_modified(self) -> datetime | None:
         """Return provider health/write time without assuming an index directory."""
@@ -304,13 +294,9 @@ class SearchService:
 
     def optimize(self) -> None:
         """Invoke the selected provider's maintenance operation."""
-        from documents.search_operations import should_defer
         from documents.search_operations import submit_search
 
-        if should_defer(self.provider, "optimize"):
-            submit_search(self.provider, "optimize", {})
-            return
-        return self.provider.optimize()
+        submit_search(self.provider, "optimize", {})
 
 
 class TantivyBackend(SearchService):
@@ -378,12 +364,8 @@ def wipe_index() -> None:
     reset_backend()
     provider = import_string(settings.SEARCH_PROVIDER)()
     try:
-        from documents.search_operations import should_defer
         from documents.search_operations import submit_search
 
-        if should_defer(provider, "wipe"):
-            submit_search(provider, "wipe", {})
-        else:
-            provider.wipe()
+        submit_search(provider, "wipe", {})
     finally:
         provider.close()

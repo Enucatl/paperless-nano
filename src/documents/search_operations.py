@@ -11,7 +11,6 @@ from filelock import FileLock
 from filelock import Timeout
 
 from documents.job_state import PendingOperation
-from documents.job_state import execution_policy
 from documents.models import DocumentJob
 from documents.operation_journal import NeedsAttention
 from documents.operation_journal import invoke
@@ -26,20 +25,7 @@ def provider_snapshot(provider) -> dict:
             "implementation": settings.SEARCH_PROVIDER,
             "identity": getattr(provider, "identity", settings.SEARCH_PROVIDER),
             "configuration": getattr(provider, "configuration", {}),
-            **(
-                {"execution_mode": provider.execution_mode}
-                if hasattr(provider, "execution_mode")
-                else {}
-            ),
         }
-    )
-
-
-def should_defer(provider, operation: str) -> bool:
-    """Select asynchronous maintenance without changing interactive reads."""
-    return (
-        execution_policy(f"search.{operation}", settings.SEARCH_PROVIDER, provider)
-        is not None
     )
 
 
@@ -73,7 +59,9 @@ def submit_search(provider, operation: str, inputs: dict) -> DocumentJob:
     def dispatch() -> None:
         """Leave broker failures recoverable from the journal."""
         try:
-            run_search.delay(str(job.pk))
+            run_search.apply_async(
+                args=[str(job.pk)], task_id=str(job.pk), time_limit=job.timeout
+            )
         except Exception:
             logging.getLogger("paperless.jobs").exception("Search dispatch failed")
 
@@ -153,7 +141,9 @@ def run_search(job_id: str) -> None:
     from documents.search import get_backend
 
     try:
-        with FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0):
+        with FileLock(
+            job_directory(job_id).with_suffix(".lock"), timeout=0, is_singleton=True
+        ):
             job = DocumentJob.objects.get(pk=job_id)
             if job.status in {
                 DocumentJob.Status.SUCCEEDED,
@@ -169,11 +159,6 @@ def run_search(job_id: str) -> None:
                 def validate(result) -> None:
                     """Reject changed implementations and malformed completion receipts."""
                     current = provider_snapshot(provider)
-                    if (
-                        "execution_mode" not in job.configuration
-                        and "maintenance" in job.result.get("invocations", {})
-                    ):
-                        current.pop("execution_mode", None)
                     if result is not None or current != job.configuration:
                         raise NeedsAttention(
                             "Search provider configuration or result changed"

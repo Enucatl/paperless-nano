@@ -75,3 +75,8 @@ class TestUnterminatedBracketReturnsA400:
             "/api/documents/?query=created:[2020 to 2021]",
         )
         assert response.status_code == status.HTTP_200_OK
+
+
+@pytest.fixture(autouse=True)
+def process_search_queue(queued_search_processor):
+    """Make indexing completion explicit before interactive search assertions."""

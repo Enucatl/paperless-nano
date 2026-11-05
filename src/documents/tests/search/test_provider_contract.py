@@ -349,13 +349,17 @@ sys.meta_path.insert(0, RejectNative())
 import django
 django.setup()
 from documents.search import get_backend, needs_rebuild, wipe_index
+from django.core.management import call_command
+call_command("migrate", verbosity=0)
+from unittest.mock import patch
 from documents.management.commands.document_index import Command
 from documents.tasks import index_optimize
 provider = get_backend()
 assert provider.last_modified() is None
 assert needs_rebuild()
-wipe_index()
-index_optimize()
+with patch("documents.search_operations.run_search.apply_async"):
+    wipe_index()
+    index_optimize()
 assert 'tantivy' not in sys.modules
 """
     env = {
@@ -549,3 +553,8 @@ def test_provider_cache_uses_only_declared_configuration(replacement, settings, 
     assert get_backend() is not first
     assert first.provider.closed
     assert factory.call_count == 2
+
+
+@pytest.fixture(autouse=True)
+def process_search_queue(queued_search_processor):
+    """Exercise provider writes through claim, submission and validation."""

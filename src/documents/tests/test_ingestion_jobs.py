@@ -169,7 +169,7 @@ def test_changed_execution_configuration_retains_input_without_publication(
         settings, "TIKA_ENDPOINT", "http://changed.invalid"
     )
 
-    with pytest.raises(RejectedResult, match="configuration changed"):
+    with pytest.raises(ConsumerError, match="configuration or provider changed"):
         ingestion_jobs.run_consumption(job.pk)
 
     job.refresh_from_db()
@@ -519,3 +519,21 @@ def test_native_failure_errback_is_not_dispatched_on_redelivery(
     job.refresh_from_db()
     assert job.status == DocumentJob.Status.ATTENTION
     assert job.result["delivery"] == "failure-done"
+
+
+@pytest.fixture(autouse=True)
+def local_processors(request, monkeypatch):
+    """Drive queued server work for local lifecycle and publication assertions."""
+    from documents import jobs
+    from paperless_testing.factories import UserFactory
+    from paperless_testing.queued import drive_processors
+
+    processor = UserFactory(is_superuser=True)
+    monkeypatch.setattr(
+        jobs, "run_reprocess", drive_processors(jobs.run_reprocess, processor)
+    )
+    monkeypatch.setattr(
+        ingestion_jobs,
+        "run_consumption",
+        drive_processors(ingestion_jobs.run_consumption, processor),
+    )

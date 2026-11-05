@@ -95,7 +95,10 @@ MODEL_FILE = get_path_from_env(
     DATA_DIR / "classification_model.pickle",
 )
 
-DEFERRED_OPERATIONS = get_json_from_env("PAPERLESS_DEFERRED_OPERATIONS", {}, dict)
+if "PAPERLESS_DEFERRED_OPERATIONS" in os.environ:
+    raise ImproperlyConfigured(
+        "PAPERLESS_DEFERRED_OPERATIONS is obsolete; drain or reconcile legacy jobs and configure processor capability grants."
+    )
 
 CLASSIFICATION_PROVIDER = os.getenv("PAPERLESS_CLASSIFICATION_PROVIDER", "")
 CLASSIFIER_ENABLED = get_bool_from_env("PAPERLESS_CLASSIFIER_ENABLED", "YES")

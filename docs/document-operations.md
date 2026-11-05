@@ -1902,34 +1902,19 @@ worker delivers it. No new generic workflow or plugin registry is introduced.
 
 ### Durable execution and processor API
 
-Providers declare `execution_mode = "local"` (the default when omitted) or
-`execution_mode = "external"`. External execution uses the durable coordinator;
-provider computation methods remain synchronous and reusable on the processor.
-There is no operation-name routing map or numeric user-ID configuration to set
-up for new providers. For example, an installed provider module can reuse an
-existing implementation:
+Finite provider work uses one durable queued lifecycle: the coordinator records an
+invocation and releases its worker; an eligible processor claims it, computes a
+result, and submits it for core validation. This applies to parsing, auxiliary
+thumbnails, classification, search maintenance and ingestion plugin preparation.
+Server processors use local files without an HTTP round trip; workstation
+processors use the authenticated API below. Placement is a deployment and
+processor eligibility decision.
 
-```python
-from paperless.parsers.providers import PlainTextProvider
-
-class WorkstationTextProvider(PlainTextProvider):
-    execution_mode = "external"
-```
-
-Select it with `PAPERLESS_PARSER=my_providers.WorkstationTextProvider`. An OCR
-provider follows the same declaration alongside its existing `process`,
-configuration and selection methods. Default parser dispatch also honors the
-selected engine's declaration. Set `execution_mode = "local"` to execute through
-the existing local journal and validators. External parsing still requires the
-original request to allow remote processing; it never falls back to local work
-when remote processing is prohibited or a workstation is offline.
-
-Classification providers selected with `PAPERLESS_CLASSIFICATION_PROVIDER`,
-search providers selected with `PAPERLESS_SEARCH_PROVIDER`, and ingestion plugin
-classes use the same attribute. It applies to durable metadata inference,
-search write/rebuild/optimize/wipe, and finite ingestion plugin execution.
-Interactive queries/suggestions, plugin cleanup, and service lifetime methods
-keep their synchronous contracts.
+Interactive queries and suggestions, provider construction, plugin cleanup,
+publication and coordinator bookkeeping retain their existing owners.
+Pre-consume scripts, consumption-started signals, completion workflows,
+completion signals and post-consume scripts remain core-owned journaled hooks.
+They cannot be claimed as generic processor operations.
 
 Create a regular service account in Users & Groups and grant its group the
 **Process** permission for the required processor capability:
@@ -1949,6 +1934,31 @@ its declared inputs from `files/` with `X-Operation-Token`, upload private outpu
 to `files/` with that token, then POST `token` and `result` to `result/`. The
 processor uses the returned invocation identity, configuration and inputs with
 its synchronous provider implementation. No new processor client is included.
+
+For server-side processing, create an active capability account and supervise
+repeated executions of the management command, selecting the operations and
+provider identities that this deployment supports:
+
+```sh
+python manage.py document_processor --user server-processor \
+  --operation parser.process --operation parser.thumbnail \
+  --provider '<retained provider identity>'
+```
+
+`document_thumbnails` now queues thumbnail-only jobs, preserving document content
+and archives. Classifier-backed `document_retagger` queues metadata jobs with its
+selected fields, overwrite policy and matching-rule snapshot, and reports the
+queued count. Follow completion in Tasks. Its interactive `--suggest` mode and
+rule-only processing without an active classifier retain their existing behavior.
+
+The command consumes one snapshot of pending work and exits. Configure periodic
+execution in the deployment; a coordinator worker alone does not compute queued
+provider work. Include metadata, search and ingestion preparation operations and
+their provider identities where this server should process them. Work remains
+waiting while no eligible processor runs; there is no automatic fallback.
+Search index changes are asynchronous: document edits become searchable after
+the queued index operation completes. Management commands that perform search
+maintenance now require access to the migrated application database.
 
 Policies are retained with each accepted invocation. Provider identity, effective
 configuration, input references, requester, successful dependencies, attempt token
@@ -1994,29 +2004,24 @@ submit fresh work after reviewing the change. Keep the database and private
 
 ### Migration from operation/user-ID configuration
 
-The deprecated setting remains a compatibility fallback for providers that do
-not declare `execution_mode`:
+The operation-name/user-ID routing setting `PAPERLESS_DEFERRED_OPERATIONS` is
+obsolete. Remove it from deployment configuration before starting the upgraded
+application. Remove provider `execution_mode` declarations as well; these no
+longer select execution placement.
 
-```ini
-PAPERLESS_DEFERRED_OPERATIONS={"parser.process":{"users":[12]}}
-```
-
-To migrate, install/select a provider declaring `execution_mode = "external"`,
-grant the workstation account the corresponding Process permission, and remove
-the legacy environment mapping. Explicit local/external declarations take
-precedence over that mapping for new invocations. The migration adds permission
-records without rewriting existing jobs, tokens, inputs, results or grants.
-
-Pending and leased invocations retain their recorded policy, including legacy
-user-ID grants. New capability grants do not authorize those legacy jobs; their
-original listed accounts (or an administrator) must finish them. Keep their
-provider/model and computation configuration available until they finish, or
-cancel and submit fresh work. Already recorded local invocations remain local.
-Changed provider snapshots produce a visible conflict, never silent rerouting.
+Before upgrading, stop admission of new work and drain pending jobs with the old
+version. Preserve the database and private job storage together. Do not assume
+that stopping a processor means its external effects did not happen: leased or
+uncertain operations must be reconciled with evidence, or explicitly cancelled
+before fresh work is admitted. Cancellation does not undo external effects.
+The migration preserves completed and cancelled jobs and marks other legacy jobs
+as needing attention. Review retained outcomes, reconcile uncertain effects, then
+cancel and submit fresh work as appropriate; it does not silently route legacy
+invocations to a new processor.
 
 Removing a Process permission or group membership takes effect on the next
 claim, file transfer, or result submission, including an identical retry of an
-already submitted result. Account deactivation blocks legacy grants too.
+already submitted result. Account deactivation also blocks processor access.
 Revocation does not erase a lease or undo a previously accepted result. A revoked
 processor cannot use its token; pure work can be reclaimed by an authorized
 processor after expiry, while uncertain effects require reconciliation.
@@ -2032,8 +2037,8 @@ selected engine identifies itself through the same declaration; core does not
 recognize its Python module to infer replay safety or remote access. Missing
 replay declarations are conservative. Legacy parser construction, engine dispatch
 and mail configuration overrides live inside the built-in implementation.
-Auxiliary thumbnail generation has an explicit implementation owner and retains
-its file checks.
+Auxiliary thumbnail generation uses its own queued invocation and retains its
+file checks.
 
 Classification providers expose an implementation/model identity and optional
 JSON configuration. `current_identity` can report current activation without
@@ -2072,3 +2077,23 @@ were retained.
 The full suite, PostgreSQL execution, production deployment and live workstation
 integration were not run for these changes. Offline waiting and recovery were
 simulated with persisted jobs, expired claims, repeat deliveries and stale results.
+
+### Queued lifecycle verification (#42)
+
+The expanded backend selection passed 455 tests with one skip; its remaining
+workflow-index test passed after its fixture was updated to drive the real queued
+index operation. Frontend checks passed 64 tests and TypeScript compilation.
+Affected runtime Ruff checks, formatting and migration consistency checks passed.
+Tests ran in disposable Docker containers with no retained test volumes.
+
+The full repository suite, production performance and live workstation integration
+were not run. Deployments must arrange eligible processor execution; unfinished
+legacy jobs require review rather than automatic replay.
+
+The follow-up correctness and simplicity review assumed concurrent server workers
+sharing job storage. It fixed processor sweeps aborting on lock contention,
+validation conflicts being reset to waiting, and expired claims left in queued
+jobs after a server crash. Tasks now fetch operation journals once per page.
+Thumbnail-only jobs preserve the modified timestamp and skip unrelated search/AI
+indexing. The review regression selection passed 106 tests in disposable Docker;
+affected-file lint and formatting also passed.

@@ -131,11 +131,7 @@ def provider_configuration() -> tuple:
         settings.CLASSIFIER_ENABLED,
         configuration,
     )
-    return (
-        (*snapshot, provider.execution_mode)
-        if hasattr(provider, "execution_mode")
-        else snapshot
-    )
+    return snapshot
 
 
 def active_provider_identity() -> tuple[str, str] | None:

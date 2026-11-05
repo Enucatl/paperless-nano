@@ -182,6 +182,7 @@ def run_post_consume(job_id: str, callback: Callable[[], None]) -> None:
             {"script": settings.POST_CONSUME_SCRIPT},
             execute,
             validate=validate_receipt,
+            allow_deferred=False,
         )
         job.refresh_from_db()
         job.result["post_consume"] = "done"

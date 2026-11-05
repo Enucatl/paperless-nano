@@ -275,3 +275,8 @@ class TestGlobalSearchEnforcesTheCapToo:
             {"query": "a" * _MAX_QUERY_LENGTH},
         )
         assert response.status_code == status.HTTP_200_OK
+
+
+@pytest.fixture(autouse=True)
+def process_search_queue(queued_search_processor):
+    """Make indexing completion explicit before interactive search assertions."""

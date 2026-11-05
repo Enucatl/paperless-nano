@@ -65,3 +65,26 @@ def searchable_document(_search_index: None) -> "Document":
     doc = DocumentFactory.create(title="quarterly invoice", content="acme corp")
     get_backend().add_or_update(doc)
     return doc
+
+
+@pytest.fixture
+def queued_search_processor(monkeypatch):
+    """Finish real queued maintenance before legacy search-result assertions."""
+    from unittest.mock import Mock
+    from documents import search_operations
+    from paperless_testing.factories import UserFactory
+    from paperless_testing.queued import drive_processors
+
+    submit = search_operations.submit_search
+    processor = None
+    monkeypatch.setattr(search_operations.run_search, "apply_async", Mock())
+
+    def completed(provider, operation, inputs):
+        nonlocal processor
+        if processor is None:
+            processor = UserFactory(is_superuser=True)
+        job = submit(provider, operation, inputs)
+        drive_processors(search_operations.run_search, processor)(job.pk)
+        return job
+
+    monkeypatch.setattr(search_operations, "submit_search", completed)

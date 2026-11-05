@@ -2472,6 +2472,41 @@ class UiSettingsViewSerializer(serializers.ModelSerializer[UiSettings]):
 class TaskSerializerV10(OwnedObjectSerializer):
     """Task serializer for API v10+ using new field names."""
 
+    operation = serializers.SerializerMethodField()
+
+    def get_operation(self, obj):
+        """Expose the current finite operation without claim credentials."""
+        from uuid import UUID
+
+        from documents.models import DocumentJob
+
+        if not hasattr(self, "_operation_jobs"):
+            tasks = (
+                self.parent.instance
+                if isinstance(self.parent, serializers.ListSerializer)
+                else [obj]
+            )
+            identifiers = []
+            for task in tasks:
+                try:
+                    identifiers.append(UUID(str(task.task_id)))
+                except ValueError:
+                    continue
+            self._operation_jobs = {
+                str(job.pk): job
+                for job in DocumentJob.objects.filter(pk__in=identifiers).only(
+                    "id", "result"
+                )
+            }
+        job = self._operation_jobs.get(str(obj.task_id))
+        if job is None:
+            return None
+        entries = list(job.result.get("invocations", {}).values())
+        for entry in reversed(entries):
+            if "policy" in entry:
+                return {"name": entry["operation"], "status": entry["status"]}
+        return None
+
     related_document_ids = serializers.ListField(
         child=serializers.IntegerField(),
         read_only=True,
@@ -2492,6 +2527,7 @@ class TaskSerializerV10(OwnedObjectSerializer):
     class Meta:
         model = PaperlessTask
         fields = (
+            "operation",
             "id",
             "task_id",
             "task_type",

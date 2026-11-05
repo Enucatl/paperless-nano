@@ -238,6 +238,22 @@ describe('TasksComponent', () => {
     flushTaskLists(25, count)
   }
 
+  it.each([
+    ['pending', 'Waiting for processor', 'Start an eligible processor'],
+    ['leased', 'Processing', 'A processor is working'],
+    ['staged', 'Checking result', 'validating the submitted result'],
+    ['unknown', 'Needs review', 'reconcile the operation'],
+    ['conflicted', 'Needs review', 'Paperless rejected the result'],
+  ])('shows the operation lifecycle for %s', (status, label, help) => {
+    component.pagedTasks.set([
+      { ...tasks[0], operation: { name: 'parser.process', status } },
+    ])
+    fixture.detectChanges()
+    expect(fixture.nativeElement.textContent).toContain('parser.process')
+    expect(fixture.nativeElement.textContent).toContain(label)
+    expect(fixture.nativeElement.textContent).toContain(help)
+  })
+
   it('should display task sections with counts', () => {
     expect(component.selectedSection).toBe(TaskSection.All)
     expect(component.selectedTaskType).toBeNull()

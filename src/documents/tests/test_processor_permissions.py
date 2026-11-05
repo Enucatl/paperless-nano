@@ -1,6 +1,5 @@
 """Processor capabilities remain separate from routing and requester authority."""
 
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -26,7 +25,6 @@ pytestmark = [
 
 def test_group_revocation_blocks_every_processor_endpoint(settings, mocker):
     """Even an existing claim and cached user permissions cannot bypass revocation."""
-    settings.DEFERRED_OPERATIONS = {}
     mocker.patch("documents.jobs._dispatch")
     user = UserFactory()
     group = Group.objects.create(name="OCR workstation")
@@ -45,7 +43,6 @@ def test_group_revocation_blocks_every_processor_endpoint(settings, mocker):
             "parser:1",
             inputs,
             Mock(),
-            provider=SimpleNamespace(execution_mode="external"),
         )
     client = APIClient()
     client.force_authenticate(user)
@@ -89,9 +86,7 @@ def test_grants_are_capability_scoped(capability):
     user = UserFactory()
     user.user_permissions.add(Permission.objects.get(codename=f"process_{capability}"))
     for other in ("parser", "metadata", "search", "ingestion"):
-        policy = execution_policy(
-            f"{other}.run", "provider", SimpleNamespace(execution_mode="external")
-        )
+        policy = execution_policy(f"{other}.run", "provider")
         if other == capability:
             operations.authorize({"policy": policy}, user)
         else:
@@ -99,80 +94,55 @@ def test_grants_are_capability_scoped(capability):
                 operations.authorize({"policy": policy}, user)
 
 
-@pytest.mark.parametrize("leased", [False, True])
-def test_legacy_policy_survives_configuration_migration(settings, mocker, leased):
-    """Permission grants and changed config cannot widen a retained user-ID grant."""
-    mocker.patch("documents.jobs._dispatch")
-    original, newcomer = UserFactory(), UserFactory()
-    settings.DEFERRED_OPERATIONS = {"parser.process": {"users": [original.pk]}}
-    job = DocumentJob.objects.create(timeout=60)
-    with pytest.raises(operations.PendingOperation):
-        invoke(job, "parser.process", "parser:1", {}, Mock())
-    lease = operations.claim(job.pk, "parser.process", original) if leased else None
-    settings.DEFERRED_OPERATIONS = {}
-    newcomer.user_permissions.add(Permission.objects.get(codename="process_parser"))
-    with pytest.raises(operations.PendingOperation):
-        invoke(
-            job,
-            "parser.process",
-            "parser:1",
-            {},
-            Mock(),
-            provider=SimpleNamespace(execution_mode="external"),
-        )
+def test_legacy_user_policy_does_not_grant_processor_access():
+    """Legacy user routing cannot substitute for a capability grant."""
+    user = UserFactory()
+    user.user_permissions.add(Permission.objects.get(codename="process_parser"))
     with pytest.raises(PermissionDenied):
-        operations.claim(job.pk, "parser.process", newcomer)
-    lease = lease or operations.claim(job.pk, "parser.process", original)
-    operations.submit_result(job.pk, "parser.process", original, lease["token"], None)
+        operations.authorize({"policy": {"users": [user.pk]}}, user)
+
+
+def test_waiting_provider_never_runs_on_coordinator():
+    """Repeated delivery waits without executing or consuming attempts."""
+    job = DocumentJob.objects.create(timeout=60)
     execute = Mock()
-    assert (
-        invoke(
-            job,
-            "parser.process",
-            "parser:1",
-            {},
-            execute,
-            provider=SimpleNamespace(execution_mode="local"),
-        )
-        is None
-    )
+    for _ in range(4):
+        with pytest.raises(operations.PendingOperation):
+            invoke(
+                job,
+                "metadata",
+                "provider:1",
+                {},
+                execute,
+                replay_safe=True,
+                operation="metadata.classify",
+            )
     execute.assert_not_called()
     job.refresh_from_db()
-    assert job.result["invocations"]["parser.process"]["policy"] == {
-        "users": [original.pk]
-    }
+    assert job.result["invocations"]["metadata"].get("attempts", 0) == 0
+    assert job.status == DocumentJob.Status.WAITING
 
 
-def test_pending_local_invocation_does_not_change_route(settings):
-    """An old pending local entry cannot become external on coordinator replay."""
-    settings.DEFERRED_OPERATIONS = {}
-    job = DocumentJob.objects.create(timeout=60)
-    with pytest.raises(operations.PendingOperation):
-        invoke(
-            job,
-            "metadata",
-            "provider:1",
-            {},
-            Mock(side_effect=operations.PendingOperation()),
-            replay_safe=True,
-        )
-    execute = Mock(return_value={"local": True})
-    assert invoke(
-        job,
-        "metadata",
-        "provider:1",
-        {},
-        execute,
-        replay_safe=True,
-        operation="metadata.classify",
-        provider=SimpleNamespace(execution_mode="external"),
-    ) == {"local": True}
-    execute.assert_called_once()
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "parser.process",
+        "parser.thumbnail",
+        "metadata.classify",
+        "search.write",
+        "search.rebuild",
+        "search.optimize",
+        "search.wipe",
+        "prepare:0",
+    ],
+)
+def test_finite_provider_operations_queue_without_placement(operation):
+    """Every supported finite operation requires a processor capability."""
+    policy = execution_policy(operation, "provider")
+    assert policy is not None
+    assert policy["permission"].startswith("documents.process_")
 
 
-def test_unknown_execution_mode_fails_closed():
-    """A typo cannot silently run external work on the local worker."""
-    with pytest.raises(ValueError, match="execution_mode"):
-        execution_policy(
-            "parser.process", "provider", SimpleNamespace(execution_mode="externl")
-        )
+def test_lifecycle_hooks_remain_core_owned():
+    """Completion hooks cannot be routed to a generic processor."""
+    assert execution_policy("complete:post_consume", "hook") is None

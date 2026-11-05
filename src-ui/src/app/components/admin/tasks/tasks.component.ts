@@ -104,6 +104,14 @@ const TASK_TYPE_OPTIONS: Array<{
     label: $localize`Bulk Delete`,
   },
   {
+    value: PaperlessTaskType.SearchMaintenance,
+    label: $localize`Search maintenance`,
+  },
+  {
+    value: PaperlessTaskType.MetadataClassify,
+    label: $localize`Metadata classification`,
+  },
+  {
     value: PaperlessTaskType.ApplyAiSuggestions,
     label: $localize`Apply AI Suggestions`,
   },
@@ -479,6 +487,45 @@ export class TasksComponent
     )
 
     return tasks.filter((task) => this.taskMatchesCurrentFilters(task))
+  }
+
+  readonly operationStates = {
+    pending: {
+      label: $localize`Waiting for processor`,
+      help: $localize`Start an eligible processor with permission to handle this operation.`,
+    },
+    leased: {
+      label: $localize`Processing`,
+      help: $localize`A processor is working on this operation.`,
+    },
+    staged: {
+      label: $localize`Checking result`,
+      help: $localize`Paperless is validating the submitted result before applying changes.`,
+    },
+    unknown: {
+      label: $localize`Needs review`,
+      help: $localize`Ask an administrator to reconcile the operation. Check whether its effects occurred before retrying.`,
+    },
+    conflicted: {
+      label: $localize`Needs review`,
+      help: $localize`Paperless rejected the result. Check the task details and resolve changed inputs or permissions before starting new work.`,
+    },
+    reconciled_cancelled: {
+      label: $localize`Cancelled`,
+      help: $localize`The operation outcome has been reconciled. This operation will not continue.`,
+    },
+    failed: {
+      label: $localize`Failed`,
+      help: $localize`Check the task details and resolve the error before retrying.`,
+    },
+    cancelled: {
+      label: $localize`Cancelled`,
+      help: $localize`This operation will not continue.`,
+    },
+    succeeded: {
+      label: $localize`Completed`,
+      help: $localize`Paperless accepted the result.`,
+    },
   }
 
   sectionLabel(section: TaskSection): string {

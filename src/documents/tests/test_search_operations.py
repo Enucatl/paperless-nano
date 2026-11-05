@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from django.contrib.auth.models import Permission
 
 from documents.deferred_operations import claim
 from documents.deferred_operations import submit_result
@@ -25,7 +26,7 @@ def remote_search(settings, mocker):
     """Select an effectful remote provider without loading a local search engine."""
     processor = UserFactory()
     settings.SEARCH_PROVIDER = "tests.RemoteSearch"
-    settings.DEFERRED_OPERATIONS = {"search.write": {"users": [processor.pk]}}
+    processor.user_permissions.add(Permission.objects.get(codename="process_search"))
     provider = SimpleNamespace(
         identity="remote-search-v1",
         configuration={"collection": "documents"},
@@ -33,7 +34,7 @@ def remote_search(settings, mocker):
     )
     service = SearchService(provider)
     mocker.patch("documents.search.get_backend", return_value=service)
-    mocker.patch("documents.search_operations.run_search.delay")
+    mocker.patch("documents.search_operations.run_search.apply_async")
     mocker.patch("documents.jobs._dispatch")
     return service, processor
 

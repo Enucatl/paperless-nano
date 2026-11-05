@@ -259,6 +259,31 @@ class Command(PaperlessCommand):
         documents = queryset.distinct()
         classifier = load_classifier()
 
+        if not suggest and classifier is not None:
+            from documents.enrichment_jobs import submit_enrichment
+
+            count = 0
+            for document in documents:
+                submit_enrichment(
+                    document.pk,
+                    retagger={
+                        key: options[key]
+                        for key in (
+                            "correspondent",
+                            "document_type",
+                            "tags",
+                            "storage_path",
+                            "overwrite",
+                            "use_first",
+                        )
+                    },
+                )
+                count += 1
+            self.console.print(
+                f"Queued metadata classification for {count} documents. Follow progress in Tasks."
+            )
+            return
+
         stats = RetaggerStats()
         suggestions: list[DocumentSuggestion] = []
 

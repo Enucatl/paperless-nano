@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import pytest
 from django.utils import timezone
+from django.core.exceptions import PermissionDenied
 
 from documents import deferred_operations as operations
 from documents import jobs
@@ -46,8 +47,8 @@ class RemoteMetadata:
         raise AssertionError("Remote classifier must not run locally")
 
 
-@pytest.fixture(params=["legacy", "provider"])
-def remote(settings, mocker, request, monkeypatch):
+@pytest.fixture
+def remote(settings, mocker):
     """Grant a processor both finite operations and disable real broker sends."""
     user = UserFactory(is_superuser=True, is_staff=True)
     settings.PARSER = "documents.tests.test_deferred_operations.RemoteParser"
@@ -55,14 +56,6 @@ def remote(settings, mocker, request, monkeypatch):
         "documents.tests.test_deferred_operations.RemoteMetadata"
     )
     settings.CLASSIFIER_ENABLED = True
-    settings.DEFERRED_OPERATIONS = {
-        "parser.process": {"users": [user.pk]},
-        "metadata.classify": {"users": [user.pk]},
-    }
-    if request.param == "provider":
-        monkeypatch.setattr(RemoteParser, "execution_mode", "external", raising=False)
-        monkeypatch.setattr(RemoteMetadata, "execution_mode", "external", raising=False)
-        settings.DEFERRED_OPERATIONS = {}
     mocker.patch("documents.jobs._dispatch")
     mocker.patch("documents.search.get_backend")
     return user
@@ -355,33 +348,21 @@ def test_remote_policy_cannot_override_document_opt_out(sample_doc, remote, sett
     """Provider selection does not grant permission to export a local-only input."""
     settings.REMOTE_OCR_MODE = "workflow_only"
     job = jobs.stage_reprocess(sample_doc.pk, actor_id=remote.pk, remote_ocr=False)
-    if getattr(RemoteParser, "execution_mode", None) == "external":
-        with pytest.raises(jobs.RejectedResult, match="Remote processing"):
-            jobs.run_reprocess(job.pk)
-        return
-    with pytest.raises(AssertionError, match="must not run locally"):
-        jobs.run_reprocess(job.pk)
+    assert jobs.run_reprocess(job.pk) is False
     job.refresh_from_db()
-    assert job.status != "waiting"
-    assert "policy" not in job.result["invocations"]["parser.process"]
+    assert job.status == "waiting"
+    with pytest.raises(PermissionDenied):
+        operations.claim(job.pk, "parser.process", remote)
 
 
-def test_legacy_parser_lease_survives_provider_declaration(
-    sample_doc, remote, thumbnail_webp_file, monkeypatch, settings
+def test_completed_parser_submission_remains_idempotent(
+    sample_doc, remote, thumbnail_webp_file
 ):
-    """A mode declaration added during migration cannot invalidate legacy OCR."""
-    monkeypatch.delattr(RemoteParser, "execution_mode", raising=False)
-    settings.DEFERRED_OPERATIONS = {"parser.process": {"users": [remote.pk]}}
+    """Completed durable outcomes accept identical duplicate submissions."""
     job = jobs.stage_reprocess(sample_doc.pk, actor_id=remote.pk, remote_ocr=True)
     jobs.run_reprocess(job.pk)
     claim, result = complete_parser(job, remote, thumbnail_webp_file)
-    monkeypatch.setattr(RemoteParser, "execution_mode", "external", raising=False)
-    settings.DEFERRED_OPERATIONS = {}
     assert jobs.run_reprocess(job.pk) is True
-    job.refresh_from_db()
-    assert job.result["invocations"]["parser.process"]["policy"] == {
-        "users": [remote.pk]
-    }
     assert (
         operations.submit_result(
             job.pk, "parser.process", remote, claim["token"], result

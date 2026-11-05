@@ -2311,3 +2311,8 @@ class TestDocumentSearchApi(DirectoriesMixin, APITestCase):
             checksum="deadbeef1234",
         )
         self._assert_query_finds(doc, "checksum:deadbeef1234")
+
+
+@pytest.fixture(autouse=True)
+def process_search_queue(queued_search_processor):
+    """Make indexing completion explicit before interactive search assertions."""

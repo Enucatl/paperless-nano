@@ -13,6 +13,8 @@ export enum PaperlessTaskType {
   BuildShareLink = 'build_share_link',
   BulkDelete = 'bulk_delete',
   ApplyAiSuggestions = 'apply_ai_suggestions',
+  SearchMaintenance = 'search_maintenance',
+  MetadataClassify = 'metadata_classify',
 }
 
 export enum PaperlessTaskTriggerSource {
@@ -41,6 +43,7 @@ export interface PaperlessTask extends ObjectWithId {
   trigger_source_display: string
   status: PaperlessTaskStatus
   status_display: string
+  operation?: { name: string; status: string }
   date_created: Date
   date_started?: Date
   date_done?: Date
