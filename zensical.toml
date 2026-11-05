@@ -21,6 +21,7 @@ nav = [
   { Administration = [
     "administration.md",
     { "v3 Migration Guide" = "migration-v3.md" },
+    { "Inference provider operations" = "provider-operations.md" },
   ] },
   "advanced_usage.md",
   "api.md",

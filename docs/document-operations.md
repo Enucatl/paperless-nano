@@ -1902,6 +1902,10 @@ worker delivers it. No new generic workflow or plugin registry is introduced.
 
 ### Durable execution and processor API
 
+For current installation, provider replacement, backup, and rollback procedures,
+use the [provider operations runbook](provider-operations.md). The sections below
+retain the architecture and migration history.
+
 Finite provider work uses one durable queued lifecycle: the coordinator records an
 invocation and releases its worker; an eligible processor claims it, computes a
 result, and submits it for core validation. This applies to parsing, auxiliary
@@ -1997,8 +2001,10 @@ Remote ingestion plugins cannot rewrite the retained requester, owner, grants,
 remote-processing permission, or relation/custom-field assignments. Such changes
 require a core authorization/candidate contract, rather than a generic plugin
 receipt. Parser deferral also respects the original remote-processing policy.
-Metadata proposals preserve existing scalar assignments and reject concurrent
-edits; committed changes reconcile filenames before refreshing search and caches.
+Classification proposals preserve existing scalar assignments. Configured rich
+metadata proposals follow the explicit [replacement and preservation contract](rich-metadata-contract.md).
+Both reject concurrent relevant edits; committed changes reconcile filenames
+before refreshing search and caches.
 
 A processor must use the retained request and configuration rather than infer
 new settings from the current deployment. Reusing an accepted submission or an

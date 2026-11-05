@@ -129,5 +129,5 @@ Stop admission and processing before a coordinated backup. Preserve PostgreSQL,
 the entire data volume (including private jobs and search data), and media
 together, with the exact core/provider images and configuration. Restore the
 matching set. Provider configuration rollback and database downgrade are
-separate operations; see the installation/swap/rollback runbook for release
-compatibility and pending-job decisions.
+separate operations; see the [installation/swap/rollback runbook](provider-operations.md)
+for release compatibility and pending-job decisions.

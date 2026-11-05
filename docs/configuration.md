@@ -906,6 +906,14 @@ replacements; valid returned thumbnails avoid default-engine loading.
     preferences. Select a replacement to own processing strategy and dependencies.
     Remote-processing permission remains separately enforced.
 
+#### [`PAPERLESS_OCR_PROVENANCE_FIELD=<id>`](#PAPERLESS_OCR_PROVENANCE_FIELD) {#PAPERLESS_OCR_PROVENANCE_FIELD}
+
+: Existing longtext custom-field ID for a replacement parser's structured OCR
+provenance. Core validates the source identity and publishes the record with OCR
+text/archive changes. Unset leaves provenance storage unconfigured; select a
+field for the installed Paddle provider. Keep it separate from rich metadata
+managed fields. See the [provider runbook](provider-operations.md).
+
 #### [`PAPERLESS_OCR_LANGUAGE=<lang>`](#PAPERLESS_OCR_LANGUAGE) {#PAPERLESS_OCR_LANGUAGE}
 
 : Customize the language that paperless will attempt to use when
@@ -1305,6 +1313,49 @@ See [the classification contract](document-operations.md#replaceable-classificat
 for factory, identity and failure requirements.
 
     Defaults to empty.
+
+#### [`PAPERLESS_ENRICHMENT_PROVIDER=<class>`](#PAPERLESS_ENRICHMENT_PROVIDER) {#PAPERLESS_ENRICHMENT_PROVIDER}
+
+: Installed rich metadata provider class. Empty preserves classification-based
+enrichment. An explicitly selected rich provider computes title/date, summary,
+correspondent/language, and managed custom-field proposals; core owns validation,
+authorization, persistence, and recovery. It does not replace the independent
+classification contract or `document_retagger` behavior.
+
+    Defaults to empty. Use matching artifacts and the
+    [installation, swap, and rollback runbook](provider-operations.md).
+
+#### [`PAPERLESS_ENRICHMENT_FIELDS=<json>`](#PAPERLESS_ENRICHMENT_FIELDS) {#PAPERLESS_ENRICHMENT_FIELDS}
+
+: Map managed role names to distinct existing custom-field IDs. The installed
+metadata provider requires `summary` (longtext recommended), `processing_date`
+(date), and `audit` (longtext recommended), for example
+`{"summary":1,"processing_date":2,"audit":3}`. Provision fields before admission;
+providers cannot create the schema. Unrelated custom fields remain preserved.
+
+    Defaults to `{}`. Changes invalidate pending rich proposals.
+
+#### [`PAPERLESS_ENRICHMENT_ALLOW_REMOTE=<bool>`](#PAPERLESS_ENRICHMENT_ALLOW_REMOTE) {#PAPERLESS_ENRICHMENT_ALLOW_REMOTE}
+
+: Permit the selected rich provider to send document content to its configured
+model endpoint. This is independent of remote OCR authorization and processor
+placement; a server processor can still invoke a remote model.
+
+    Defaults to false.
+
+#### [`PAPERLESS_PROCESSOR_USER=<username>`](#PAPERLESS_PROCESSOR_USER) {#PAPERLESS_PROCESSOR_USER}
+
+: Dedicated capability-only account used by the bundled server processor. Set
+this together with `PAPERLESS_PROCESSOR_CAPABILITIES` to enable supervised finite
+sweeps. Provision it with `document_processor_account`; no document-edit grant
+or API token is needed. With both settings absent, server processing is disabled.
+
+#### [`PAPERLESS_PROCESSOR_CAPABILITIES=<list>`](#PAPERLESS_PROCESSOR_CAPABILITIES) {#PAPERLESS_PROCESSOR_CAPABILITIES}
+
+: Space-separated capabilities selected for this host: `parser metadata search
+ingestion`. The account must have the corresponding processor grants. Omitted
+capabilities intentionally wait for another eligible processor; they do not fall
+back to this host. See [deployment and diagnostics](processor-deployment.md).
 
 #### [`PAPERLESS_TRAIN_TASK_CRON=<cron expression>`](#PAPERLESS_TRAIN_TASK_CRON) {#PAPERLESS_TRAIN_TASK_CRON}
 
