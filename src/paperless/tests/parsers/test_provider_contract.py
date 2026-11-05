@@ -88,6 +88,25 @@ def test_changed_input_rejected(request_data, tmp_path):
         validate_result(request_data, result, tmp_path, provider.identity)
 
 
+@pytest.mark.parametrize(
+    "change", [{"source_sha256": "wrong"}, {"page_count": True}, {"schema_version": 2}]
+)
+def test_provenance_must_identify_source(request_data, tmp_path, change):
+    """Structured OCR audit cannot claim another source, page count or schema."""
+    provider = PlainTextProvider()
+    result = provider.process(request_data, tmp_path)
+    result["page_count"] = 1
+    result["provenance"] = {
+        "schema_version": 1,
+        "page_count": 1,
+        "source_sha256": request_data["source"]["sha256"],
+    }
+    validate_result(request_data, result, tmp_path, provider.identity)
+    result["provenance"].update(change)
+    with pytest.raises(InvalidParserResult, match="provenance"):
+        validate_result(request_data, result, tmp_path, provider.identity)
+
+
 @pytest.mark.parametrize("name", ["../input.txt", "/etc/passwd", ""])
 def test_reference_cannot_escape_operation(request_data, tmp_path, name):
     """References cannot address another job or permanent media file."""

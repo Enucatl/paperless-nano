@@ -34,6 +34,9 @@ def effective_configuration(
     provider = LocalThumbnailProvider() if thumbnail_only else parser_class()()
     implementation = configuration_snapshot(provider, {"mailrule_id": mailrule_id})
     preferences = OcrConfig()
+    from documents.ocr_provenance import field_snapshot
+
+    provenance = None if thumbnail_only else field_snapshot()
     return {
         "parser": "paperless.parsers.providers.LocalThumbnailProvider"
         if thumbnail_only
@@ -42,6 +45,7 @@ def effective_configuration(
         "settings": implementation,
         "archive_policy": preferences.archive_file_generation,
         "output_type": preferences.output_type,
+        **({"provenance_field": provenance} if provenance else {}),
     }
 
 
@@ -159,6 +163,10 @@ def run_parser(
         """Apply the same domain checks to immediate and deferred outputs."""
         try:
             validate_result(frozen_request, result, directory, identity)
+            if "provenance" in result and not configuration.get("provenance_field"):
+                raise InvalidParserResult(
+                    "Configure an OCR provenance field before processing"
+                )
             if result.get("execution", result["provider"]) != selection["identity"]:
                 raise InvalidParserResult("Selected parser changed during execution")
             if execution_snapshot(provider, frozen_request, directory) != selection:

@@ -391,6 +391,9 @@ def _apply(job: DocumentJob) -> None:
                     action=LogEntry.Action.UPDATE,
                 )
             document.refresh_from_db()
+            from documents.ocr_provenance import publish_provenance
+
+            publish_provenance(job, document)
             job.result["applied_revision"] = _revision(document)
             if job.input.get("metadata"):
                 from documents.enrichment_jobs import submit_enrichment

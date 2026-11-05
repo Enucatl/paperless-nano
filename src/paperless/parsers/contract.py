@@ -49,6 +49,7 @@ class ParserResult(TypedDict):
     archive: FileReference | None
     thumbnail: FileReference | None
     archive_type: str | None
+    provenance: NotRequired[dict]
 
 
 class ParserProvider(Protocol):
@@ -205,6 +206,20 @@ def validate_result(
             datetime.fromisoformat(result["date"])
     except (TypeError, ValueError) as error:
         raise InvalidParserResult("Parser result is not serializable") from error
+
+    if "provenance" in result:
+        provenance = result["provenance"]
+        if (
+            not isinstance(provenance, dict)
+            or type(provenance.get("schema_version")) is not int
+            or provenance["schema_version"] != 1
+            or provenance.get("source_sha256") != request["source"]["sha256"]
+            or type(provenance.get("page_count")) is not int
+            or provenance["page_count"] != result["page_count"]
+        ):
+            raise InvalidParserResult(
+                "OCR provenance does not identify the parsed source"
+            )
 
     source = resolve_reference(root, request["source"])
     output_dir = relative_path(root, request["output_dir"])

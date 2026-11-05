@@ -323,6 +323,9 @@ def publish(job: DocumentJob, task_id: str) -> None:
                 raise ValueError("Publication requires a Prepared job")
             validate_application(job.pk)
             document = plugin.publish(prepared)
+            from documents.ocr_provenance import publish_provenance
+
+            publish_provenance(job, document)
             commit_consumption(str(job.pk), document)
 
 
