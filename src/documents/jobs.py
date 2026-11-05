@@ -117,14 +117,14 @@ def stage_reprocess(
         job.save()
         try:
             if metadata:
-                from documents.classification_operations import configured_provider
-                from documents.classification_operations import provider_configuration
+                from documents.enrichment_operations import configured_provider
+                from documents.enrichment_operations import provider_configuration
                 from documents.operation_journal import json_value
 
                 identity = configured_provider().identity
                 if identity is None:
                     raise RejectedResult("No active metadata provider")
-                job.input["metadata_provider"] = list(identity)
+                job.input["metadata_provider"] = json_value(identity)
                 job.input["metadata_configuration"] = json_value(
                     provider_configuration()
                 )

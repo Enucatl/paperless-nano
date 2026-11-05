@@ -37,12 +37,15 @@ _metadata_update_documents: ContextVar[frozenset[int]] = ContextVar(
 
 
 @contextmanager
-def document_metadata_update(*documents: Document) -> Iterator[None]:
+def document_metadata_update(
+    *documents: Document, reconcile_files: bool = True
+) -> Iterator[None]:
     """Persist related changes before reconciling filenames, without recursive workflows.
 
     The scope is per document and execution context; other requests and linked
     documents retain their own file handling. No database transaction is added:
-    rollback cannot undo a published file move.
+    rollback cannot undo a published file move. Durable callers defer file
+    reconciliation until their database commit by setting reconcile_files=False.
     """
     token = _metadata_update_documents.set(
         _metadata_update_documents.get() | {document.pk for document in documents},
@@ -55,7 +58,7 @@ def document_metadata_update(*documents: Document) -> Iterator[None]:
     from documents.file_handling import reconcile_document_files
 
     for document in documents:
-        if document.pk not in _metadata_update_documents.get():
+        if reconcile_files and document.pk not in _metadata_update_documents.get():
             reconcile_document_files(document)
 
 

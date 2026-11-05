@@ -147,3 +147,58 @@ meaning, new writable fields or a changed type require a new negotiated contract
 version and tests. Updating provider code, model, prompt, endpoint or effective
 configuration invalidates pending work even if the wire version stays 1.
 Classification providers continue their existing contract independently.
+
+## Core integration and recovery
+
+Set `PAPERLESS_ENRICHMENT_PROVIDER` to the installed rich provider class. This
+selects rich metadata for new ingestion and explicit metadata/combined OCR jobs;
+`PAPERLESS_CLASSIFICATION_PROVIDER` and queued retagging retain their separate
+classification contract. With no rich provider selected, the existing
+classification enrichment remains available. Rich providers declare
+`uses_remote_service` and `replay_safe`; omitted declarations are conservative
+(remote and not replay-safe). Remote inference additionally requires
+`PAPERLESS_ENRICHMENT_ALLOW_REMOTE=true`. The declaration and policy are retained
+with the provider configuration and rechecked before computation/application.
+
+`PAPERLESS_ENRICHMENT_FIELDS` is a JSON object mapping roles to existing custom
+field IDs, for example `{"summary": 4, "processing_date": 5, "audit": 6}`.
+Use longtext for summary/audit and date for processing date. IDs must be distinct;
+additional roles are opt-in, and the OCR provenance field cannot be a rich
+metadata target. Core never creates custom-field definitions. An authorized
+document editor may change the configured field values, as with ordinary document
+metadata; schema creation/change remains a separate permission.
+
+Core rechecks requester edit access and processor capability at application,
+including after a restart that retained an already accepted proposal. New
+correspondents and language tags require the requester's respective add
+permission; their owner is the requester, or the document owner for trusted
+actorless jobs. Exact same-name/owner creations use the existing database unique
+constraints, including the partial constraint for ownerless entities. A hidden
+same-name entity belonging to another owner is never reused. Created language
+tags retain the baseline color `#166534` and matching algorithm `0`. Audit output
+records the actual applied relation IDs under `application`.
+
+Metadata, relation creation and the committed checkpoint share one database
+transaction. File moves are deferred until after that commit. A process exit
+before commit rolls everything back; the retained accepted result can be
+validated and applied again. After commit, retry resumes completion without
+reapplying metadata or recreating entities. Empty-content no-op results do not
+run update workflows or notifications. A successful OCR parent and its readable
+archive remain intact if the separate metadata child rejects or fails.
+
+The existing document-update workflow/notification path runs as one journaled,
+non-replay-safe follow-up. If it fails or is interrupted, Tasks reports that
+metadata committed and its follow-up effects need review. Inspect the job with
+`document_jobs --job UUID`, inspect/reconcile the workflow and notification
+outcomes, then run `document_jobs --job UUID --resume --acknowledge-effects`.
+Acknowledgment skips those reviewed effects and dispatches remaining file/search
+completion; it does not undo metadata or replay workflows. File/search failures
+after a completed follow-up retain the committed checkpoint and can resume
+normally. Search admission is still queued work: completion of the enrichment
+job does not itself prove that a separately queued search update has finished.
+
+Language replacement respects the existing tag hierarchy: if an unrelated or
+inaccessible retained tag needs an old language tag as an ancestor, that ancestor
+is preserved alongside the newly selected language. This intentional exception
+prevents removal of unrelated descendants; flatten that hierarchy explicitly if
+exactly one attached language tag is required.

@@ -11,12 +11,13 @@ from django.db.models import F
 from django.utils import timezone
 from filelock import FileLock
 
+from documents import enrichment_operations as rich_metadata
 from documents.classification import validate_result
 from documents.classification_operations import MODELS
 from documents.classification_operations import candidates_for
-from documents.classification_operations import configured_provider
-from documents.classification_operations import provider_configuration
 from documents.classification_operations import snapshot_document
+from documents.enrichment_operations import configured_provider
+from documents.enrichment_operations import provider_configuration
 from documents.job_state import PendingOperation
 from documents.job_state import RejectedResult
 from documents.job_state import check_permission as _check_permission
@@ -90,10 +91,12 @@ def _stage_enrichment(
     identity = (
         expected_provider
         if expected_provider is not None
-        else configured_provider().identity
+        else configured_provider(classification_only=retagger is not None).identity
     )
     if identity is None or (
-        expected_provider is None and not settings.CLASSIFIER_ENABLED
+        expected_provider is None
+        and not (settings.ENRICHMENT_PROVIDER and retagger is None)
+        and not settings.CLASSIFIER_ENABLED
     ):
         raise RejectedResult("No active metadata provider")
     request = {
@@ -113,6 +116,18 @@ def _stage_enrichment(
         },
         "candidates": candidate_snapshot(document, actor_id),
     }
+    configuration = (
+        expected_configuration
+        if expected_configuration is not None
+        else json_value(
+            provider_configuration(classification_only=retagger is not None)
+        )
+    )
+    rich = isinstance(identity, dict)
+    if rich:
+        request = rich_metadata.make_request(
+            document, actor_id, identity, configuration
+        )
     job = DocumentJob.objects.create(
         id=identifier,
         kind="enrich",
@@ -127,10 +142,11 @@ def _stage_enrichment(
                 else {}
             ),
         },
-        configuration=expected_configuration
-        if expected_configuration is not None
-        else json_value(provider_configuration()),
-        provider={"identity": list(identity)},
+        configuration=configuration,
+        provider={
+            "identity": json_value(identity),
+            **({"contract": "enrichment"} if rich else {}),
+        },
     )
     from documents.deferred_operations import resume
 
@@ -156,12 +172,16 @@ def run_enrichment(job_id: str) -> None:
         if job.status == DocumentJob.Status.COMMITTED:
             finish_enrichment(job)
             return
+        rich = job.provider.get("contract") == "enrichment"
+        classification_only = "retagger" in job.input
         try:
-            provider = configured_provider()
+            provider = configured_provider(classification_only=classification_only)
 
             def configuration_matches() -> bool:
                 """Reject changes to the retained effective configuration."""
-                current = json_value(provider_configuration())
+                current = json_value(
+                    provider_configuration(classification_only=classification_only)
+                )
                 return current == job.configuration
 
             if (
@@ -175,22 +195,50 @@ def run_enrichment(job_id: str) -> None:
                 """Reject provider changes, revoked access and concurrent edits."""
                 document = Document.objects.get(pk=job.input["document_id"])
                 _check_permission(document, job.input["actor_id"])
-                validate_result(request, result, tuple(job.provider["identity"]))
+                if rich:
+                    from documents.deferred_operations import authorize
+
+                    current_job = DocumentJob.objects.get(pk=job.pk)
+                    entry = current_job.result.get("invocations", {}).get(
+                        "metadata", {}
+                    )
+                    if "processor" in entry and "reconciliation" not in entry:
+                        processor = User.objects.filter(pk=entry["processor"]).first()
+                        if processor is None:
+                            raise RejectedResult("Processor account no longer exists")
+                        authorize(entry, processor)
+                if rich:
+                    rich_metadata.validate(
+                        document,
+                        job.input["actor_id"],
+                        request,
+                        result,
+                        job.provider["identity"],
+                    )
+                else:
+                    validate_result(request, result, tuple(job.provider["identity"]))
                 current_identity = (
                     provider.current_identity
                     if hasattr(provider, "current_identity")
-                    else configured_provider().identity
+                    else configured_provider(
+                        classification_only=classification_only
+                    ).identity
                 )
                 if (
                     (
                         "retagger" in job.input
                         and rule_snapshot(document) != job.input["rules"]
                     )
-                    or snapshot_document(document) != request["revision"]
-                    or candidate_snapshot(document, job.input["actor_id"])
-                    != request["candidates"]
+                    or (
+                        not rich
+                        and (
+                            snapshot_document(document) != request["revision"]
+                            or candidate_snapshot(document, job.input["actor_id"])
+                            != request["candidates"]
+                        )
+                    )
                     or not configuration_matches()
-                    or list(provider.identity) != job.provider["identity"]
+                    or json_value(provider.identity) != job.provider["identity"]
                     or json_value(current_identity) != job.provider["identity"]
                 ):
                     raise RejectedResult(
@@ -200,12 +248,16 @@ def run_enrichment(job_id: str) -> None:
             result = invoke(
                 job,
                 "metadata",
-                job.provider["identity"][0],
+                job.provider["identity"]["provider"]
+                if rich
+                else job.provider["identity"][0],
                 request,
-                lambda identifier: provider.classify(json_value(request)),
-                replay_safe=True,
+                lambda identifier: (provider.enrich if rich else provider.classify)(
+                    json_value(request)
+                ),
+                replay_safe=getattr(provider, "replay_safe", False) if rich else True,
                 validate=validate,
-                operation="metadata.classify",
+                operation="metadata.enrich" if rich else "metadata.classify",
                 provider=provider,
             )
             with transaction.atomic():
@@ -216,7 +268,11 @@ def run_enrichment(job_id: str) -> None:
                     pk=job.input["document_id"]
                 )
                 validate(result)
-                if "retagger" in job.input:
+                if rich:
+                    changed = rich_metadata.apply(
+                        document, job.input["actor_id"], request, result, job.pk
+                    )
+                elif "retagger" in job.input:
                     apply_retagger(
                         document,
                         job.input["retagger"],
@@ -235,9 +291,11 @@ def run_enrichment(job_id: str) -> None:
                     document.save()
                     document.tags.add(*result["assignments"]["tags"])
                 job.refresh_from_db()
+                if rich:
+                    job.result["metadata_changed"] = changed
                 job.status = DocumentJob.Status.COMMITTED
                 job.updated = timezone.now()
-                job.save(update_fields=["status", "updated"])
+                job.save(update_fields=["status", "updated", "result"])
         except PendingOperation:
             return
         except Exception as error:
@@ -260,9 +318,42 @@ def finish_enrichment(job: DocumentJob) -> None:
     from documents.search import get_backend
 
     document = Document.objects.get(pk=job.input["document_id"])
-    reconcile_document_files(document)
-    get_backend().add_or_update(document)
-    clear_document_caches(document.pk)
+    changed = job.result.get("metadata_changed", True)
+    if changed and job.provider.get("contract") == "enrichment":
+        from documents.updates import document_update
+
+        def followup(identifier: str) -> None:
+            """Run existing workflows and notifications once after metadata commit."""
+            with document_update(
+                document,
+                sender=run_enrichment,
+                logging_group=UUID(identifier),
+                index=False,
+            ):
+                pass
+
+        try:
+            invoke(
+                job,
+                "metadata:followup",
+                "paperless.document_update:1",
+                {"document_id": document.pk},
+                followup,
+                allow_deferred=False,
+            )
+        except Exception as error:
+            job.refresh_from_db()
+            job.status = DocumentJob.Status.ATTENTION
+            job.error = "Metadata committed; follow-up effects require review: " + str(
+                error
+            )
+            job.save(update_fields=["status", "error"])
+            raise
+        document.refresh_from_db()
+    if changed:
+        reconcile_document_files(document)
+        get_backend().add_or_update(document)
+        clear_document_caches(document.pk)
     job.status = DocumentJob.Status.SUCCEEDED
     job.cleaned = True
     job.updated = timezone.now()

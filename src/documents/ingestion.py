@@ -340,17 +340,17 @@ def complete_document(job: DocumentJob) -> None:
     identifier = job.result.get("payload", {}).get("document_id")
     if identifier is None:
         return
-    from documents.classification_operations import configured_provider
-    from documents.classification_operations import provider_configuration
+    from documents.enrichment_operations import configured_provider
+    from documents.enrichment_operations import provider_configuration
     from documents.operation_journal import json_value
 
     if "enrichment" not in job.result:
         deferred = None
-        if settings.CLASSIFIER_ENABLED:
+        if settings.ENRICHMENT_PROVIDER or settings.CLASSIFIER_ENABLED:
             provider = configured_provider()
             if provider.identity is not None:
                 deferred = {
-                    "identity": list(provider.identity),
+                    "identity": json_value(provider.identity),
                     "configuration": json_value(provider_configuration()),
                 }
         job.result["enrichment"] = deferred
@@ -420,7 +420,7 @@ def complete_document(job: DocumentJob) -> None:
                         document.pk,
                         actor_id=job.input["overrides"].get("actor_id"),
                         job_id=uuid5(job.pk, "metadata"),
-                        expected_provider=tuple(deferred["identity"]),
+                        expected_provider=deferred["identity"],
                         expected_configuration=deferred["configuration"],
                     )
             elif name == "signal":

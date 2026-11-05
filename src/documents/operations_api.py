@@ -75,7 +75,7 @@ class OperationsView(OperationAPIView):
                         "operation": entry["operation"],
                         "status": entry["status"],
                         "job_status": job.status,
-                        "error": entry.get("error", ""),
+                        "error": entry.get("error") or job.error,
                     }
                 )
         return Response(results)

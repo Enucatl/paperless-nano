@@ -34,8 +34,8 @@ class Command(PaperlessCommand):
             "--acknowledge-effects",
             action="store_true",
             help=(
-                "With --resume, acknowledge that a committed ingestion's started "
-                "post-consume script/callbacks have been handled externally; do not "
+                "With --resume, acknowledge that a committed job's started "
+                "workflow/script/callback effects have been handled externally; do not "
                 "repeat them. Inspect the job and reconcile those effects first."
             ),
         )
@@ -60,6 +60,32 @@ class Command(PaperlessCommand):
                             "ingestion job's completion."
                         )
                     if (
+                        job.kind == "enrich"
+                        and job.provider.get("contract") == "enrichment"
+                        and job.result.get("metadata_changed") is True
+                        and job.status == DocumentJob.Status.ATTENTION
+                    ):
+                        entry = job.result.get("invocations", {}).get(
+                            "metadata:followup"
+                        )
+                        if not entry or entry["status"] not in {
+                            "running",
+                            "unknown",
+                            "failed",
+                        }:
+                            raise CommandError(
+                                "Rich metadata has no committed uncertain follow-up to acknowledge"
+                            )
+                        if not options["acknowledge_effects"]:
+                            raise CommandError(
+                                "Committed metadata requires --acknowledge-effects after reconciling workflow/notification effects"
+                            )
+                        entry.update(status="succeeded", result=None, acknowledged=True)
+                        job.status = DocumentJob.Status.COMMITTED
+                        job.error = ""
+                        job.updated = timezone.now()
+                        job.save(update_fields=["result", "status", "error", "updated"])
+                    elif (
                         job.kind == "consume"
                         and job.result.get("lifecycle")
                         and job.status == DocumentJob.Status.ATTENTION
@@ -132,7 +158,7 @@ class Command(PaperlessCommand):
                         job.save(update_fields=["result", "status", "error", "updated"])
                     elif options["acknowledge_effects"]:
                         raise CommandError(
-                            "Effects may only be acknowledged for committed ingestion "
+                            "Effects may only be acknowledged for committed ingestion or metadata "
                             "that needs attention."
                         )
                     elif job.status not in {
