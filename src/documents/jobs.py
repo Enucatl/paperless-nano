@@ -396,16 +396,9 @@ def _apply(job: DocumentJob) -> None:
             publish_provenance(job, document)
             job.result["applied_revision"] = _revision(document)
             if job.input.get("metadata"):
-                from documents.enrichment_jobs import submit_enrichment
+                from documents.enrichment_operations import snapshot
 
-                child = submit_enrichment(
-                    document.pk,
-                    actor_id=job.input["actor_id"],
-                    job_id=uuid5(job.pk, "metadata"),
-                    expected_provider=job.input["metadata_provider"],
-                    expected_configuration=job.input["metadata_configuration"],
-                )
-                job.result["metadata_job"] = str(child.pk)
+                job.result["metadata_revision"] = snapshot(document)
             job.result["followup"] = (
                 ["thumbnail", "cache"]
                 if job.input.get("thumbnail_only")
@@ -459,6 +452,33 @@ def _finish(job: DocumentJob) -> None:
     clear_document_caches(job.input["document_id"])
     if job.input["root_id"] != job.input["document_id"]:
         clear_document_caches(job.input["root_id"])
+    if job.input.get("metadata") and "metadata_job" not in job.result:
+        from documents.enrichment_jobs import submit_enrichment
+        from documents.enrichment_operations import snapshot
+
+        try:
+            with transaction.atomic():
+                document = Document.objects.select_for_update().get(
+                    pk=job.input["document_id"]
+                )
+                child_id = uuid5(job.pk, "metadata")
+                if not DocumentJob.objects.filter(pk=child_id).exists() and (
+                    snapshot(document) != job.result["metadata_revision"]
+                ):
+                    raise RejectedResult("Document changed before metadata admission")
+                child = submit_enrichment(
+                    document.pk,
+                    actor_id=job.input["actor_id"],
+                    job_id=child_id,
+                    expected_provider=job.input["metadata_provider"],
+                    expected_configuration=job.input["metadata_configuration"],
+                )
+                job.result["metadata_job"] = str(child.pk)
+                job.save(update_fields=["result"])
+        except Exception as error:
+            raise RejectedResult(
+                f"OCR committed; metadata admission failed: {error}"
+            ) from error
     job.result["followup"] = []
     job.status = DocumentJob.Status.SUCCEEDED
     job.error = ""

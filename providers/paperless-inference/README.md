@@ -47,8 +47,8 @@ Set `PAPERLESS_OCR_PROVENANCE_FIELD` to an existing longtext custom field ID for
 the structured `ai_ocr_output` record.
 
 Metadata defaults preserve the original prompt/schema, strict JSON schema
-response format, 1000 max tokens, temperature zero, first valid language or
-`und`, and correspondent similarity threshold 0.80. Optional settings are
+response format, 1000 max tokens, temperature zero, minimal reasoning effort,
+first valid language or `und`, and correspondent similarity threshold 0.80. Optional settings are
 `INFERENCE_METADATA_RESPONSE_FORMAT` (`auto`, `json_schema`, `json_object`,
 `none`), `INFERENCE_METADATA_MAX_TOKENS`, `INFERENCE_METADATA_TEMPERATURE`,
 `INFERENCE_METADATA_REASONING_EFFORT`, `INFERENCE_METADATA_EXTRA_KWARGS`, and

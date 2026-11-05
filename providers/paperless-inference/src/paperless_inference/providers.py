@@ -120,25 +120,9 @@ class MetadataProvider:
 class PaddleOCRProvider:
     """Run full-document Paddle OCR with core-owned archive/provenance publication."""
 
-    name = "PaddleOCR-VL"
-    version = "0.1.0"
-    author = "Paperless AI contributors"
-    url = "https://github.com/Enucatl/paperless-ngx"
     identity = "paperless-inference.paddle:1"
     uses_remote_service = True
     replay_safe = True
-
-    @classmethod
-    def supported_mime_types(cls) -> dict[str, str]:
-        """Accept the same complete PDF input as the existing OCR callable."""
-        return {"application/pdf": ".pdf"}
-
-    @classmethod
-    def score(
-        cls, mime_type: str, filename: str, path: Path | None = None
-    ) -> int | None:
-        """Select this installed provider only for PDF input."""
-        return 100 if mime_type == "application/pdf" else None
 
     def configuration_snapshot(self) -> dict:
         """Pin deployment identity locally; network checks happen during execution."""

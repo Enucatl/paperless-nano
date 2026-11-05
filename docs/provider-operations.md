@@ -6,6 +6,8 @@ Use the [supervised deployment guide](processor-deployment.md) for the concrete
 PostgreSQL Compose setup, account provisioning, and managed-field creation.
 Keep the previous deployment available until your representative documents pass
 all checks below. A passing unit test suite alone is not a release qualification.
+See the [validation report](inference-release-validation.md) for verified checks
+and the live qualification gates still blocking publication.
 
 ## Compatibility and required decisions
 

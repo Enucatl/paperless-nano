@@ -16,7 +16,7 @@ whole-workload memory behavior. Keep the existing deployment available.
 | #46 | Installed OCR/metadata adapters and core OCR provenance publication | `3b40cb323` |
 | #47 | Supervised processors, capability provisioning, Tasks diagnostics and PostgreSQL example | `72597e364` |
 | #48 | Installation, provider swap and rollback runbook | `e6306a8a2` |
-| #49 | Runtime validation and task registration fix; publication gates remain open | This change |
+| #49 | Runtime validation and queued execution fixes; publication gates remain open | `f3c5aeb2c` |
 
 The supported candidate pairs this core branch with `paperless-inference` 0.1.0,
 Python 3.14 and PostgreSQL 18. Both wire contracts are version 1. The OCR adapter
@@ -42,6 +42,8 @@ container storage. Counts below overlap and must not be added into one total.
 | Integrated core/service regression selection | 160 passed, 1 PostgreSQL-only skip on SQLite |
 | PostgreSQL worker registration, document updates, rich metadata and OCR provenance | 62 passed |
 | PostgreSQL processor cursor and worker-registration regressions | 19 passed |
+| Final core correctness pass | 115 passed on PostgreSQL; 114 passed and 1 PostgreSQL-only skip on SQLite |
+| Final provider payload/default checks | 12 passed |
 | Core/provider dependency compatibility | All shared locked core versions unchanged; `uv pip check` passed |
 | Installation/runbook smoke checks | Fresh SQLite migration/provisioning, PostgreSQL dump/restore and data/media archive roundtrip passed |
 | Production frontend compilation | Passed as part of the core image build |
@@ -64,6 +66,33 @@ server-side cursor after its first operation. A sweep now snapshots only job IDs
 then reloads each still-waiting job before processing. The PostgreSQL regression
 closes the connection during the first operation and verifies that the second job
 still runs; large OCR result payloads are not all retained in the sweep snapshot.
+
+## Final correctness, consistency and simplification pass
+
+Independent reviewers traced the combined core, provider, deployment and operator
+paths. The final review commit fixes three further issues:
+
+- Managed metadata updates now write only proposed custom fields. Previously,
+  rewriting unrelated document-link fields could modify linked documents and
+  reconcile their files inside the metadata transaction.
+- OCR commits before admitting its deterministic metadata child. A missing or
+  changed managed field now leaves successful OCR readable and recoverable,
+  instead of rolling it back. Intervening document edits block stale admission;
+  resuming the committed job does not repeat OCR.
+- Metadata inference again defaults to the baseline's `reasoning_effort=minimal`,
+  while preserving explicit overrides and an empty opt-out. Transport tests check
+  the actual outgoing setting.
+
+The pass also removed 16 lines of unused parser registry attributes/methods from
+the explicitly selected provider and aligned the recovery and provider documents
+with the final behavior. Relevant Ruff formatting/lint and whitespace checks
+passed. No unresolved correctness finding remained in those reviewed paths;
+this is not a claim that all upstream code or live deployment gates were checked.
+
+Each issue had a fresh implementation agent and a separate commit. Existing user
+changes in the two CI workflows and `docs/memory-analysis.md` were preserved and
+excluded from these commits. Temporary test environments were removed after
+verification; the local candidate images below remain available for inspection.
 
 ## Image and deployment evidence
 

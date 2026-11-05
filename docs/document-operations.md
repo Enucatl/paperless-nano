@@ -1980,9 +1980,11 @@ are bounded to three; an offline queue does not consume that budget.
 
 The authenticated `/api/operations/` API admits `ocr`, `metadata` and
 `ocr_metadata` using a stable UUID `request_id` and a `document_id`. OCR followed
-by metadata records the metadata job in the OCR application transaction, so a
-broker outage cannot lose the second stage. Once OCR is committed, metadata
-failure does not rerun OCR. Current documents remain readable throughout optional
+by metadata retains the second-stage intent and document revision in the OCR
+application transaction. After committing OCR, completion admits a deterministic
+metadata job; a broker outage or metadata-admission failure cannot lose that
+intent or rerun OCR. Admission failures retain the committed job and explain the
+needed repair before resuming. Current documents remain readable throughout optional
 enrichment; conflicting edits are preserved and the stale proposal is rejected.
 
 Processors use the ordinary API authentication plus the operation's retained

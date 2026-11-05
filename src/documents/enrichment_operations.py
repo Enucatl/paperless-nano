@@ -1,6 +1,7 @@
 """Core selection, authorization and persistence for rich metadata proposals."""
 
 import json
+from contextlib import nullcontext
 from datetime import date
 
 from django.conf import settings
@@ -22,6 +23,7 @@ from documents.models import Document
 from documents.models import Tag
 from documents.operation_journal import json_value
 from documents.updates import document_metadata_update
+from documents.updates import save_custom_field_value
 from documents.updates import save_document_metadata
 from paperless.version import __full_version_str__
 
@@ -251,10 +253,7 @@ def apply(
         ancestors = {parent for tag in retained for parent in tag.get_ancestors()}
         values["tags"] = [*retained, *ancestors, language]
         outcome["language_tag_id"] = language.pk
-    fields = {
-        item.field_id: {"field": item.field, "value": item.value}
-        for item in document.custom_fields.select_related("field")
-    }
+    fields = []
     proposed = {
         item["field"]: item["value"] for item in result.get("custom_fields", [])
     }
@@ -278,11 +277,16 @@ def apply(
             raise RejectedResult(
                 f"Invalid value for managed field {field.name}: {error}"
             ) from error
-        fields[pk] = {"field": field, "value": value}
-    if proposed:
-        values["custom_fields"] = list(fields.values())
-    if values:
+        fields.append((field, value))
+    if values or fields:
+        from auditlog.context import set_actor
+
         actor = User.objects.get(pk=actor_id) if actor_id is not None else None
-        with document_metadata_update(document, reconcile_files=False):
+        with (
+            set_actor(actor) if settings.AUDIT_LOG_ENABLED else nullcontext(),
+            document_metadata_update(document, reconcile_files=False),
+        ):
             save_document_metadata(document, values, user=actor)
-    return bool(values)
+            for field, value in fields:
+                save_custom_field_value(document, field, value)
+    return bool(values or fields)

@@ -79,6 +79,22 @@ def test_metadata_preserves_full_baseline(monkeypatch, metadata_request):
     assert complete.call_args.kwargs["response_format"]["type"] == "json_schema"
 
 
+@pytest.mark.parametrize("effort", [None, "", "high"])
+def test_metadata_reasoning_default_and_override(monkeypatch, metadata_request, effort):
+    """Preserve baseline minimal reasoning and explicit override or opt-out."""
+    if effort is None:
+        monkeypatch.delenv("INFERENCE_METADATA_REASONING_EFFORT", raising=False)
+    else:
+        monkeypatch.setenv("INFERENCE_METADATA_REASONING_EFFORT", effort)
+    complete = response(monkeypatch, '{"title": "Invoice"}')
+    MetadataProvider().enrich(metadata_request)
+    expected = "minimal" if effort is None else effort
+    if expected:
+        assert complete.call_args.kwargs["reasoning_effort"] == expected
+    else:
+        assert "reasoning_effort" not in complete.call_args.kwargs
+
+
 @pytest.mark.parametrize("invalid_date", ["not-a-date", "1899-12-31", "2099-01-01"])
 def test_invalid_dates_preserve_other_metadata(
     monkeypatch, metadata_request, invalid_date

@@ -44,10 +44,9 @@ class ProviderConfig:
         }
         if "INFERENCE_METADATA_TEMPERATURE" in os.environ:
             kwargs["temperature"] = float(os.environ["INFERENCE_METADATA_TEMPERATURE"])
-        if os.environ.get("INFERENCE_METADATA_REASONING_EFFORT"):
-            kwargs["reasoning_effort"] = os.environ[
-                "INFERENCE_METADATA_REASONING_EFFORT"
-            ]
+        effort = os.environ.get("INFERENCE_METADATA_REASONING_EFFORT", "minimal")
+        if effort:
+            kwargs["reasoning_effort"] = effort
         extra = json.loads(os.environ.get("INFERENCE_METADATA_EXTRA_KWARGS", "{}"))
         if not isinstance(extra, dict) or extra.keys() - {
             "temperature",

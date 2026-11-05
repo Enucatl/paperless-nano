@@ -484,3 +484,35 @@ def test_language_replacement_preserves_unrelated_descendants(sample_doc, rich):
         "language:en",
         "unrelated child",
     }
+
+
+def test_managed_fields_do_not_rewrite_unrelated_document_links(
+    sample_doc, rich, mocker
+):
+    """Unrelated links must not mutate another document or move files before commit."""
+    from paperless_testing.factories import DocumentFactory
+
+    linked = DocumentFactory(pk=2)
+    field = CustomField.objects.create(name="Related", data_type="documentlink")
+    CustomFieldInstance.objects.create(
+        document=sample_doc, field=field, value_document_ids=[linked.pk]
+    )
+    CustomFieldInstance.objects.create(
+        document=linked, field=field, value_document_ids=[sample_doc.pk]
+    )
+    previous_modified = linked.modified
+
+    def reconcile_after_commit(document):
+        assert not connection.in_atomic_block
+        assert document.pk == sample_doc.pk
+
+    mocker.patch(
+        "documents.file_handling.reconcile_document_files",
+        side_effect=reconcile_after_commit,
+    )
+    job, _, _ = stage_result(sample_doc, rich)
+    enrichment_jobs.run_enrichment(str(job.pk))
+    linked.refresh_from_db()
+    assert linked.modified == previous_modified
+    assert linked.custom_fields.get(field=field).value == [sample_doc.pk]
+    assert sample_doc.custom_fields.get(field=field).value == [linked.pk]
