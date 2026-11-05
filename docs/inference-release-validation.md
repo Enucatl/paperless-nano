@@ -3,9 +3,11 @@
 Validation date: 2026-11-05. Tracker: [#43](https://github.com/Enucatl/paperless-ngx/issues/43);
 release gate: [#49](https://github.com/Enucatl/paperless-ngx/issues/49).
 
-**Release publication is withheld.** The implementation and local checks below do
-not establish live OCR/metadata parity, a verified production upgrade/backout, or
-whole-workload memory behavior. Keep the existing deployment available.
+**Release publication is withheld.** Live synthetic ingestion, reprocessing,
+provider swap/backout and paired database/private-file restore now pass. These
+checks do not establish representative-corpus parity, an upgrade from the supported
+previous deployment, or equivalent-workload memory behavior. Keep the existing
+deployment available until those remaining gates pass.
 
 ## Implemented scope and compatibility
 
@@ -28,8 +30,9 @@ migration was added by these changes. Provider rollback is not a database downgr
 ## Verification evidence
 
 All tests ran in disposable Docker containers with `--rm --userns=host`;
-dependencies lived in temporary Docker volumes, and test source was copied into
-container storage. Counts below overlap and must not be added into one total.
+dependencies and test artifacts stayed in temporary Docker storage. Source was
+read from the workspace with bytecode/caches disabled or copied into the container.
+Counts below overlap and must not be added into one total.
 
 | Check | Result |
 | --- | --- |
@@ -44,6 +47,7 @@ container storage. Counts below overlap and must not be added into one total.
 | PostgreSQL processor cursor and worker-registration regressions | 19 passed |
 | Final core correctness pass | 115 passed on PostgreSQL; 114 passed and 1 PostgreSQL-only skip on SQLite |
 | Final provider payload/default checks | 12 passed |
+| Secret-file authentication and provider regressions | 16 passed; file precedence, rotation, missing/blank fallback and secret-free snapshots |
 | Core/provider dependency compatibility | All shared locked core versions unchanged; `uv pip check` passed |
 | Installation/runbook smoke checks | Fresh SQLite migration/provisioning, PostgreSQL dump/restore and data/media archive roundtrip passed |
 | Production frontend compilation | Passed as part of the core image build |
@@ -108,7 +112,7 @@ SHA-256 was checked against the release digest:
 
 No dependency version or repository Dockerfile was changed to bypass the failure.
 The core image and its provider extension built successfully. These are local
-`:validation` images, not published release artifacts. The build includes the
+`:validation` and `:secrets-validation` images, not published release artifacts. The build includes the
 production frontend. Repeating the unmodified build still depends on the upstream
 asset download route being available.
 
@@ -155,30 +159,107 @@ Working-set snapshots come from `docker stats --no-stream`; cumulative peaks com
 from each container's cgroup-v2 `memory.peak` and include file cache. Peaks are
 not simultaneous and must not be summed. PostgreSQL/Valkey peaks include initial
 migrations and the earlier validation app restart. These are individual snapshots,
-not steady-state averages or a peak isolated to inference. Remote model memory and
-successful inference latency were unavailable, not zero. The narrow workload does
-not establish the release's whole-stack memory gate or satisfy a target by itself.
+not steady-state averages or a peak isolated to inference. Remote inference was
+unavailable during this initial search-only run; the later successful live workload
+and remote snapshots are recorded below. Neither set establishes an equivalent
+whole-workload comparison or satisfies a target by itself.
 
-## Live endpoint gates
+## Live OCR and metadata continuation
 
-The configured OCR `/metadata` request timed out after ten seconds. A synthetic
-invoice sent through the installed metadata provider reached the configured
-OpenRouter endpoint but failed with HTTP 401 (0.758 seconds for the diagnostic
-attempt). Credentials and response bodies were not printed. Neither outcome is
-successful inference or parity evidence.
+The initial OCR timeout occurred while the workstation was unavailable. After it
+started, `/health` and `/metadata` returned 200 with pipeline `PaddleOCR-VL-1.6`,
+model `PaddlePaddle/PaddleOCR-VL-1.6`, and layout model `PP-DocLayoutV3`.
 
-Consequently the following remain release gates:
+The earlier metadata HTTP 401 was a **credential-loading regression**, not proof
+that the real key was invalid: the baseline loads `OPENROUTER_API_KEY_FILE` and
+`OPENAI_API_KEY_FILE`, while the extracted adapter initially read only direct
+environment values. The adapter now reads those files at execution, prioritizes
+nonempty file values, and retains the previous runner's missing/blank-file fallback.
+Credentials never enter configuration snapshots. Tests cover precedence, rotation,
+fallback and absence from snapshots. The actual key was transferred privately to a
+temporary read-only Docker secret volume, readable only by application UID 1000;
+its bytes were not printed, added to the repository, or baked into an image.
 
-- Real new ingestion and existing-document reprocessing through OCR, rich metadata,
-  searchable archive/provenance and ordinary search, with representative PDFs.
-- Exact behavior parity against live endpoints, including language/correspondent
-  cases and preservation of unrelated document data.
-- Upgrade from an explicitly retained previous deployment; pending and legacy jobs;
-  coordinated database/private-file restoration; live provider swap and backout.
-- Full-stack startup idle, active/peak, return-to-idle and latency measurements for
-  equivalent successful workloads. Remote model resource costs must be measured
-  separately; failed endpoint calls cannot stand in for this workload.
-- Publication of an immutable artifact and release notes only after these gates pass.
+The installed candidate used for the live continuation and final backout/restore:
+
+```text
+paperless-release49-inference:secrets-validation
+sha256:6824eec4681c4087dbff484efab2b1da399c7b0e3adfd614ed78afbabfa6fc1a
+```
+
+This extends the core image above with the secret-file fix on the worktree based
+on `2d027485f`. All data was synthetic and isolated from production. Normal HTTP
+API admission/reprocessing used a temporary authenticated test user; processors
+used the dedicated capability account. No listener or separate stage queue ran.
+
+| Live check | Result |
+| --- | --- |
+| Installed metadata provider, synthetic invoice | Valid complete proposal in 2.232 seconds |
+| Existing-document metadata application and ordinary search | Passed; title/date/summary/processing date/audit/correspondent/language applied; unrelated tag and custom field preserved |
+| New PDF through authenticated upload → OCR → archive/provenance → metadata → search | Passed; ingestion 100.417 seconds, metadata child 13.644 seconds |
+| OCR endpoint compute elapsed reported in provenance | 0.851 seconds, distinct from queue and publication latency |
+| Published files | 1,038-byte original; 9,565-byte searchable archive; all four managed metadata/provenance fields present |
+| API reprocess of the existing uploaded PDF | Passed in 20.177 seconds; retained user title, unrelated tag/custom field and non-OCR metadata |
+| Archive/source integrity | Original SHA-256 unchanged and matched OCR provenance; archive text searchable; actual veraPDF validation passed |
+| Provider swap to built-in `DefaultParser` | Fresh reprocess passed in 9.809 seconds; metadata and existing archive preserved |
+| Pending work during provider swap | Old Paddle job rejected before retry with `Processing configuration or provider changed before retry`; no silent rerouting |
+| Swap back to installed Paddle provider | Fresh reprocess passed in 19.746 seconds; metadata preserved and Paddle provenance verified |
+
+The first management-shell metadata admission was accidentally run as root and
+created a lock the application user could not open. The isolated harness ownership
+was corrected and the job explicitly resumed; that recovery was not counted as an
+automatic-success path. Both current guides now run job/recovery commands as
+`--user paperless`. Subsequent full ingestion and reprocessing used the HTTP API
+and completed through supervised processors without manual launches.
+
+One intermediate search job reached `attention`: its write had executed and its
+result was staged, but metadata changed the retained projection before coordinator
+acceptance. The final newer search completed and queries verified the current
+record. This is the existing stale-result/review behavior, not an unknown inference
+result; it does **not** mean every task succeeded or that no transient old search
+projection existed. Search-job coalescing was not added in this release.
+
+### Coordinated restore
+
+After all nonterminal work drained, the application was stopped. A PostgreSQL
+custom-format dump and the complete data/media trees were captured together,
+then restored to independent database/data/media volumes with a fresh broker.
+The restored application checked authenticated document access, current metadata,
+original hash against OCR provenance, searchable archive, ordinary search, and
+the rejected pending job's retained private input. This tests restoration of this
+candidate's paired state; it is not a database downgrade or a previous-version
+upgrade test.
+
+### Live workload resource observations
+
+A local snapshot taken just after the OCR lease notification showed Docker working
+sets of 766.7 MiB (Paperless), 46.79 MiB (PostgreSQL), and 4.11 MiB (Valkey).
+Corresponding cumulative cgroup peaks were 1,064.20 MiB, 125.23 MiB and 13.84 MiB.
+A later drained snapshot after swap-back reprocessing showed 552.4 MiB, 44.27 MiB
+and 4.84 MiB; its Paperless process had been recreated for the provider swap, so
+this is **not** a same-process return-to-idle comparison. Observer management
+processes and periodic services can contribute to these samples.
+
+The remote RTX 5090 workstation snapshots at 16:50:22Z and 16:51:56Z both showed
+11,824 / 32,607 MiB GPU allocation and 0% utilization. The short OCR compute had
+already finished before sampling; these are neither active-compute nor peak
+measurements. OCR VLM/API Docker working sets were approximately 3.32 GiB /
+1.917–1.918 GiB, gateway 9.406 MiB. A separately loaded BGE service used 4.35 GiB;
+its GPU allocation contributes to the total and must not be attributed to OCR.
+Remote resources are reported separately from the local core stack.
+
+## Remaining release gates
+
+- Representative multi-document/language/correspondent corpus parity against the
+  real endpoints; the successful live sample is one synthetic PDF.
+- Upgrade from an explicitly retained supported previous deployment, including
+  legacy/pending jobs and a broader crash/publication fault matrix. Unit tests
+  cover many recovery cases but do not replace that deployment exercise.
+- Comparable full-stack startup idle, active/peak, return-to-idle and latency
+  measurements for equivalent successful workloads, including remote costs.
+  Current snapshots and endpoint timings are evidence, not a benchmark baseline.
+- Publication of an immutable release artifact and release notes after these
+  gates pass. The retained local images are validation candidates only.
 
 Earlier foundation issues #28, #29, #37, #40 and #42 remain subject to their runtime
 acceptance requirements. Focused parser, operation-boundary, service and worker

@@ -1,5 +1,9 @@
 # Install, replace, and roll back inference providers
 
+Run job-admitting and recovery commands as the application user (`--user
+paperless` in the supplied image, or your configured runtime UID). Root-created
+private job files can prevent the supervised worker from opening its locks.
+
 This is the current operator runbook for the OCR and rich metadata integration
 (#43–#49). Historical design notes remain in `document-operations.md`.
 Use the [supervised deployment guide](processor-deployment.md) for the concrete
@@ -60,8 +64,8 @@ grants do not confer document-edit authority.
 Check the effective setup without processing pending work:
 
 ```sh
-docker compose exec webserver python manage.py check
-docker compose exec webserver python manage.py document_processor \
+docker compose exec --user paperless webserver python manage.py check
+docker compose exec --user paperless webserver python manage.py document_processor \
   --user server-processor --configured \
   --capability parser --capability metadata --capability search \
   --capability ingestion --diagnose
@@ -81,12 +85,12 @@ processors running to drain admitted jobs. Include scheduled maintenance and
 index writes in the drain. Check Tasks and inspect outstanding durable jobs:
 
 ```sh
-docker compose exec webserver python manage.py shell -c '
+docker compose exec --user paperless webserver python manage.py shell -c '
 from documents.models import DocumentJob
 for job in DocumentJob.objects.exclude(status__in=["succeeded", "cancelled"]).order_by("created"):
     print(job.pk, job.kind, job.status, job.error)
 '
-docker compose exec webserver python manage.py document_jobs --job JOB_UUID
+docker compose exec --user paperless webserver python manage.py document_jobs --job JOB_UUID
 ```
 
 The job report includes retained invocations and publication evidence. Treat

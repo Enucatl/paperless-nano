@@ -25,10 +25,10 @@ Start the stack and provision its dedicated account after migrations finish:
 docker compose up -d
 docker compose logs webserver
 # After the init-complete message:
-docker compose exec webserver python manage.py document_processor_account \
+docker compose exec --user paperless webserver python manage.py document_processor_account \
   --user server-processor --capability parser --capability metadata \
   --capability search --capability ingestion
-docker compose exec webserver python manage.py createsuperuser
+docker compose exec --user paperless webserver python manage.py createsuperuser
 ```
 
 Before provisioning, the processor reports that its account is missing and
@@ -42,7 +42,7 @@ for proposal authorization.
 Create the managed custom fields through core, before admitting documents:
 
 ```sh
-docker compose exec webserver python manage.py shell -c '
+docker compose exec --user paperless webserver python manage.py shell -c '
 import json
 from documents.models import CustomField
 fields = {}
@@ -86,7 +86,7 @@ before every operation, including during a sweep. Inspect selection and grants
 without consuming an attempt:
 
 ```sh
-docker compose exec webserver python manage.py document_processor \
+docker compose exec --user paperless webserver python manage.py document_processor \
   --user server-processor --configured \
   --capability parser --capability metadata --capability search \
   --capability ingestion --diagnose

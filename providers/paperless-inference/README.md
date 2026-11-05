@@ -54,7 +54,11 @@ first valid language or `und`, and correspondent similarity threshold 0.80. Opti
 `INFERENCE_METADATA_REASONING_EFFORT`, `INFERENCE_METADATA_EXTRA_KWARGS`, and
 `INFERENCE_CORRESPONDENT_MATCH_THRESHOLD`. Extra kwargs permit ordinary sampling
 parameters only; credentials and routing overrides cannot enter retained jobs.
-API keys remain in `OPENAI_API_KEY` or `OPENROUTER_API_KEY`, never snapshots.
+API keys use `OPENAI_API_KEY_FILE` or `OPENROUTER_API_KEY_FILE` when a readable
+secret file is configured, falling back to `OPENAI_API_KEY` or
+`OPENROUTER_API_KEY` as in the previous runner. Mount the secret read-only and
+set the corresponding `_FILE` path in the container. Keys are read only during
+inference and never enter configuration snapshots.
 Endpoint URLs cannot contain embedded credentials or query parameters.
 
 OCR accepts PDF input, validates every page, removes image payloads from stored
