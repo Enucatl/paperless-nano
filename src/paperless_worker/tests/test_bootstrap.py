@@ -52,8 +52,14 @@ def run_python(code: str, env: dict[str, str]) -> subprocess.CompletedProcess[st
     return result
 
 
-def test_parent_metadata_and_real_child_app(worker_env: dict[str, str]) -> None:
+@pytest.mark.parametrize(("task_limit", "expected"), [(None, 10), ("7", 7)])
+def test_parent_metadata_and_real_child_app(
+    worker_env: dict[str, str], task_limit: str | None, expected: int
+) -> None:
     """Keep the parent bare while the forked child restores the same real app."""
+    if task_limit is not None:
+        worker_env["PAPERLESS_WORKER_MAX_TASKS_PER_CHILD"] = task_limit
+    worker_env["EXPECTED_TASK_LIMIT"] = str(expected)
     run_python(
         """
 import os, sys
@@ -62,8 +68,10 @@ metadata = read_metadata()
 assert {'documents.enrichment_jobs.execute_enrichment',
         'documents.search_operations.run_search'} <= metadata['tasks'].keys()
 assert metadata['configuration']['worker_concurrency'] == 2
+assert metadata['configuration']['worker_max_tasks_per_child'] == int(os.environ['EXPECTED_TASK_LIMIT'])
 assert metadata['secret_key'] == os.environ['PAPERLESS_SECRET_KEY']
 app = create_app(metadata)
+assert app.conf.worker_max_tasks_per_child == int(os.environ['EXPECTED_TASK_LIMIT'])
 assert set(app.tasks) == set(metadata['tasks'])
 assert all(isinstance(task, MetadataTask) for task in app.tasks.values())
 assert 'django.apps' not in sys.modules
@@ -77,6 +85,7 @@ if not pid:
         from celery.contrib.django.task import DjangoTask
         from django.apps import apps
         assert app is real_app
+        assert real_app.conf.worker_max_tasks_per_child == int(os.environ['EXPECTED_TASK_LIMIT'])
         assert apps.ready
         assert set(app.tasks) == set(metadata['tasks'])
         assert all(isinstance(task, DjangoTask) for task in app.tasks.values())

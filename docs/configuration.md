@@ -1199,6 +1199,15 @@ things it will do in parallel.
 
     Defaults to 1
 
+#### [`PAPERLESS_WORKER_MAX_TASKS_PER_CHILD=<num>`](#PAPERLESS_WORKER_MAX_TASKS_PER_CHILD) {#PAPERLESS_WORKER_MAX_TASKS_PER_CHILD}
+
+: Positive number of tasks a Celery worker child can execute before replacement.
+Higher values reduce process startup overhead but retain imported libraries and
+caches longer. Applies to both the standard and lean workers. Idle autoscaling
+can retire a child before it reaches this limit.
+
+    Defaults to 10.
+
 #### [`PAPERLESS_THREADS_PER_WORKER=<num>`](#PAPERLESS_THREADS_PER_WORKER) {#PAPERLESS_THREADS_PER_WORKER}
 
 : Furthermore, paperless uses multiple threads when consuming
