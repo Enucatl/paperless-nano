@@ -25,8 +25,6 @@ def field_snapshot() -> dict | None:
         raise RejectedResult(
             "OCR provenance requires an existing longtext field"
         ) from error
-    if field.pk in settings.ENRICHMENT_FIELDS.values():
-        raise RejectedResult("OCR provenance and enrichment require distinct fields")
     return {"id": field.pk, "data_type": field.data_type}
 
 

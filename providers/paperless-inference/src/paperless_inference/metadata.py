@@ -8,7 +8,7 @@ from typing import Literal, Optional
 import datetime as _dt
 
 from json_repair import repair_json
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from paperless_inference.config import ProviderConfig as AgentConfig
 from paperless_inference.inference import complete
@@ -65,6 +65,8 @@ def _get_completion_text(response) -> str:
 
 
 class _ExtractedMetadata(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     title: Optional[str] = Field(
         default=None,
         description=(
@@ -132,11 +134,39 @@ def _field_instructions_from_schema() -> str:
     return "\n".join(lines)
 
 
-def _metadata_response_format_tier(config: AgentConfig) -> tuple[str, object | None]:
+def _metadata_response_format_tier(
+    config: AgentConfig, managed_fields: dict | None = None
+) -> tuple[str, object | None]:
     """Return the metadata prompt and the selected response format policy."""
     response_format_policy = config.metadata_response_format
     system_prompt = config.metadata_prompt + "\n\n" + _field_instructions_from_schema()
     metadata_schema = _ExtractedMetadata.model_json_schema()
+    for name, field in (managed_fields or {}).items():
+        kind = {
+            "string": "string",
+            "longtext": "string",
+            "date": "string",
+            "boolean": "boolean",
+            "integer": "integer",
+            "float": "number",
+        }.get(field["data_type"])
+        if (
+            kind is None
+            or name in metadata_schema["properties"]
+            or name in {"processing_date", "audit"}
+        ):
+            continue
+        value_schema = {"type": kind}
+        if field["data_type"] == "date":
+            value_schema["format"] = "date"
+        description = (
+            f"Existing {field['data_type']} custom field; use null when unknown."
+        )
+        metadata_schema["properties"][name] = {
+            "anyOf": [value_schema, {"type": "null"}],
+            "description": description,
+        }
+        system_prompt += f"\n- {name}: {description}"
     # OpenAI-compatible strict JSON Schema requires every property to be
     # required. Nullable fields preserve the distinction between "unknown" and
     # an omitted field in the model output.
@@ -177,9 +207,13 @@ class StructuredOutputStrategy:
             raise ValueError("Metadata response must be a non-empty JSON object")
         return parsed
 
-    async def extract(self, text: str, config: AgentConfig) -> _ExtractedMetadata:
+    async def extract(
+        self, text: str, config: AgentConfig, managed_fields: dict | None = None
+    ) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
-        system_prompt, response_format = _metadata_response_format_tier(config)
+        system_prompt, response_format = _metadata_response_format_tier(
+            config, managed_fields
+        )
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -205,8 +239,6 @@ class StructuredOutputStrategy:
         raw = _get_completion_text(response)
         log.info("Smart agent: metadata raw response: %s", raw)
         data = self._fallback_parse(raw)
-        if not _ExtractedMetadata.model_fields.keys() & data.keys():
-            raise ValueError("Metadata response contains no metadata fields")
         try:
             return _ExtractedMetadata.model_validate(data)
         except ValidationError as exc:
@@ -214,6 +246,6 @@ class StructuredOutputStrategy:
             if any(error["loc"] != ("date",) for error in exc.errors()):
                 raise
             data.pop("date", None)
-            if not _ExtractedMetadata.model_fields.keys() & data.keys():
+            if not data:
                 raise
             return _ExtractedMetadata.model_validate(data)

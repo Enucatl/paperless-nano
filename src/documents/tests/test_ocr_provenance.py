@@ -57,17 +57,15 @@ def test_reprocess_publishes_provenance_and_preserves_other_fields(
     assert sample_doc.custom_fields.filter(field=field).count() == 1
 
 
-def test_provenance_requires_configured_separate_longtext(settings):
-    """An invalid schema or shared metadata target cannot silently drop the audit."""
+def test_provenance_requires_longtext(settings):
+    """An invalid schema cannot silently discard OCR provenance."""
     field = CustomField.objects.create(name="short", data_type="string")
     settings.OCR_PROVENANCE_FIELD = field.pk
     with pytest.raises(RejectedResult, match="longtext"):
         field_snapshot()
     field.data_type = "longtext"
     field.save()
-    settings.ENRICHMENT_FIELDS = {"audit": field.pk}
-    with pytest.raises(RejectedResult, match="distinct"):
-        field_snapshot()
+    assert field_snapshot() == {"id": field.pk, "data_type": "longtext"}
 
 
 def test_unconfigured_provenance_rejects_before_publication(
@@ -158,17 +156,16 @@ def test_revoked_actor_cannot_publish(sample_doc, settings, django_user_model):
     assert not sample_doc.custom_fields.filter(field=field).exists()
 
 
-@pytest.mark.parametrize("invalid_schema", ["missing", "type"])
 @pytest.mark.parametrize("concurrent_edit", [False, True])
 def test_metadata_admission_failure_keeps_committed_ocr(
     sample_doc,
     provider,  # noqa: F811
     rich,  # noqa: F811
     settings,
-    invalid_schema,
+    mocker,
     concurrent_edit,
 ):
-    """Schema repair resumes metadata admission without repeating successful OCR."""
+    """Admission repair resumes metadata without repeating successful OCR."""
     field = CustomField.objects.create(name="ocr audit", data_type="longtext")
     settings.OCR_PROVENANCE_FIELD = field.pk
     provider.process.side_effect = lambda request, root: {
@@ -180,13 +177,10 @@ def test_metadata_admission_failure_keeps_committed_ocr(
         },
     }
     job = jobs.stage_reprocess(sample_doc.pk, metadata=True)
-    summary = CustomField.objects.get(pk=settings.ENRICHMENT_FIELDS["summary"])
-    summary_id = summary.pk
-    if invalid_schema == "missing":
-        summary.delete()
-    else:
-        summary.data_type = "boolean"
-        summary.save()
+    admission = mocker.patch(
+        "documents.enrichment_operations.managed_fields",
+        side_effect=RejectedResult("metadata admission unavailable"),
+    )
     with pytest.raises(RejectedResult, match="OCR committed; metadata admission"):
         jobs.run_reprocess(job.pk)
     job.refresh_from_db()
@@ -197,9 +191,11 @@ def test_metadata_admission_failure_keeps_committed_ocr(
     assert sample_doc.archive_path.exists()
     assert sample_doc.custom_fields.get(field=field).value
     assert not DocumentJob.objects.filter(kind="enrich").exists()
-    CustomField.objects.update_or_create(
-        pk=summary_id, defaults={"name": "summary", "data_type": "longtext"}
-    )
+    admission.side_effect = None
+    admission.return_value = {
+        item.name: {"id": item.pk, "data_type": item.data_type}
+        for item in CustomField.objects.exclude(pk=field.pk)
+    }
     if concurrent_edit:
         sample_doc.title = "User title"
         sample_doc.save()
@@ -209,6 +205,32 @@ def test_metadata_admission_failure_keeps_committed_ocr(
         sample_doc.refresh_from_db()
         assert sample_doc.title == "User title"
         return
+    assert jobs.run_reprocess(job.pk)
+    provider.process.assert_called_once()
+    job.refresh_from_db()
+    assert job.status == DocumentJob.Status.SUCCEEDED
+    assert DocumentJob.objects.filter(pk=job.result["metadata_job"]).exists()
+
+
+def test_missing_metadata_definition_does_not_block_ocr_followup(
+    sample_doc,
+    provider,  # noqa: F811
+    rich,  # noqa: F811
+    settings,
+):
+    """Removing an optional summary definition still admits metadata after OCR."""
+    CustomField.objects.filter(name="summary").delete()
+    field = CustomField.objects.create(name="ocr audit", data_type="longtext")
+    settings.OCR_PROVENANCE_FIELD = field.pk
+    provider.process.side_effect = lambda request, root: {
+        **provider.output(request, root),
+        "provenance": {
+            "schema_version": 1,
+            "page_count": 1,
+            "source_sha256": request["source"]["sha256"],
+        },
+    }
+    job = jobs.stage_reprocess(sample_doc.pk, metadata=True)
     assert jobs.run_reprocess(job.pk)
     provider.process.assert_called_once()
     job.refresh_from_db()

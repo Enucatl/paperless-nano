@@ -106,13 +106,13 @@ def test_rejects_changed_current_identity(example):
         validate_result(example["request"], example["result"], current)
 
 
-def test_requires_managed_field(example):
-    """A provider cannot write a role which the core did not authorize."""
-    del example["request"]["managed_fields"]["summary"]
-    with pytest.raises(InvalidEnrichmentResult):
-        validate_result(
-            example["request"], example["result"], example["request"]["identity"]
-        )
+@pytest.mark.parametrize("role", ["summary", "processing_date", "audit"])
+def test_missing_field_definition_is_ignored(example, role):
+    """Missing definitions leave valid metadata usable without creating schema."""
+    del example["request"]["managed_fields"][role]
+    validate_result(
+        example["request"], example["result"], example["request"]["identity"]
+    )
 
 
 @pytest.mark.parametrize("relation", [{"id": 8}, {"create": "language:und"}])

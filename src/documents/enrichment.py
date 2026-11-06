@@ -23,7 +23,7 @@ class EnrichmentIdentity(TypedDict):
 
 
 class ManagedField(TypedDict):
-    """A core-authorized custom field and its retained storage type."""
+    """An existing named custom field and its retained storage type."""
 
     id: int
     data_type: str
@@ -52,7 +52,7 @@ class RelationProposal(TypedDict, total=False):
 
 
 class CustomFieldProposal(TypedDict):
-    """Replace a named managed field with a value of its retained type."""
+    """Replace an existing field using its retained ID and storage type."""
 
     field: int
     data_type: str
@@ -169,8 +169,10 @@ def validate_result(
         if role not in result:
             continue
         field = request["managed_fields"].get(role)
-        if not field or field["data_type"] not in expected_types:
-            _reject("Missing or incompatible managed field")
+        if not field:
+            continue
+        if field["data_type"] not in expected_types:
+            _reject("Incompatible managed field")
         value = (
             json.dumps(result[role], ensure_ascii=False)
             if role == "audit"

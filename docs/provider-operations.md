@@ -52,12 +52,15 @@ coordinator, and server processors. Install the package before selecting its
 class paths. Do not install the external listener, stage queue, or API-writeback
 runner alongside this workflow. External model servers remain required.
 
-Provision the dedicated processor account and the summary, processing-date,
-audit, and OCR-provenance fields before uploading. Confirm their existing types
-rather than silently replacing fields with the same names. The configured
-`PAPERLESS_ENRICHMENT_FIELDS` mapping must contain distinct IDs; use longtext for
-summary/audit and date for processing date. OCR provenance needs its own longtext
-field. The requesting user needs document-edit access and permission to create
+Provision the dedicated processor account before uploading. To retain all bundled
+metadata outputs, create fields named exactly `summary` (longtext),
+`processing_date` (date), and `audit` (longtext). Confirm existing types rather
+than replacing same-name definitions. Additional extracted keys match existing
+field names exactly; unmatched keys are ignored and definitions are never created
+automatically. No field-ID mapping is needed. OCR provenance needs its own
+configured longtext field, excluded from metadata targets. Existing installations
+must follow the [field migration instructions](rich-metadata-contract.md#custom-field-migration).
+The requesting user needs document-edit access and permission to create
 correspondents/tags when a proposal requests new entities; processor capability
 grants do not confer document-edit authority.
 
@@ -255,16 +258,17 @@ only after verifying the restored documents, tasks, and ordinary search.
 | Cancelled | Late results cannot apply. Already committed data, external requests/costs, and uncertain effects are not undone. |
 
 Changing provider code identity, model revision, prompt, endpoint, effective
-configuration, field mapping/type, source/content revision, or relevant authority
-can invalidate pending proposals. Never silently relabel a pending request.
+configuration, custom-field names/types, source/content revision, or relevant
+authority can invalidate pending proposals. Never silently relabel a pending request.
 Current permissions are checked again before application; revoking requester
 edit/create permissions or processor capabilities can stop previously admitted
 work. Concurrent creation of unrelated authorized entities does not itself
 invalidate a rich proposal; its retained candidate access is still rechecked.
 
-Contract v1 rejects unknown result fields and incompatible versions. A new
-writable field, changed meaning, or changed value type needs a new supported
-contract and core implementation. Ship matching core/provider artifacts and run
+Contract v1 rejects unknown top-level result keys and incompatible versions.
+Additional named custom fields use the existing typed `custom_fields` list;
+unsupported value types or changed result meanings need a new supported contract
+and core implementation. Ship matching core/provider artifacts and run
 the baseline against both sides before upgrading. Retained admission dates make
 retries stable; a delayed retry keeps its original processing day rather than
 stamping the retry day. No exact timestamp parity is claimed for that difference.

@@ -122,6 +122,94 @@ def test_empty_content_does_not_call_endpoint(monkeypatch, metadata_request):
     complete.assert_not_called()
 
 
+def test_metadata_matches_additional_properties_by_field_name(
+    monkeypatch, metadata_request
+):
+    """Extra extractor properties reach existing fields without an ID allowlist."""
+    from documents.enrichment import validate_result
+
+    metadata_request["managed_fields"].update(
+        invoice_number={"id": 4, "data_type": "string"},
+        reviewed={"id": 5, "data_type": "boolean"},
+        omitted={"id": 6, "data_type": "integer"},
+        unknown={"id": 7, "data_type": "float"},
+    )
+    response(
+        monkeypatch,
+        json.dumps(
+            {
+                "title": "Invoice",
+                "invoice_number": "INV-123",
+                "reviewed": False,
+                "unknown": None,
+                "unknown_property": "ignored",
+            }
+        ),
+    )
+    retained = deepcopy(metadata_request)
+    result = MetadataProvider().enrich(metadata_request)
+    validate_result(metadata_request, result, MetadataProvider().identity)
+    assert result["custom_fields"] == [
+        {"field": 4, "data_type": "string", "value": "INV-123"},
+        {"field": 5, "data_type": "boolean", "value": False},
+    ]
+    assert metadata_request == retained
+
+
+@pytest.mark.parametrize("policy", ["json_schema", "json_object", "none"])
+def test_metadata_requests_existing_custom_fields(
+    monkeypatch, metadata_request, policy
+):
+    """Strict schemas and every prompt expose retained extra field names and types."""
+    monkeypatch.setenv("INFERENCE_METADATA_RESPONSE_FORMAT", policy)
+    metadata_request["managed_fields"].update(
+        invoice_number={"id": 4, "data_type": "string"},
+        unsupported={"id": 5, "data_type": "documentlink"},
+    )
+    complete = response(monkeypatch, '{"invoice_number": "INV-123"}')
+    MetadataProvider().enrich(metadata_request)
+    kwargs = complete.call_args.kwargs
+    assert (
+        "invoice_number: Existing string custom field"
+        in kwargs["messages"][0]["content"]
+    )
+    assert "unsupported:" not in kwargs["messages"][0]["content"]
+    if policy == "json_schema":
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert schema["properties"]["invoice_number"]["anyOf"] == [
+            {"type": "string"},
+            {"type": "null"},
+        ]
+        assert "invoice_number" in schema["required"]
+        assert "audit" not in schema["properties"]
+        assert "processing_date" not in schema["properties"]
+        assert "unsupported" not in schema["properties"]
+
+
+def test_metadata_ignores_unmatched_properties(monkeypatch, metadata_request):
+    """A missing custom-field definition cannot reject valid ordinary metadata."""
+    response(monkeypatch, '{"title": "Invoice", "invoice_number": "INV-123"}')
+    result = MetadataProvider().enrich(metadata_request)
+    assert result["title"] == "Invoice"
+    assert "custom_fields" not in result
+
+
+def test_metadata_accepts_additional_properties_without_baseline_fields(
+    monkeypatch, metadata_request
+):
+    """A custom extractor may return only a named existing custom field."""
+    metadata_request["managed_fields"]["invoice_number"] = {
+        "id": 4,
+        "data_type": "string",
+    }
+    response(monkeypatch, '{"invoice_number": "INV-123"}')
+    result = MetadataProvider().enrich(metadata_request)
+    assert result["custom_fields"] == [
+        {"field": 4, "data_type": "string", "value": "INV-123"}
+    ]
+
+
 def test_endpoint_failure_propagates(monkeypatch, metadata_request):
     """Core receives the failed attempt instead of a fabricated success proposal."""
     complete = response(monkeypatch, "{}")

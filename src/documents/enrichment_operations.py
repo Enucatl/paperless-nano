@@ -69,7 +69,6 @@ def provider_configuration(*, classification_only: bool = False):
                 {
                     "provider": settings.ENRICHMENT_PROVIDER,
                     "configuration": configuration,
-                    "fields": settings.ENRICHMENT_FIELDS,
                     "allow_remote": settings.ENRICHMENT_ALLOW_REMOTE,
                     "uses_remote_service": remote,
                     "replay_safe": replay_safe,
@@ -84,32 +83,13 @@ def provider_configuration(*, classification_only: bool = False):
 
 
 def managed_fields() -> dict:
-    """Resolve administrator-selected fields without permitting schema creation."""
-    mapping = settings.ENRICHMENT_FIELDS
-    if (
-        not isinstance(mapping, dict)
-        or any(not isinstance(role, str) or not role for role in mapping)
-        or any(type(pk) is not int or pk < 1 for pk in mapping.values())
-        or len(set(mapping.values())) != len(mapping)
-    ):
-        raise RejectedResult("Rich metadata fields require distinct positive field IDs")
-    provenance = getattr(settings, "OCR_PROVENANCE_FIELD", None)
-    if provenance and str(provenance) in {str(pk) for pk in mapping.values()}:
-        raise RejectedResult("Rich metadata cannot overwrite the OCR provenance field")
-    fields = CustomField.objects.in_bulk(mapping.values())
-    if len(fields) != len(mapping):
-        raise RejectedResult("A configured rich metadata field no longer exists")
-    for role, pk in mapping.items():
-        allowed = {
-            "summary": {"string", "longtext"},
-            "processing_date": {"date"},
-            "audit": {"string", "longtext"},
-        }.get(role, {"string", "longtext", "date", "boolean", "integer", "float"})
-        if fields[pk].data_type not in allowed:
-            raise RejectedResult(f"Incompatible managed field type for {role}")
+    """Snapshot existing fields by exact name, reserving OCR provenance for core."""
+    fields = CustomField.objects.all()
+    provenance = settings.OCR_PROVENANCE_FIELD
+    if provenance not in (None, ""):
+        fields = fields.exclude(pk=provenance)
     return {
-        role: {"id": pk, "data_type": fields[pk].data_type}
-        for role, pk in mapping.items()
+        field.name: {"id": field.pk, "data_type": field.data_type} for field in fields
     }
 
 
@@ -258,7 +238,7 @@ def apply(
         item["field"]: item["value"] for item in result.get("custom_fields", [])
     }
     for role in ("summary", "processing_date", "audit"):
-        if role in result:
+        if role in result and role in request["managed_fields"]:
             value = result[role]
             if role == "audit":
                 value = json.dumps(

@@ -55,14 +55,12 @@ def rich(settings, mocker, paperless_dirs):
     settings.ENRICHMENT_PROVIDER = (
         "documents.tests.test_rich_enrichment_jobs.RichMetadata"
     )
-    settings.ENRICHMENT_FIELDS = {
-        role: CustomField.objects.create(name=role, data_type=kind).pk
-        for role, kind in (
-            ("summary", "longtext"),
-            ("processing_date", "date"),
-            ("audit", "longtext"),
-        )
-    }
+    for role, kind in (
+        ("summary", "longtext"),
+        ("processing_date", "date"),
+        ("audit", "longtext"),
+    ):
+        CustomField.objects.create(name=role, data_type=kind)
     mocker.patch("documents.jobs._dispatch")
     mocker.patch("documents.search.get_backend")
     mocker.patch("documents.workflows.runner.run_workflows")
@@ -82,9 +80,7 @@ def stage_result(document, processor, *, actor_id=None, change=None):
     return job, lease, result
 
 
-def test_apply_preserves_unrelated_metadata_and_duplicate_delivery(
-    sample_doc, rich, settings
-):
+def test_apply_preserves_unrelated_metadata_and_duplicate_delivery(sample_doc, rich):
     """Atomic publication preserves unrelated values and applies a staged result once."""
     keep = TagFactory(name="unrelated")
     old = TagFactory(name="language:de")
@@ -107,21 +103,12 @@ def test_apply_preserves_unrelated_metadata_and_duplicate_delivery(
         "language:en",
     }
     assert sample_doc.custom_fields.get(field=extra).value == "keep"
+    assert sample_doc.custom_fields.get(field__name="summary").value == ""
     assert (
-        sample_doc.custom_fields.get(
-            field_id=settings.ENRICHMENT_FIELDS["summary"]
-        ).value
-        == ""
-    )
-    assert (
-        sample_doc.custom_fields.get(
-            field_id=settings.ENRICHMENT_FIELDS["processing_date"]
-        ).value.isoformat()
+        sample_doc.custom_fields.get(field__name="processing_date").value.isoformat()
         == lease["input"]["date"]
     )
-    audit = json.loads(
-        sample_doc.custom_fields.get(field_id=settings.ENRICHMENT_FIELDS["audit"]).value
-    )
+    audit = json.loads(sample_doc.custom_fields.get(field__name="audit").value)
     assert audit["application"]["correspondent_id"] == sample_doc.correspondent_id
     modified = sample_doc.modified
     assert (
@@ -146,10 +133,10 @@ def test_apply_preserves_unrelated_metadata_and_duplicate_delivery(
         ),
         lambda result: result.update(correspondent={"id": 999999}),
     ],
-    ids=["title-type", "unmanaged-field", "forbidden-relation"],
+    ids=["title-type", "unknown-field", "forbidden-relation"],
 )
 def test_malformed_result_changes_nothing(sample_doc, rich, change):
-    """Invalid types, unmanaged fields and forbidden relations reject the whole proposal."""
+    """Invalid types and forbidden relations reject the whole proposal."""
     job, _, _ = stage_result(sample_doc, rich, change=change)
     with pytest.raises(RejectedResult):
         enrichment_jobs.run_enrichment(str(job.pk))
@@ -167,13 +154,13 @@ def test_malformed_result_changes_nothing(sample_doc, rich, change):
         "custom_field",
         "provider",
         "configuration",
-        "field_mapping",
+        "field_name",
         "field_type",
         "candidate",
     ],
 )
 def test_changed_snapshot_rejects_staged_result(
-    sample_doc, rich, settings, monkeypatch, mutation
+    sample_doc, rich, monkeypatch, mutation
 ):
     """User edits, schema changes and changed model inputs cannot be overwritten."""
     candidate = CorrespondentFactory(name="existing")
@@ -194,12 +181,10 @@ def test_changed_snapshot_rejects_staged_result(
         )
     elif mutation == "configuration":
         monkeypatch.setattr(RichMetadata, "configuration", {"threshold": 0.9})
-    elif mutation == "field_mapping":
-        settings.ENRICHMENT_FIELDS = {**settings.ENRICHMENT_FIELDS, "summary": field.pk}
+    elif mutation == "field_name":
+        CustomField.objects.filter(name="summary").update(name="renamed_summary")
     elif mutation == "field_type":
-        CustomField.objects.filter(pk=settings.ENRICHMENT_FIELDS["summary"]).update(
-            data_type="string"
-        )
+        CustomField.objects.filter(name="summary").update(data_type="string")
     else:
         candidate.name = "renamed"
         candidate.save()
@@ -326,11 +311,59 @@ def test_remote_inference_requires_explicit_policy(sample_doc, rich, monkeypatch
         submit_enrichment(sample_doc.pk)
 
 
-def test_duplicate_managed_field_mapping_is_rejected(sample_doc, rich, settings):
-    """Reserved roles cannot alias each other or an additional writable field."""
-    settings.ENRICHMENT_FIELDS["additional"] = settings.ENRICHMENT_FIELDS["summary"]
-    with pytest.raises(RejectedResult, match="distinct"):
-        submit_enrichment(sample_doc.pk)
+def test_named_fields_create_instances_without_mapping(sample_doc, rich):
+    """Existing definitions suffice without an environment-variable mapping."""
+    field = CustomField.objects.create(name="invoice_number", data_type="string")
+    existing_ids = set(CustomField.objects.values_list("pk", flat=True))
+    job, lease, _ = stage_result(
+        sample_doc,
+        rich,
+        change=lambda result: result.update(
+            custom_fields=[
+                {"field": field.pk, "data_type": "string", "value": "INV-123"},
+            ]
+        ),
+    )
+    assert lease["input"]["managed_fields"]["invoice_number"] == {
+        "id": field.pk,
+        "data_type": "string",
+    }
+    assert not sample_doc.custom_fields.filter(field=field).exists()
+    enrichment_jobs.run_enrichment(str(job.pk))
+    assert sample_doc.custom_fields.get(field=field).value == "INV-123"
+    assert set(CustomField.objects.values_list("pk", flat=True)) == existing_ids
+
+
+def test_missing_reserved_definitions_preserve_valid_metadata(sample_doc, rich):
+    """Optional field definitions do not gate title, relations or ordinary metadata."""
+    CustomField.objects.all().delete()
+    job, _, _ = stage_result(sample_doc, rich)
+    enrichment_jobs.run_enrichment(str(job.pk))
+    sample_doc.refresh_from_db()
+    assert sample_doc.title == "Invoice from Acme"
+    assert sample_doc.correspondent.name == "Acme"
+    assert not sample_doc.custom_fields.exists()
+    assert not CustomField.objects.exists()
+
+
+@pytest.mark.parametrize("value", [42, "x" * 129])
+def test_invalid_matching_value_rolls_back_all_metadata(sample_doc, rich, value):
+    """Ordinary matched-field type/storage checks remain atomic with other writes."""
+    field = CustomField.objects.create(name="invoice_number", data_type="string")
+    job, _, _ = stage_result(
+        sample_doc,
+        rich,
+        change=lambda result: result.update(
+            custom_fields=[{"field": field.pk, "data_type": "string", "value": value}]
+        ),
+    )
+    with pytest.raises(RejectedResult):
+        enrichment_jobs.run_enrichment(str(job.pk))
+    sample_doc.refresh_from_db()
+    assert sample_doc.title == "test"
+    assert not Correspondent.objects.exists()
+    assert not Tag.objects.exists()
+    assert not sample_doc.custom_fields.exists()
 
 
 def test_empty_content_has_no_followup_effects(sample_doc, rich, mocker):
@@ -466,10 +499,29 @@ def test_operator_can_acknowledge_committed_followup(sample_doc, rich, mocker):
 
 
 def test_rich_metadata_cannot_write_ocr_provenance(sample_doc, rich, settings):
-    """The administrator's rich mapping must not alias the reserved parser output."""
-    settings.OCR_PROVENANCE_FIELD = str(settings.ENRICHMENT_FIELDS["audit"])
-    with pytest.raises(RejectedResult, match="OCR provenance"):
-        submit_enrichment(sample_doc.pk)
+    """Parser output is excluded even when its name matches a metadata property."""
+    field = CustomField.objects.get(name="audit")
+    settings.OCR_PROVENANCE_FIELD = str(field.pk)
+    CustomFieldInstance.objects.create(
+        document=sample_doc, field=field, value_long_text="parser receipt"
+    )
+    job, lease, _ = stage_result(sample_doc, rich)
+    assert "audit" not in lease["input"]["managed_fields"]
+    enrichment_jobs.run_enrichment(str(job.pk))
+    sample_doc.refresh_from_db()
+    assert sample_doc.title == "Invoice from Acme"
+    assert sample_doc.custom_fields.get(field=field).value == "parser receipt"
+
+    job, _, _ = stage_result(
+        sample_doc,
+        rich,
+        change=lambda result: result.update(
+            custom_fields=[{"field": field.pk, "data_type": "longtext", "value": "bad"}]
+        ),
+    )
+    with pytest.raises(RejectedResult):
+        enrichment_jobs.run_enrichment(str(job.pk))
+    assert sample_doc.custom_fields.get(field=field).value == "parser receipt"
 
 
 def test_language_replacement_preserves_unrelated_descendants(sample_doc, rich):

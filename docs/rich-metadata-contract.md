@@ -16,7 +16,7 @@ operation journal. No extra stage queue or listener is required.
 
 The maintained sanitized [invoice fixture](../src/documents/tests/fixtures/enrichment/invoice.json)
 is a complete request/result example with an existing correspondent, new language,
-all required metadata roles, one additional typed field, and unrelated values to
+all bundled metadata outputs, one additional typed field, and unrelated values to
 preserve. IDs, text, endpoint and identities are synthetic. Tests load this same
 fixture, so documentation and wire checks share an example.
 
@@ -32,17 +32,25 @@ providers must never fetch a global list themselves.
 `identity` contains nonempty immutable `provider`, `model` and `prompt` strings.
 Implementation versions, model artifact revisions and prompt hashes belong here;
 a mutable model alias alone is insufficient. `configuration` captures effective
-thresholds, endpoint identity, generation parameters, remote-policy selection and
-field mapping without API keys, tokens, URL credentials or signed query strings.
+thresholds, endpoint identity, generation parameters and remote-policy selection
+without API keys, tokens, URL credentials or signed query strings.
 Core constructs and retains this snapshot, and compares it again at publication.
 
-`managed_fields` maps role names to `{id, data_type}`. The reserved roles are
-`summary` (string/longtext), `processing_date` (date), and `audit`
-(string/longtext containing serialized JSON). Additional explicitly authorized
-roles may use string, longtext, date, boolean, integer or float. Version 1 does not
-propose URL, monetary, select or document-link values: these are outside the
-existing metadata runner's behavior and require their own validation contract.
-No arbitrary custom-field ID or field creation is permitted.
+`managed_fields` maps existing custom-field names to `{id, data_type}`. Core
+snapshots the definitions automatically, excluding the configured OCR provenance
+field; there is no per-field allowlist. Matching is exact and case-sensitive.
+The reserved names are `summary` (string/longtext), `processing_date` (date), and
+`audit` (string/longtext containing serialized JSON). Additional extracted keys
+may target matching existing fields of type string, longtext, date, boolean,
+integer or float. Unmatched extracted keys are ignored. Version 1 does not propose
+URL, monetary, select or document-link values; these need their own validation
+contract. Providers never create custom-field definitions or overwrite OCR
+provenance.
+
+The bundled adapter extends its model prompt and strict response schema with
+supported additional field names and types from this snapshot. A null answer for
+an additional model property means unknown and produces no field proposal,
+preserving its existing value. Null remains invalid in the core result contract.
 
 A result repeats `version`, `revision` and `identity`. Every other key is optional:
 
@@ -61,14 +69,15 @@ Omission always preserves. Null is rejected, including for relations and dates;
 it never implicitly clears an existing value. Empty title is invalid. Empty
 summary/string custom values explicitly replace with blank; an empty
 `custom_fields` list changes nothing. The three reserved roles cannot also appear
-in `custom_fields`; duplicate field IDs are rejected. Supplied scalar values
-replace, never append. A language proposal replaces managed `language:` tags
+in `custom_fields`; duplicate field IDs are rejected. If a reserved-name field
+does not exist, its output is unused without rejecting other valid metadata.
+Supplied scalar values replace, never append. A language proposal replaces managed `language:` tags
 with one selected tag, preserving unrelated tags and fields. Stage-selection tags
 from the old runner are not part of this new orchestration. No result can change
 owner, permissions, content, document type, storage path or arbitrary tags.
 
 Creation is a proposal, not authority. Core rechecks document edit access,
-existing relation access, field types/mapping and add permissions at commit.
+existing relation access, field names/types and add permissions at commit.
 It resolves concurrent same-name creations within its transaction and records the
 actual chosen ID in its audit; a provider's diagnostic ID is not authoritative.
 Core must preserve inaccessible/unrelated tags, not infer deletion authority from
@@ -123,7 +132,7 @@ This document reserves that integration; #46 must implement and test it.
 nonfinite/non-JSON values, incompatible identity/revision, forbidden IDs, unsafe
 relation shapes, unsupported field types, duplicate field updates and changes
 for empty input. It does not replace database authorization or field validators.
-Core also checks current permissions, managed-field configuration/types, document
+Core also checks current permissions, retained custom-field names/types, document
 and effective-content revision, retained candidate IDs/names, current
 provider/model/prompt and configuration inside the apply transaction. Changes to
 these invalidate pending work; do not silently reinterpret or migrate the old
@@ -142,9 +151,10 @@ application, while cancellation after commit cannot undo already applied state.
 Post-commit indexing/notifications recover through the existing completion path.
 Inference errors produce no document mutations and follow durable retry policy.
 
-Version 1 is strict. Unknown fields and versions are rejected; incompatible
-meaning, new writable fields or a changed type require a new negotiated contract
-version and tests. Updating provider code, model, prompt, endpoint or effective
+Version 1 is strict. Unknown top-level result keys and versions are rejected;
+additional named fields use the existing typed `custom_fields` list. Incompatible
+meaning or unsupported value types require a new negotiated contract version and
+tests. Updating provider code, model, prompt, endpoint or effective
 configuration invalidates pending work even if the wire version stays 1.
 Classification providers continue their existing contract independently.
 
@@ -160,13 +170,35 @@ classification enrichment remains available. Rich providers declare
 `PAPERLESS_ENRICHMENT_ALLOW_REMOTE=true`. The declaration and policy are retained
 with the provider configuration and rechecked before computation/application.
 
-`PAPERLESS_ENRICHMENT_FIELDS` is a JSON object mapping roles to existing custom
-field IDs, for example `{"summary": 4, "processing_date": 5, "audit": 6}`.
-Use longtext for summary/audit and date for processing date. IDs must be distinct;
-additional roles are opt-in, and the OCR provenance field cannot be a rich
-metadata target. Core never creates custom-field definitions. An authorized
-document editor may change the configured field values, as with ordinary document
-metadata; schema creation/change remains a separate permission.
+Create custom-field definitions with names matching the extractor's keys. For
+the bundled provider, use `summary` and `audit` (longtext recommended), and
+`processing_date` (date). For example, extracted `invoice_number: "INV-123"`
+populates an existing `invoice_number` field, creating its value instance on the
+document if needed. Without that definition the property is unused, while other
+valid metadata still applies. The adapter resolves names to retained IDs and
+storage types in its `custom_fields` proposals. No opt-in, role property or
+replacement field allowlist is required. The OCR provenance field is excluded
+from metadata targets. An authorized document editor may change these values,
+as with ordinary document metadata; schema creation/change remains a separate
+permission.
+
+### Custom-field migration
+
+`PAPERLESS_ENRICHMENT_FIELDS` has been removed. Before upgrading, drain pending
+rich metadata jobs or cancel them for fresh admission after upgrade; their retained
+configuration must not be silently reinterpreted. Preserve completed outcomes.
+Rename each formerly mapped definition to the exact extracted key, keeping its ID,
+type and stored values. For example, rename `ai_processed` to `processing_date`
+and `ai_metadata` to `audit` if those were the old mapping targets. Resolve any
+same-name definition before renaming rather than deleting data. Remove
+`PAPERLESS_ENRICHMENT_FIELDS` from the deployment environment. Retain the separate
+`PAPERLESS_OCR_PROVENANCE_FIELD` setting.
+
+A field rename changes which key matches for future admissions and invalidates
+pending rich metadata snapshots. Review and re-admit affected jobs; old proposals
+must not follow renamed targets. Creating or renaming a matching definition does
+not rewrite existing documents automatically; request enrichment for those
+that should receive new values.
 
 Core rechecks requester edit access and processor capability at application,
 including after a restart that retained an already accepted proposal. New

@@ -46,23 +46,24 @@ After changing its grants, rerun `document_processor_account` or restart the
 processor. Provisioning broadcasts a retained account notification so every
 supervisor using that account can resume, without taking another account's work.
 
-Create the managed custom fields through core, before admitting documents:
+Create the desired metadata fields through core, before admitting documents.
+Names match extracted keys exactly; absent definitions are ignored. OCR provenance
+requires a separate longtext field:
 
 ```sh
 docker compose exec --user paperless webserver python manage.py shell -c '
-import json
 from documents.models import CustomField
-fields = {}
-for role, name, kind in [("summary", "summary", "longtext"), ("processing_date", "ai_processed", "date"), ("audit", "ai_metadata", "longtext"), ("ocr", "ai_ocr_output", "longtext")]:
+for name, kind in [("summary", "longtext"), ("processing_date", "date"), ("audit", "longtext"), ("ai_ocr_output", "longtext")]:
     field, _ = CustomField.objects.get_or_create(name=name, defaults={"data_type": kind})
     assert field.data_type == kind, f"Existing {name} has incompatible type"
-    fields[role] = field.pk
-print("PAPERLESS_OCR_PROVENANCE_FIELD=" + str(fields.pop("ocr")))
-print("PAPERLESS_ENRICHMENT_FIELDS=" + json.dumps(fields))
+    if name == "ai_ocr_output":
+        print("PAPERLESS_OCR_PROVENANCE_FIELD=" + str(field.pk))
 '
 ```
 
-Copy the two printed settings into `inference.env`, then recreate the container:
+Copy the printed OCR provenance setting into `inference.env`, then recreate the
+container. Metadata fields need no ID mapping. For an existing deployment, follow
+the [field migration instructions](rich-metadata-contract.md#custom-field-migration).
 
 ```sh
 docker compose up -d --force-recreate webserver

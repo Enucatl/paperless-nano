@@ -911,8 +911,8 @@ replacements; valid returned thumbnails avoid default-engine loading.
 : Existing longtext custom-field ID for a replacement parser's structured OCR
 provenance. Core validates the source identity and publishes the record with OCR
 text/archive changes. Unset leaves provenance storage unconfigured; select a
-field for the installed Paddle provider. Keep it separate from rich metadata
-managed fields. See the [provider runbook](provider-operations.md).
+field for the installed Paddle provider. This field is excluded from rich
+metadata targets. See the [provider runbook](provider-operations.md).
 
 #### [`PAPERLESS_OCR_LANGUAGE=<lang>`](#PAPERLESS_OCR_LANGUAGE) {#PAPERLESS_OCR_LANGUAGE}
 
@@ -1334,15 +1334,17 @@ classification contract or `document_retagger` behavior.
     Defaults to empty. Use matching artifacts and the
     [installation, swap, and rollback runbook](provider-operations.md).
 
-#### [`PAPERLESS_ENRICHMENT_FIELDS=<json>`](#PAPERLESS_ENRICHMENT_FIELDS) {#PAPERLESS_ENRICHMENT_FIELDS}
+Rich metadata matches extracted custom-field keys to existing custom-field names
+exactly, including case. Create `summary` (longtext recommended),
+`processing_date` (date), and `audit` (longtext recommended) to store the bundled
+provider's corresponding outputs. Additional extracted properties, such as
+`invoice_number`, populate an existing field with the same name. Missing
+custom-field definitions are ignored; providers never create definitions.
+The configured OCR provenance field is reserved for parser output and cannot be
+written by metadata extraction. Omitted properties preserve existing values.
 
-: Map managed role names to distinct existing custom-field IDs. The installed
-metadata provider requires `summary` (longtext recommended), `processing_date`
-(date), and `audit` (longtext recommended), for example
-`{"summary":1,"processing_date":2,"audit":3}`. Provision fields before admission;
-providers cannot create the schema. Unrelated custom fields remain preserved.
-
-    Defaults to `{}`. Changes invalidate pending rich proposals.
+The former `PAPERLESS_ENRICHMENT_FIELDS` setting has been removed. See the
+[custom-field migration instructions](rich-metadata-contract.md#custom-field-migration).
 
 #### [`PAPERLESS_ENRICHMENT_ALLOW_REMOTE=<bool>`](#PAPERLESS_ENRICHMENT_ALLOW_REMOTE) {#PAPERLESS_ENRICHMENT_ALLOW_REMOTE}
 

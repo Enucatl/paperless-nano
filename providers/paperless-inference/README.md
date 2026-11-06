@@ -41,12 +41,19 @@ INFERENCE_METADATA_MODEL=your-immutable-model-revision
 Read the actual OCR deployment's `/metadata` response to set the three identity
 values; these examples are not an assertion about your endpoint. The provider
 checks identity before and after OCR. Explicitly allow remote OCR on submissions
-or via core's remote OCR default. Set managed summary/date/audit field IDs through
-`PAPERLESS_ENRICHMENT_FIELDS`; core owns schema provisioning and publication.
+or via core's remote OCR default. Create existing custom fields named `summary`
+(longtext), `processing_date` (date), and `audit` (longtext) for those outputs.
+Additional extractor properties match existing custom-field names exactly,
+including case; unmatched names are ignored and definitions are never created
+automatically. The model prompt and strict response schema include supported
+additional field names and types. Null model answers for additional fields leave
+existing values unchanged. No metadata field-ID setting is needed. Core owns validation and
+publication. See the [migration instructions](../../docs/rich-metadata-contract.md#custom-field-migration)
+for existing ID-mapped installations.
 Set `PAPERLESS_OCR_PROVENANCE_FIELD` to an existing longtext custom field ID for
 the structured `ai_ocr_output` record.
 
-Metadata defaults preserve the original prompt/schema, strict JSON schema
+Metadata defaults retain the baseline fields with strict JSON schema
 response format, 1000 max tokens, temperature zero, minimal reasoning effort,
 first valid language or `und`, and correspondent similarity threshold 0.80. Optional settings are
 `INFERENCE_METADATA_RESPONSE_FORMAT` (`auto`, `json_schema`, `json_object`,

@@ -65,11 +65,22 @@ class MetadataProvider:
             return result
         config = ProviderConfig.metadata()
         extracted = asyncio.run(
-            StructuredOutputStrategy().extract(request["content"], config)
+            StructuredOutputStrategy().extract(
+                request["content"], config, request["managed_fields"]
+            )
         )
         result.update(
             summary=(extracted.summary or "").strip(), processing_date=request["date"]
         )
+        custom_fields = [
+            {"field": field["id"], "data_type": field["data_type"], "value": value}
+            for name, value in (extracted.model_extra or {}).items()
+            if (field := request["managed_fields"].get(name)) is not None
+            and name not in {"summary", "processing_date", "audit"}
+            and value is not None
+        ]
+        if custom_fields:
+            result["custom_fields"] = custom_fields
         if extracted.title:
             result["title"] = extracted.title[:128]
         if extracted.date and date(1900, 1, 1) <= extracted.date <= date.fromisoformat(
