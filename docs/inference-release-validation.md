@@ -723,3 +723,52 @@ Run the provider suite from `providers/paperless-inference` with its frozen lock
 and Ghostscript, Java, fonts and veraPDF installed. Run the Tasks frontend suite
 and production build in the Node 24 container. A test selection passing is not a
 claim that the entire upstream backend/frontend suite was run.
+
+## Processor failure-path qualification — 2026-11-06
+
+The local `architecture/idle-memory` working tree now includes terminal
+`DocumentJob` failure propagation to its top-level task, recovery of previously
+stranded task states, and diagnostics that skip core-owned preparation parents.
+These results apply to that working tree, not a published release.
+
+The focused backend check completed **170 passed / 4 skipped** against
+PostgreSQL; the skips are the opt-in real-Redis tests without their environment
+variable. A separate SQLite signal/API/regression selection completed **108
+passed**. Formatting and lint checks passed for the changed Python files.
+
+The new isolated lifecycle check completed all six assertions using PostgreSQL
+18, **Redis 8**, the real supervisor and separate management-command children,
+shared private storage, and a controllable HTTP endpoint:
+
+- Two competing supervisors produced one execution attempt while the endpoint
+  held the operation open; the receipt completed successfully afterward.
+- Revoking the running supervisor account's search grant left new work pending
+  with no attempts. Reprovisioning woke the supervisor and completed that work.
+- Killing an active processor child with `SIGKILL`, then expiring/recovering its
+  replay-safe claim and restarting supervision, completed on attempt two.
+- One HTTP 503 recovered on attempt two; a persistent HTTP 503 stopped after
+  exactly three attempts with the durable job marked failed.
+- The terminal failure also changed the existing top-level task from started to
+  failure, set its completion timestamp and retained the HTTP error message.
+
+Reproduce from the repository root with a matching dependency-bearing core image:
+
+```sh
+scripts/validation/check_processor_deployment.sh paperless-release-current:55928c30e
+```
+
+The runner copies current source into disposable container storage, migrates an
+empty PostgreSQL database and uses disposable Redis and private files. Every
+container uses `--rm --userns=host`; the runner removes its database/broker
+containers and temporary network on exit. It does not touch deployed data. The
+image tag above is the local validation dependency image, not a release artifact.
+
+This qualifies shared supervisor, claim, permission and task-failure behavior
+through a replay-safe finite search operation. The HTTP service is a controlled
+stub, not an OCR/metadata model endpoint. Coordination is driven through the real
+search runner by the check; the full web/coordinator/upload pipeline is covered
+by the earlier live evidence, not rerun here. Active-child recovery explicitly
+invokes recovery after lease expiry; it does not establish immediate automatic
+recovery before the configured recovery schedule. Real-model outage semantics,
+representative corpus parity, upgrade qualification, whole-container crash
+windows and multi-host/NFS safety remain outside this check.

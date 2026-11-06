@@ -44,6 +44,7 @@ def pending_job():
                     "operation": "search.write",
                     "plugin": "search:1",
                     "version": 2,
+                    "policy": {"permission": "documents.process_search"},
                 }
             }
         },

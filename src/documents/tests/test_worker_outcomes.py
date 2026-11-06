@@ -1,4 +1,7 @@
-"""Check outcome replay against real task-history rows."""
+"""Check outcome replay against real task-history rows.
+
+Use real transactions because the outcome helper closes database connections.
+"""
 
 import base64
 from datetime import timedelta
@@ -18,7 +21,7 @@ TASK = "paperless_mail.tasks.process_mail_accounts"
 TRACKED = {TASK: "mail_fetch"}
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("status", PaperlessTask.COMPLETE_STATUSES)
 def test_final_history_is_not_replaced_by_replay(status: str) -> None:
     """Duplicate or delayed parent callbacks cannot overwrite a final result."""
@@ -40,7 +43,7 @@ def test_final_history_is_not_replaced_by_replay(status: str) -> None:
     assert task.date_done == done
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_old_event_does_not_fail_newer_attempt() -> None:
     """Spool replay uses occurrence time rather than helper execution time."""
     now = timezone.now()
@@ -56,7 +59,7 @@ def test_old_event_does_not_fail_newer_attempt() -> None:
     assert task.date_done is None
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_database_failure_retains_record_for_later_helper(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -95,7 +98,7 @@ def test_database_failure_retains_record_for_later_helper(
     assert task.result_data["error_type"] == "WorkerLostError"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_missing_publication_row_is_retained_until_visible(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -113,7 +116,7 @@ def test_missing_publication_row_is_retained_until_visible(
     assert "expired" in task.result_data["reason"]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_malformed_record_does_not_block_valid_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -132,7 +135,7 @@ def test_malformed_record_does_not_block_valid_history(
     assert task.status == "revoked"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_failed_batch_does_not_starve_later_valid_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -153,7 +156,7 @@ def test_failed_batch_does_not_starve_later_valid_event(
     assert len(list(writer.directory.glob("*.json"))) == 100
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_signed_inline_callback_preserves_complete_arguments(settings) -> None:
     """The helper calls the registered task with authenticated Context and dates."""
     from celery.app.task import Context
@@ -183,7 +186,7 @@ def test_signed_inline_callback_preserves_complete_arguments(settings) -> None:
     app.tasks.pop(callback.name)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_callback_rejects_bad_signature_without_execution(settings) -> None:
     """Private spool files still require the existing task signing boundary."""
     from paperless_worker.serialization import SignedPickleError
@@ -195,7 +198,7 @@ def test_callback_rejects_bad_signature_without_execution(settings) -> None:
         )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_failed_callback_keeps_its_acknowledgement_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -213,7 +216,7 @@ def test_failed_callback_keeps_its_acknowledgement_path(
     assert list(writer.directory.glob("*.json")) == [path]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_interrupted_delivery_does_not_starve_later_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

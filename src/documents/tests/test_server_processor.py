@@ -35,6 +35,7 @@ def test_sweep_releases_cursor_before_task_publication(mocker):
                         "status": "pending",
                         "operation": "search.write",
                         "plugin": "search:1",
+                        "policy": {"permission": "documents.process_search"},
                     }
                 }
             },
@@ -206,6 +207,7 @@ def test_processor_skips_busy_job_and_continues(mocker):
                         "status": "pending",
                         "operation": "search.wipe",
                         "plugin": "provider",
+                        "policy": {"permission": "documents.process_search"},
                     }
                 }
             },
@@ -257,6 +259,8 @@ def test_configured_sweep_filters_capabilities_and_continues_after_outage(mocker
     """Only explicitly placed operation families run; one failure does not block others."""
     from django.core.management import call_command
 
+    from paperless_services.processor_queue import capability_for
+
     for operation in [
         "parser.process",
         "metadata.enrich",
@@ -273,6 +277,9 @@ def test_configured_sweep_filters_capabilities_and_continues_after_outage(mocker
                         "status": "pending",
                         "operation": operation,
                         "plugin": "configured",
+                        "policy": {
+                            "permission": f"documents.process_{capability_for(operation)}"
+                        },
                     }
                 }
             },
@@ -354,3 +361,53 @@ def test_tasks_exposes_retained_operation_failure():
         "status": "pending",
         "error": job.error,
     }
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_processor_ignores_core_parent_while_parser_child_waits(mocker, diagnose):
+    """Core traversal entries do not imply missing processor capability grants."""
+    from io import StringIO
+
+    from django.contrib.auth.models import Permission
+    from django.core.management import call_command
+
+    processor = UserFactory()
+    processor.user_permissions.add(Permission.objects.get(codename="process_parser"))
+    job = DocumentJob.objects.create(
+        kind="consume",
+        timeout=30,
+        status=DocumentJob.Status.WAITING,
+        result={
+            "invocations": {
+                "prepare:6": {
+                    "status": "pending",
+                    "operation": "prepare:parse",
+                    "plugin": "core",
+                },
+                "parse": {
+                    "status": "pending",
+                    "operation": "parser.process",
+                    "plugin": "parser:1",
+                    "policy": {"permission": "documents.process_parser"},
+                },
+            }
+        },
+    )
+    execute = mocker.patch("documents.management.commands.document_processor.process")
+    output, errors = StringIO(), StringIO()
+    call_command(
+        "document_processor",
+        user=processor.username,
+        configured=True,
+        capability=["parser", "ingestion"],
+        diagnose=diagnose,
+        stdout=output,
+        stderr=errors,
+    )
+    assert errors.getvalue() == ""
+    assert "prepare:6" not in output.getvalue()
+    if diagnose:
+        execute.assert_not_called()
+        assert f"{job.pk} parse: eligible" in output.getvalue()
+    else:
+        execute.assert_called_once_with(job.pk, "parse", processor)

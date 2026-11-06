@@ -96,7 +96,7 @@ class Command(BaseCommand):
         for key, entry in job.result.get("invocations", {}).items():
             if key_filter is not None and key != key_filter:
                 continue
-            if entry.get("status") != "pending":
+            if entry.get("status") != "pending" or "policy" not in entry:
                 continue
             operation = entry.get("operation", "")
             capability = capability_for(operation)

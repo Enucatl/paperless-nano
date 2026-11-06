@@ -3,6 +3,7 @@
 from documents.deferred_operations import authorize
 from documents.deferred_operations import server_operation
 from documents.job_state import ProcessorFinished
+from documents.job_state import sync_terminal_task
 from documents.models import DocumentJob
 from documents.processor_notifications import defer_notifications
 from documents.processor_notifications import notify_pending
@@ -19,20 +20,23 @@ def process(job_id, key: str, user) -> bool:
     from documents.jobs import run_reprocess
     from documents.search_operations import run_search
 
-    with FileLock(
-        job_directory(job_id).with_suffix(".lock"), timeout=0, is_singleton=True
-    ):
-        return _process_locked(
-            job_id,
-            key,
-            user,
-            {
-                "reprocess": run_reprocess,
-                "consume": run_consumption,
-                "enrich": run_enrichment,
-                "search": run_search,
-            },
-        )
+    try:
+        with FileLock(
+            job_directory(job_id).with_suffix(".lock"), timeout=0, is_singleton=True
+        ):
+            return _process_locked(
+                job_id,
+                key,
+                user,
+                {
+                    "reprocess": run_reprocess,
+                    "consume": run_consumption,
+                    "enrich": run_enrichment,
+                    "search": run_search,
+                },
+            )
+    finally:
+        sync_terminal_task(DocumentJob.objects.get(pk=job_id))
 
 
 def _process_locked(job_id, key, user, runners):
@@ -80,6 +84,9 @@ def _process_locked(job_id, key, user, runners):
             )
         ):
             job.status = DocumentJob.Status.WAITING
-        job.save(update_fields=["attempts", "status", "result"])
+        from django.utils import timezone
+
+        job.updated = timezone.now()
+        job.save(update_fields=["attempts", "status", "result", "updated"])
         notify_pending(job.pk)
     return True

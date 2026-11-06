@@ -82,3 +82,22 @@ def wait(job: DocumentJob, entry: dict) -> None:
 
 class ProcessorFinished(BaseException):
     """Stop coordinator traversal immediately after submitting computation."""
+
+
+def sync_terminal_task(job: DocumentJob) -> None:
+    """Record terminal processor failures without requiring a Celery callback."""
+    from documents.models import PaperlessTask
+    from paperless_worker.outcome_helper import apply_outcome
+
+    if job.status not in {
+        DocumentJob.Status.FAILED,
+        DocumentJob.Status.REJECTED,
+        DocumentJob.Status.ATTENTION,
+    }:
+        return
+    apply_outcome(
+        str(job.pk),
+        PaperlessTask.Status.FAILURE,
+        {"error_type": "DocumentJobError", "error_message": job.error},
+        job.updated,
+    )

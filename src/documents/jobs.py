@@ -13,7 +13,11 @@ from uuid import uuid5
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import CharField
 from django.db.models import F
+from django.db.models import Value
+from django.db.models.functions import Cast
+from django.db.models.functions import Replace
 from django.utils import timezone
 from filelock import FileLock
 from filelock import Timeout
@@ -24,6 +28,7 @@ from documents.file_handling import validate_path_in_root
 from documents.job_state import RejectedResult
 from documents.job_state import check_permission as _check_permission
 from documents.job_state import document_revision as _revision
+from documents.job_state import sync_terminal_task
 from documents.job_storage import atomic_copy as _copy
 from documents.job_storage import file_result as _file_result
 from documents.job_storage import job_directory
@@ -615,6 +620,24 @@ def recover_document_jobs(*, include_recent: bool = False) -> None:
     from documents.deferred_operations import recover_waiting
 
     recover_waiting()
+    terminal_jobs = DocumentJob.objects.alias(
+        task_id=Replace(Cast("pk", CharField()), Value("-"), Value("")),
+    ).filter(
+        task_id__in=PaperlessTask.objects.filter(
+            status__in=[PaperlessTask.Status.PENDING, PaperlessTask.Status.STARTED],
+        )
+        .annotate(
+            job_id=Replace("task_id", Value("-"), Value("")),
+        )
+        .values("job_id"),
+        status__in=[
+            DocumentJob.Status.FAILED,
+            DocumentJob.Status.REJECTED,
+            DocumentJob.Status.ATTENTION,
+        ],
+    )
+    for job in list(terminal_jobs):
+        sync_terminal_task(job)
     cutoff = timezone.now() - datetime.timedelta(minutes=5)
     jobs = DocumentJob.objects.filter(cleaned=False).exclude(
         status__in=[

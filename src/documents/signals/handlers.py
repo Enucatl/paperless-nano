@@ -825,7 +825,10 @@ def task_prerun_handler(sender=None, task_id=None, task=None, **kwargs) -> None:
         return
     try:
         close_old_connections()
-        PaperlessTask.objects.filter(task_id=task_id).update(
+        PaperlessTask.objects.filter(
+            task_id=task_id,
+            status__in=[PaperlessTask.Status.PENDING, PaperlessTask.Status.STARTED],
+        ).update(
             status=PaperlessTask.Status.STARTED,
             date_started=timezone.now(),
         )
@@ -866,8 +869,11 @@ def task_postrun_handler(
             task_instance = PaperlessTask.objects.get(task_id=task_id)
         except PaperlessTask.DoesNotExist:
             return
+        if task_instance.status in PaperlessTask.COMPLETE_STATUSES:
+            return
 
         from django.core.exceptions import ValidationError
+
         from documents.models import DocumentJob
 
         try:
@@ -882,8 +888,13 @@ def task_postrun_handler(
                 "rejected",
                 "attention",
             }:
-                task_instance.status = PaperlessTask.Status.STARTED
-                task_instance.save(update_fields=["status"])
+                PaperlessTask.objects.filter(
+                    pk=task_instance.pk,
+                    status__in=[
+                        PaperlessTask.Status.PENDING,
+                        PaperlessTask.Status.STARTED,
+                    ],
+                ).update(status=PaperlessTask.Status.STARTED)
                 return
             new_status = {
                 "succeeded": PaperlessTask.Status.SUCCESS,
@@ -912,7 +923,10 @@ def task_postrun_handler(
                 task_instance.status = PaperlessTask.Status.FAILURE
                 changed_fields.append("status")
 
-        task_instance.save(update_fields=changed_fields)
+        PaperlessTask.objects.filter(
+            pk=task_instance.pk,
+            status__in=[PaperlessTask.Status.PENDING, PaperlessTask.Status.STARTED],
+        ).update(**{field: getattr(task_instance, field) for field in changed_fields})
     except Exception:  # pragma: no cover
         logger.exception("Updating PaperlessTask failed")
 

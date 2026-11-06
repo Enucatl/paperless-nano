@@ -114,6 +114,10 @@ failures retain their error and permit the existing bounded three attempts;
 uncertain effectful failures require reconciliation rather than blind retries.
 After correcting a terminal failure, inspect the retained job and submit fresh
 work as appropriate. Cancelling does not undo completed work or endpoint costs.
+Terminal processor failures also complete the top-level task with its retained
+error and elapsed time, even when no further coordinator task runs. Startup and
+scheduled recovery repair older terminal jobs whose task history still says
+pending or started; completed task history is preserved.
 
 ## Restart, storage, and memory
 
