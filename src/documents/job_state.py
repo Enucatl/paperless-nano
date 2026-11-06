@@ -74,6 +74,9 @@ def wait(job: DocumentJob, entry: dict) -> None:
     job.status = DocumentJob.Status.WAITING
     job.updated = timezone.now()
     job.save(update_fields=["result", "status", "updated"])
+    from documents.processor_notifications import notify_pending
+
+    notify_pending(job.pk)
     raise PendingOperation(entry["id"])
 
 

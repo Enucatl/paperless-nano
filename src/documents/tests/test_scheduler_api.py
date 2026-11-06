@@ -239,11 +239,29 @@ def test_publication_keeps_signed_serializer_and_task_history(
                 queue.close()
 
 
+@pytest.mark.parametrize(
+    ("cron", "expected"),
+    [
+        (None, "0 3 * * *"),
+        ("*/5 * * * *", "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"),
+        ("0 3 * * sun", "0 3 * * 0"),
+        ("disable", None),
+    ],
+)
 def test_recovery_schedule_is_available_to_external_scheduler(
     admin_client: APIClient,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    cron: str | None,
+    expected: str | None,
 ) -> None:
-    """Durable recovery must be discoverable without a resident Celery beat."""
+    """Both schedulers honor daily, custom, and disabled recovery schedules."""
+    if cron is None:
+        monkeypatch.delenv("PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON", raising=False)
+    else:
+        monkeypatch.setenv("PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON", cron)
+    settings.CELERY_BEAT_SCHEDULE = parse_beat_schedule()
     response = admin_client.get(ENDPOINT)
     assert response.status_code == 200
     jobs = {entry["name"]: entry["cron"] for entry in response.data["jobs"]}
-    assert jobs["Recover document jobs"] == "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
+    assert jobs.get("Recover document jobs") == expected

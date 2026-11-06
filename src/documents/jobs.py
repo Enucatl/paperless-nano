@@ -37,6 +37,7 @@ from documents.parser_operations import effective_configuration as _configuratio
 from documents.parser_operations import parser_class as configured_parser_class
 from documents.parser_operations import run_parser
 from documents.parser_operations import validate_parser_job
+from documents.processor_notifications import defer_notifications
 from documents.utils import compute_checksum
 from documents.versioning import latest_version
 from paperless.config import RemoteOCRConfig
@@ -524,6 +525,7 @@ def _cleanup(job: DocumentJob) -> None:
     job.save(update_fields=["cleaned", "error", "result"])
 
 
+@defer_notifications()
 def run_reprocess(job_id: UUID | str) -> bool:
     """Execute or resume a job, independently of Celery lifecycle callbacks."""
     from documents.job_state import PendingOperation
@@ -608,13 +610,13 @@ def run_reprocess(job_id: UUID | str) -> bool:
         lock.release()
 
 
-def recover_document_jobs() -> None:
+def recover_document_jobs(*, include_recent: bool = False) -> None:
     """Republish unfinished durable work; workers serialize duplicate delivery."""
     from documents.deferred_operations import recover_waiting
 
     recover_waiting()
     cutoff = timezone.now() - datetime.timedelta(minutes=5)
-    jobs = DocumentJob.objects.filter(updated__lt=cutoff, cleaned=False).exclude(
+    jobs = DocumentJob.objects.filter(cleaned=False).exclude(
         status__in=[
             DocumentJob.Status.FAILED,
             DocumentJob.Status.REJECTED,
@@ -623,7 +625,16 @@ def recover_document_jobs() -> None:
             DocumentJob.Status.CANCELLED,
         ],
     )
-    for job in jobs.iterator():
+    if include_recent:
+        # Startup repairs fresh dispatch gaps without interrupting admission.
+        jobs = jobs.exclude(status=DocumentJob.Status.STAGING, updated__gte=cutoff)
+    else:
+        jobs = jobs.filter(updated__lt=cutoff)
+    # Publishing a task can close the connection and invalidate a server cursor.
+    for identifier in list(jobs.values_list("pk", flat=True)):
+        job = jobs.filter(pk=identifier).first()
+        if job is None:
+            continue
         if job.status == DocumentJob.Status.STAGING:
             job.status = DocumentJob.Status.ATTENTION
             job.error = (

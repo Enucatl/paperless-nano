@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
 
-from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext_lazy as _
-from dotenv import load_dotenv
 
+from paperless.environment import load_configuration
 from paperless.settings.custom import parse_beat_schedule
 from paperless.settings.custom import parse_dateparser_languages
 from paperless.settings.custom import parse_db_settings
@@ -30,16 +29,7 @@ from paperless.settings.parsers import get_path_from_env
 
 logger = logging.getLogger("paperless.settings")
 
-# Tap paperless.conf if it's available
-for path in [
-    os.getenv("PAPERLESS_CONFIGURATION_PATH"),
-    "../paperless.conf",
-    "/etc/paperless.conf",
-    "/usr/local/etc/paperless.conf",
-]:
-    if path and Path(path).exists():
-        load_dotenv(path)
-        break
+load_configuration()
 
 # There are multiple levels of concurrency in paperless:
 #  - Multiple consumers may be run in parallel.
@@ -750,11 +740,6 @@ CELERY_ACCEPT_CONTENT = ["application/json", "application/x-signed-pickle"]
 
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-schedule
 CELERY_BEAT_SCHEDULE = parse_beat_schedule()
-CELERY_BEAT_SCHEDULE["Recover document jobs"] = {
-    "task": "documents.tasks.recover_document_jobs",
-    "schedule": crontab(minute="*/5"),
-    "options": {"expires": 240.0, "headers": {"trigger_source": "scheduled"}},
-}
 
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-schedule-filename
 CELERY_BEAT_SCHEDULE_FILENAME = str(DATA_DIR / "celerybeat-schedule.db")

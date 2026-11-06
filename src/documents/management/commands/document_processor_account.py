@@ -7,6 +7,7 @@ from django.core.management.base import CommandError
 from django.db import transaction
 
 from documents.management.commands.document_processor import CAPABILITIES
+from documents.processor_notifications import wake_processor
 
 
 class Command(BaseCommand):
@@ -51,4 +52,5 @@ class Command(BaseCommand):
         if permissions.count() != len(set(options["capability"])):
             raise CommandError("Processor permissions are missing; run migrate first")
         user.user_permissions.set(permissions)
+        wake_processor(user.username)
         self.stdout.write(f"Processor account {user.username} configured")

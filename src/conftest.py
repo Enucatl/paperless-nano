@@ -25,6 +25,12 @@ if TYPE_CHECKING:
     from paperless_testing.fakes.progress import FakeProgressManager
 
 
+@pytest.fixture(autouse=True)
+def processor_notifications(mocker):
+    """Keep durable job tests independent of a running processor broker."""
+    return mocker.patch("documents.processor_notifications.Queue").return_value
+
+
 @pytest.fixture(scope="session", autouse=True)
 def faker_session_locale() -> str:
     """Pin Faker's locale so generated data does not follow the host locale.

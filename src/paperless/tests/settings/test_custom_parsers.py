@@ -184,6 +184,14 @@ def make_expected_schedule(
     share_link_cleanup_expire = 23.0 * 60.0 * 60.0
 
     schedule: dict[str, Any] = {
+        "Recover document jobs": {
+            "task": "documents.tasks.recover_document_jobs",
+            "schedule": crontab(minute=0, hour=3),
+            "options": {
+                "expires": 23.0 * 60.0 * 60.0,
+                "headers": {"trigger_source": "scheduled"},
+            },
+        },
         "Check all e-mail accounts": {
             "task": "paperless_mail.tasks.process_mail_accounts",
             "schedule": crontab(minute=email_minute),
@@ -289,6 +297,31 @@ class TestParseBeatSchedule:
                 id="index-disabled",
             ),
             pytest.param(
+                {"PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON": "*/5 * * * *"},
+                make_expected_schedule(
+                    overrides={
+                        "Recover document jobs": {"schedule": crontab(minute="*/5")},
+                    },
+                ),
+                id="recovery-more-frequent",
+            ),
+            pytest.param(
+                {"PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON": "0 3 * * sun"},
+                make_expected_schedule(
+                    overrides={
+                        "Recover document jobs": {
+                            "schedule": crontab(minute=0, hour=3, day_of_week="sun"),
+                        },
+                    },
+                ),
+                id="recovery-weekly",
+            ),
+            pytest.param(
+                {"PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON": "disable"},
+                make_expected_schedule(disabled={"Recover document jobs"}),
+                id="recovery-disabled",
+            ),
+            pytest.param(
                 {
                     "PAPERLESS_EMAIL_TASK_CRON": "disable",
                     "PAPERLESS_TRAIN_TASK_CRON": "disable",
@@ -298,6 +331,7 @@ class TestParseBeatSchedule:
                     "PAPERLESS_WORKFLOW_SCHEDULED_TASK_CRON": "disable",
                     "PAPERLESS_LLM_INDEX_TASK_CRON": "disable",
                     "PAPERLESS_SHARE_LINK_BUNDLE_CLEANUP_CRON": "disable",
+                    "PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON": "disable",
                 },
                 {},
                 id="all-disabled",

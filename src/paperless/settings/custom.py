@@ -78,6 +78,13 @@ def parse_beat_schedule() -> dict:
     schedule = {}
     tasks = [
         {
+            "name": "Recover document jobs",
+            "env_key": "PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON",
+            "env_default": "0 3 * * *",
+            "task": "documents.tasks.recover_document_jobs",
+            "options": {"expires": 23.0 * 60.0 * 60.0},
+        },
+        {
             "name": "Check all e-mail accounts",
             "env_key": "PAPERLESS_EMAIL_TASK_CRON",
             # Default every ten minutes

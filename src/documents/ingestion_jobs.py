@@ -37,6 +37,7 @@ from documents.models import DocumentJob
 from documents.operation_journal import NeedsAttention
 from documents.operation_journal import json_value
 from documents.operation_journal import operation_failure_status
+from documents.processor_notifications import defer_notifications
 from documents.utils import compute_checksum
 from documents.utils import copy_basic_file_stats
 from documents.versioning import latest_version
@@ -322,6 +323,7 @@ def cleanup_consumption(job: DocumentJob) -> None:
     job.save(update_fields=["cleaned", "result"])
 
 
+@defer_notifications()
 def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     """Execute at most one ingestion attempt and recover committed completion."""
     directory = job_directory(job_id)

@@ -32,12 +32,19 @@ docker compose exec --user paperless webserver python manage.py createsuperuser
 ```
 
 Before provisioning, the processor reports that its account is missing and
-retries after ten seconds. Provisioning is idempotent and replaces only the
-capabilities of a dedicated non-login account; it refuses to repurpose a normal,
+waits for a notification. Provisioning wakes it to reconcile pending work;
+it does not repeatedly initialize Django while waiting. Provisioning is
+idempotent and replaces only the capabilities of a dedicated non-login account;
+it refuses to repurpose a normal,
 administrative, disabled, or group-bearing account. No document-edit grant or
 API token is needed by the server processor. The uploader/requester still needs
 normal document and entity creation permissions. See the rich metadata contract
 for proposal authorization.
+
+A processor missing a configured capability grant stops consuming shared work.
+After changing its grants, rerun `document_processor_account` or restart the
+processor. Provisioning broadcasts a retained account notification so every
+supervisor using that account can resume, without taking another account's work.
 
 Create the managed custom fields through core, before admitting documents:
 
@@ -110,19 +117,42 @@ work as appropriate. Cancelling does not undo completed work or endpoint costs.
 
 ## Restart, storage, and memory
 
-The lightweight supervisor runs one finite `document_processor` sweep, exits
-that child, and waits ten seconds before the next sweep. Django and inference
-libraries therefore leave memory after each sweep. It forwards shutdown to the
-child process group. Existing durable leases and recovery handle interruption;
-no second stage queue or document API writeback runner is introduced. Whole-stack
-memory measurements remain a release gate; this lifecycle alone is not a
-measurement.
+The lightweight supervisor blocks on Redis notifications without loading Django.
+When work arrives it starts a `document_processor` child. The child reuses its
+Django and provider state for successive operations, including dependent steps
+queued by the coordinator, and exits after a quiet period without eligible work.
+`PAPERLESS_PROCESSOR_IDLE_TIMEOUT` controls this period in nonnegative integer
+seconds and defaults to `60`; `0` exits once available eligible work is drained.
+Waiting blocks on notifications rather than polling the database, and execution
+time does not count toward the timeout. Shutdown reaches the child process group.
+
+The database remains authoritative for jobs, claims, and results. Redis lists
+carry work notifications, and a bounded stream per account broadcasts provisioning
+notifications. Duplicate notifications do not consume execution
+attempts. The processor reconciles outstanding work at startup and after Redis
+reconnection. The existing recovery task also repairs missed notifications and
+expired claims, daily at 03:00 by default. Configure its normal cron schedule with
+`PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON`, or use `disable` to turn off scheduled
+recovery. More frequent schedules are allowed. Both supported schedulers honor
+the setting; manual recovery and startup/reconnection reconciliation remain
+available when scheduled recovery is disabled.
+
+Waiting does not necessarily mean stuck: work may intentionally await an offline
+processor. Recovery republishes pending, unclaimed work without forcing local
+execution, leaves active leases alone, and preserves existing replay-safety rules
+for expired leases. A crash between database commit and Redis publication can
+still lose a notification. Daily recovery may delay its repair until the next
+sweep; with scheduled recovery disabled, unnoticed missed work can require
+manual recovery or restart. Interrupted leases can likewise wait for recovery.
+Whole-stack memory measurements remain a release gate; this lifecycle alone is
+not a measurement.
 
 The supported example uses one PostgreSQL database and one shared local data and
 media filesystem. Competing processors use existing per-job file locks; a busy
-job is skipped so other work can proceed. Additional server processes must use
-the same database, settings, and private job files on a filesystem with reliable
-advisory locks. Do not place independent copies of `DATA_DIR/jobs` behind several
+job retains its notification for retry so other work can proceed. Additional
+server processes must use the same database, settings, and private job files on
+a filesystem with reliable advisory locks. Do not place independent copies of
+`DATA_DIR/jobs` behind several
 processors. The example does not establish multi-host/NFS safety.
 
 Stop admission and processing before a coordinated backup. Preserve PostgreSQL,

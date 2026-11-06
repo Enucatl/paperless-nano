@@ -28,6 +28,7 @@ from documents.models import MatchingModel
 from documents.operation_journal import invoke
 from documents.operation_journal import json_value
 from documents.operation_journal import operation_failure_status
+from documents.processor_notifications import defer_notifications
 
 
 def candidate_snapshot(document: Document, actor_id=None) -> dict:
@@ -154,6 +155,7 @@ def _stage_enrichment(
     return job
 
 
+@defer_notifications()
 def run_enrichment(job_id: str) -> None:
     """Resume inference and atomically apply proposals if the snapshot is current."""
     with FileLock(

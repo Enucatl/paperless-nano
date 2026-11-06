@@ -16,6 +16,7 @@ from documents.operation_journal import NeedsAttention
 from documents.operation_journal import invoke
 from documents.operation_journal import json_value
 from documents.operation_journal import operation_failure_status
+from documents.processor_notifications import defer_notifications
 
 
 def provider_snapshot(provider) -> dict:
@@ -135,6 +136,7 @@ def _execute(provider, operation: str, inputs: dict) -> None:
 
 
 @shared_task(ignore_result=True)
+@defer_notifications()
 def run_search(job_id: str) -> None:
     """Release workers while pending and validate declarations on completion."""
     from documents.job_storage import job_directory

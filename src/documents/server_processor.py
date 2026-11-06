@@ -4,9 +4,12 @@ from documents.deferred_operations import authorize
 from documents.deferred_operations import server_operation
 from documents.job_state import ProcessorFinished
 from documents.models import DocumentJob
+from documents.processor_notifications import defer_notifications
+from documents.processor_notifications import notify_pending
 
 
-def process(job_id, key: str, user) -> None:
+@defer_notifications()
+def process(job_id, key: str, user) -> bool:
     """Replay retained preparation only as far as the selected finite operation."""
     from filelock import FileLock
 
@@ -19,7 +22,7 @@ def process(job_id, key: str, user) -> None:
     with FileLock(
         job_directory(job_id).with_suffix(".lock"), timeout=0, is_singleton=True
     ):
-        _process_locked(
+        return _process_locked(
             job_id,
             key,
             user,
@@ -37,10 +40,10 @@ def _process_locked(job_id, key, user, runners):
     job = DocumentJob.objects.get(pk=job_id)
     entry = job.result.get("invocations", {}).get(key)
     if not entry or entry["status"] != "pending" or entry.get("version") != 2:
-        return
+        return False
     authorize(entry, user)
     if job.status != DocumentJob.Status.WAITING:
-        return
+        return False
     previous = {
         name: dict(value) for name, value in job.result.get("invocations", {}).items()
     }
@@ -78,3 +81,5 @@ def _process_locked(job_id, key, user, runners):
         ):
             job.status = DocumentJob.Status.WAITING
         job.save(update_fields=["attempts", "status", "result"])
+        notify_pending(job.pk)
+    return True

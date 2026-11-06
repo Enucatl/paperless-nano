@@ -18,6 +18,9 @@ from documents.job_state import execution_policy  # noqa: F401
 from documents.job_state import requester_id
 from documents.job_state import wait  # noqa: F401
 from documents.models import DocumentJob
+from documents.processor_notifications import after_unlock
+from documents.processor_notifications import defer_notifications
+from documents.processor_notifications import notify_pending
 
 server_operation = ContextVar("server_operation", default=None)
 
@@ -44,6 +47,7 @@ def locked_operation(job_id, key: str, user, *, reconcile_only=False):
     from documents.job_storage import job_directory
 
     with (
+        defer_notifications(),
         (
             nullcontext()
             if server_operation.get()
@@ -144,7 +148,7 @@ def resume(job: DocumentJob) -> None:
                 "Deferred result dispatch failed"
             )
 
-    transaction.on_commit(dispatch)
+    after_unlock(dispatch)
 
 
 def submit_result(job_id, key: str, user, token: str, result) -> dict:
@@ -244,6 +248,7 @@ def recover_waiting() -> None:
     ):
         try:
             with (
+                defer_notifications(),
                 FileLock(job_directory(identifier).with_suffix(".lock"), timeout=0),
                 transaction.atomic(),
             ):
@@ -267,5 +272,6 @@ def recover_waiting() -> None:
                         job.status = DocumentJob.Status.ATTENTION
                         job.error = "Expired effectful claim requires reconciliation"
                 job.save(update_fields=["result", "status", "error"])
+                notify_pending(job.pk)
         except Timeout:
             continue

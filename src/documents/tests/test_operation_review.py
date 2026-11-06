@@ -206,6 +206,7 @@ def test_task_operation_hides_claim_credentials():
     assert TaskSerializerV10().get_operation(SimpleNamespace(task_id=str(job.pk))) == {
         "name": "parser.process",
         "status": "leased",
+        "error": "",
     }
 
 
