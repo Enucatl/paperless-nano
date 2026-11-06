@@ -1011,9 +1011,8 @@ def close_connection_pool_on_worker_shutdown(**kwargs) -> None:  # pragma: no co
     """
     Close the DB connection pool when a Celery child process exits.
 
-    With CELERY_WORKER_MAX_TASKS_PER_CHILD=1 each child is replaced after a
-    single task. Without closing the pool on shutdown, its connections linger
-    on the server until TCP keepalive reaps them, accumulating over time.
+    When a child is replaced, closing its pool prevents connections lingering
+    on the server until TCP keepalive reaps them and accumulating over time.
     """
     for conn in connections.all(initialized_only=True):
         if conn.alias == "default" and hasattr(conn, "pool") and conn.pool:
