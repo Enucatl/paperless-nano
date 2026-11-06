@@ -11,7 +11,7 @@ permissions:
   actions: write
 jobs:
   rebase:
-    if: github.repository == 'Enucatl/paperless-ngx'
+    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout dev

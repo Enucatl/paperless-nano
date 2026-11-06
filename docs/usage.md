@@ -1267,7 +1267,7 @@ Paperless-ngx consists of the following components:
   errors (i.e., wrong email credentials, errors during consuming a
   specific file, etc).
 
-- A message broker (such as Valkey or Redis): This is a really
+- Redis, the message broker: This is a really
   lightweight service that is responsible for getting the tasks from
   the webserver and the consumer to the task scheduler. These run in a
   different process (maybe even on different machines!), and

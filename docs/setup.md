@@ -225,8 +225,7 @@ to a positive number to enable polling and disable native filesystem notificatio
     build-essential python3-setuptools python3-wheel
     ```
 
-2.  Install a Redis-compatible broker (a current release of Valkey or
-    Redis) and configure it to start automatically.
+2.  Install Redis 8 and configure it to start automatically.
 
 3.  Optional: Install `postgresql` and configure a database, user, and
     password for Paperless-ngx. If you do not wish to use PostgreSQL,
@@ -305,7 +304,7 @@ to a positive number to enable polling and disable native filesystem notificatio
 
     !!! warning
 
-        Ensure your broker instance [is secured](https://valkey.io/topics/security/).
+        Ensure your broker instance [is secured](https://redis.io/docs/latest/operate/oss_and_stack/management/security/).
 
 7.  Create the following directories if they do not already exist:
     - `/opt/paperless/media`
@@ -486,7 +485,7 @@ installation. Keep these points in mind:
   for other services, you might as well use it for Paperless as well.
 - The task scheduler of Paperless, which is used to execute periodic
   tasks such as email checking and maintenance, requires a
-  Redis-compatible message broker instance (such as Valkey or Redis). The
+  Redis message broker instance. The
   Docker Compose route takes care of that.
 - The layout of the folder structure for your documents and data
   remains the same, so you can plug your old Docker volumes into

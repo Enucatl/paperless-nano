@@ -2,7 +2,7 @@
 # See docs/processor-deployment.md before starting ingestion.
 services:
   broker:
-    image: docker.io/valkey/valkey:9-alpine
+    image: docker.io/library/redis:8
     restart: unless-stopped
     volumes:
       - redisdata:/data

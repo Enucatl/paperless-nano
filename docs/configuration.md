@@ -30,9 +30,9 @@ or applicable default will be utilized instead.
 
 ### Message Broker
 
-Paperless-ngx uses a Redis-compatible message broker. Any broker that
-speaks the Redis protocol works here, including [Valkey](https://valkey.io/)
-(the default in the bundled Docker Compose files) and Redis itself.
+This project uses [Redis](https://redis.io/) as its message broker. Use Redis
+itself for deployments, development, and benchmarks; the bundled Docker
+Compose files use Redis 8.
 
 #### [`PAPERLESS_REDIS=<url>`](#PAPERLESS_REDIS) {#PAPERLESS_REDIS}
 
@@ -48,7 +48,7 @@ matcher.
         `redis://<username>:<password>@<host>:<port>/<DBIndex>`
 
     [More information on securing your broker
-    instance](https://valkey.io/topics/security/).
+    instance](https://redis.io/docs/latest/operate/oss_and_stack/management/security/).
 
     Defaults to `redis://localhost:6379`.
 

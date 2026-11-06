@@ -141,12 +141,10 @@ fully local backend (e.g. Ollama) or a remote provider. See
 
 ## _Which message broker should I use_?
 
-Paperless-ngx talks to a Redis-compatible message broker, so any broker that
-implements the Redis protocol will work. The bundled Docker Compose files
-default to [Valkey](https://valkey.io/), the open-source fork created after
-Redis' licensing change, but Redis itself and other wire-compatible brokers
-(such as Microsoft's Garnet) are equally fine.
+Use [Redis](https://redis.io/) itself. This project standardizes on Redis for
+deployments, development, and benchmarks; the bundled Docker Compose files use
+Redis 8.
 
-Existing installs can switch broker implementations in place: point
-[`PAPERLESS_REDIS`](configuration.md#PAPERLESS_REDIS) at the new instance and
-reuse the same data volume.
+Configure the connection with
+[`PAPERLESS_REDIS`](configuration.md#PAPERLESS_REDIS). If migrating from another
+broker, verify persisted-data compatibility before reusing its data volume.

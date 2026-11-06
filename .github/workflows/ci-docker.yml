@@ -44,6 +44,7 @@ jobs:
         id: version
         uses: Enucatl/docker-compose-security-baseline/.github/actions/git-version@main
   publish:
+    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/dev'
     needs: [backend, frontend, lint, codeql, static-analysis, version]
     permissions:
       contents: read

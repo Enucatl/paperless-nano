@@ -1,5 +1,17 @@
 # Idle memory reduction analysis
 
+The current development baseline is about 300 MB idle, as reported by the user.
+The target workload is one home user and about two new documents per week.
+First establish explicit operation and processing boundaries without losing
+features. These boundaries must support larger component replacements later.
+Do not prioritize small import or memory optimizations during this phase.
+Measure the achievable idle reduction as components are replaced. Extra startup
+time is acceptable; record memory after feature use and return-to-idle time.
+
+The initial active-work goal is about 2 GB, with a proposed peak cap of 3 GB.
+These are not idle targets or enforced runtime limits. Confirm the measurement
+scope and include all local services before comparing deployment totals.
+
 For deployments using external OCR and AI services, set
 `PAPERLESS_OCR_MODE=off`, `PAPERLESS_ARCHIVE_FILE_GENERATION=never` and
 `PAPERLESS_AI_ALLOWED=false`. Match any saved OCR/archive preferences to these

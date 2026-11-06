@@ -1,6 +1,6 @@
 # Supervised OCR and metadata processing
 
-The supported example runs PostgreSQL, Valkey, and one Paperless container with
+The supported example runs PostgreSQL, Redis, and one Paperless container with
 its existing web/coordinator services plus an explicitly enabled server
 processor. Model endpoints remain external. The installed OCR adapter currently
 accepts **PDF inputs only**; do not use this parser selection for a mixed-format
