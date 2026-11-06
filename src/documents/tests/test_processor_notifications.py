@@ -12,10 +12,9 @@ from documents.job_storage import job_directory
 from documents.models import DocumentJob
 from documents.processor_notifications import after_unlock
 from documents.processor_notifications import defer_notifications
-from documents.processor_notifications import notify_pending
+from documents.processor_notifications import dispatch_pending
 from documents.search_operations import run_search
 from documents.search_operations import submit_search
-from documents.server_processor import process
 from paperless_testing.factories import UserFactory
 
 pytestmark = [
@@ -56,11 +55,12 @@ def test_exception_keeps_committed_handoff():
     assert called == ["ready"]
 
 
-def test_search_handoffs_release_both_coordinator_and_processor_locks(
-    mocker, processor_notifications
-):
-    """Immediate delivery can acquire the job lock in both directions."""
+def test_workstation_result_handoff_releases_lock(mocker):
+    """Accepted workstation output publishes after releasing its operation lock."""
     from types import SimpleNamespace
+
+    from documents.deferred_operations import claim
+    from documents.deferred_operations import submit_result
 
     provider = SimpleNamespace(identity="search:1", configuration={}, replay_safe=True)
     mocker.patch(
@@ -68,20 +68,19 @@ def test_search_handoffs_release_both_coordinator_and_processor_locks(
     )
     mocker.patch("documents.search_operations.run_search.apply_async")
     dispatch = mocker.patch("documents.jobs._dispatch")
-    mocker.patch("documents.search_operations._execute", return_value=None)
     job = submit_search(provider, "optimize", {})
+    run_search(str(job.pk))
     lock = FileLock(job_directory(job.pk).with_suffix(".lock"), timeout=0)
 
     def assert_unlocked(*args):
         with lock:
             pass
 
-    processor_notifications.push.side_effect = assert_unlocked
-    run_search(str(job.pk))
-    assert processor_notifications.push.call_args.args[0]["job_id"] == str(job.pk)
     dispatch.reset_mock()
     dispatch.side_effect = assert_unlocked
-    process(job.pk, "maintenance", UserFactory(is_superuser=True))
+    user = UserFactory(is_superuser=True)
+    leased = claim(job.pk, "maintenance", user)
+    submit_result(job.pk, "maintenance", user, leased["token"], None)
     dispatch.assert_called_once()
 
 
@@ -95,9 +94,13 @@ def test_search_handoffs_release_both_coordinator_and_processor_locks(
     ],
 )
 def test_recovery_only_notifies_unclaimed_safe_work(
-    state, safe, expected, processor_notifications
+    state, safe, expected, processor_notifications, settings, mocker
 ):
     """Waiting is not failure; active leases and uncertain effects are preserved."""
+    settings.PROCESSOR_USER = UserFactory(is_superuser=True).username
+    settings.PROCESSOR_CAPABILITIES = ["parser"]
+    processor_notifications.side_effect = dispatch_pending
+    dispatch = mocker.patch("documents.jobs._dispatch")
     entry = {
         "status": "pending" if state == "pending" else "leased",
         "version": 2,
@@ -119,11 +122,13 @@ def test_recovery_only_notifies_unclaimed_safe_work(
     job.refresh_from_db()
     assert job.result["invocations"]["work"]["status"] == expected
     assert job.result["invocations"]["work"]["attempts"] == 1
-    assert processor_notifications.push.call_count == int(expected == "pending")
+    assert dispatch.call_count == int(expected == "pending")
 
 
-def test_notification_failure_preserves_pending_job(processor_notifications):
-    """A failed Redis send leaves authoritative work available for reconciliation."""
+def test_notification_failure_preserves_pending_job(mocker, settings):
+    """A failed Celery send leaves authoritative work available for recovery."""
+    settings.PROCESSOR_USER = UserFactory(is_superuser=True).username
+    settings.PROCESSOR_CAPABILITIES = ["search"]
     job = DocumentJob.objects.create(
         kind="search",
         timeout=30,
@@ -139,9 +144,10 @@ def test_notification_failure_preserves_pending_job(processor_notifications):
             }
         },
     )
-    processor_notifications.push.side_effect = ConnectionError("offline")
-    notify_pending(job.pk)
+    mocker.patch("documents.jobs._dispatch", side_effect=ConnectionError("offline"))
+    dispatch_pending(job.pk)
     job.refresh_from_db()
+    assert job.status == DocumentJob.Status.QUEUED
     assert job.result["invocations"]["work"]["status"] == "pending"
 
 

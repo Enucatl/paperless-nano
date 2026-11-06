@@ -21,6 +21,7 @@ from documents.enrichment_operations import provider_configuration
 from documents.job_state import PendingOperation
 from documents.job_state import RejectedResult
 from documents.job_state import check_permission as _check_permission
+from documents.job_state import track_terminal_task
 from documents.job_storage import job_directory
 from documents.models import Document
 from documents.models import DocumentJob
@@ -156,6 +157,7 @@ def _stage_enrichment(
 
 
 @defer_notifications()
+@track_terminal_task
 def run_enrichment(job_id: str) -> None:
     """Resume inference and atomically apply proposals if the snapshot is current."""
     with FileLock(

@@ -7,10 +7,6 @@ from contextvars import ContextVar
 
 from django.db import transaction
 
-from paperless_services.processor_queue import CAPABILITIES
-from paperless_services.processor_queue import Queue
-from paperless_services.processor_queue import capability_for
-
 logger = logging.getLogger("paperless.processor")
 _callbacks = ContextVar("processor_notifications", default=None)
 
@@ -45,47 +41,63 @@ def after_unlock(callback: Callable[[], None]) -> None:
 
 
 def notify_pending(job_id) -> None:
-    """Publish current pending operations; notifications never authorize work."""
+    """Dispatch eligible server work after committing and releasing job locks."""
+    after_unlock(lambda: dispatch_pending(job_id))
+
+
+def dispatch_pending(job_id) -> None:
+    """Leave workstation-only work untouched; recover broker gaps from the journal."""
+    from filelock import FileLock
+    from filelock import Timeout
+
+    from documents.deferred_operations import resume
+    from documents.job_storage import job_directory
+    from documents.models import DocumentJob
+    from documents.server_processor import selected_user
+
+    try:
+        with (
+            defer_notifications(),
+            FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0),
+            transaction.atomic(),
+        ):
+            job = (
+                DocumentJob.objects.select_for_update()
+                .filter(pk=job_id, status=DocumentJob.Status.WAITING)
+                .first()
+            )
+            if job is None:
+                return
+            if any(
+                entry.get("status") == "pending"
+                and entry.get("version") == 2
+                and "policy" in entry
+                and selected_user(entry) is not None
+                for entry in job.result.get("invocations", {}).values()
+            ):
+                resume(job)
+    except Timeout:
+        # The current owner or recovery will publish any remaining server work.
+        return
+    except Exception:
+        logger.exception("Job %s is durable but its Celery dispatch failed", job_id)
+
+
+def wake_processor(username: str) -> None:
+    """Reconcile pending placement after granting a server account capabilities."""
+    from django.conf import settings
+
+    if username != settings.PROCESSOR_USER:
+        return
 
     def publish() -> None:
         from documents.models import DocumentJob
 
-        job = DocumentJob.objects.filter(
-            pk=job_id, status=DocumentJob.Status.WAITING
-        ).first()
-        if job is None:
-            return
-        queue = Queue(CAPABILITIES, socket_timeout=5)
-        try:
-            for key, entry in job.result.get("invocations", {}).items():
-                if (
-                    entry.get("status") == "pending"
-                    and entry.get("version") == 2
-                    and "policy" in entry
-                ):
-                    queue.push(
-                        {
-                            "job_id": str(job.pk),
-                            "key": key,
-                            "capability": capability_for(entry["operation"]),
-                        }
-                    )
-        except Exception:
-            logger.exception("Job %s is durable but its processor wake failed", job_id)
-        finally:
-            queue.close()
-
-    after_unlock(publish)
-
-
-def wake_processor(username: str) -> None:
-    """Wake newly provisioned accounts to reconcile previously waiting work."""
-
-    def publish() -> None:
-        queue = Queue(CAPABILITIES, socket_timeout=5)
-        try:
-            queue.push({"user": username, "reconcile": True})
-        finally:
-            queue.close()
+        for identifier in list(
+            DocumentJob.objects.filter(status=DocumentJob.Status.WAITING).values_list(
+                "pk", flat=True
+            )
+        ):
+            dispatch_pending(identifier)
 
     after_unlock(publish)

@@ -1356,9 +1356,9 @@ placement; a server processor can still invoke a remote model.
 
 #### [`PAPERLESS_PROCESSOR_USER=<username>`](#PAPERLESS_PROCESSOR_USER) {#PAPERLESS_PROCESSOR_USER}
 
-: Dedicated capability-only account used by the bundled server processor. Set
-this together with `PAPERLESS_PROCESSOR_CAPABILITIES` to enable supervised,
-event-driven processing. Provision it with `document_processor_account`; no
+: Dedicated capability-only account used by Celery to execute server operations.
+Set this together with `PAPERLESS_PROCESSOR_CAPABILITIES` to enable server
+processing. Provision it with `document_processor_account`; no
 document-edit grant or API token is needed. With both settings absent, server
 processing is disabled.
 
@@ -1369,25 +1369,14 @@ ingestion`. The account must have the corresponding processor grants. Omitted
 capabilities intentionally wait for another eligible processor; they do not fall
 back to this host. See [deployment and diagnostics](processor-deployment.md).
 
-#### [`PAPERLESS_PROCESSOR_IDLE_TIMEOUT=<seconds>`](#PAPERLESS_PROCESSOR_IDLE_TIMEOUT) {#PAPERLESS_PROCESSOR_IDLE_TIMEOUT}
-
-: Nonnegative integer seconds that the processing child waits for eligible work
-before exiting and releasing Django and provider memory. During this quiet
-period it blocks on Redis notifications rather than polling the database.
-Execution time does not count toward the timeout. Set `0` to exit as soon as
-available eligible work is drained. The lightweight supervisor remains waiting
-for notifications and starts a new child when work arrives.
-
-    Defaults to `60`.
-
 #### [`PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON=<cron expression>`](#PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON) {#PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON}
 
 : Configures the safety-net sweep for interrupted document jobs and missed
-processor notifications. Accepts the usual crontab(5) expression, including
+Celery dispatches. Accepts the usual crontab(5) expression, including
 schedules more frequent than daily. Both supported schedulers honor this setting.
 
-: Set `disable` to turn off scheduled recovery. Manual recovery and processor
-startup/reconnection reconciliation remain available. A missed notification or
+: Set `disable` to turn off scheduled recovery. Manual recovery remains
+available. A missed dispatch or
 interrupted lease can then require manual recovery or restart to make progress.
 Recovery leaves active leases alone and preserves replay-safety checks; a pending
 operation being republished does not mean the job was necessarily stuck.

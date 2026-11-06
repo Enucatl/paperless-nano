@@ -36,6 +36,21 @@ def apply_outcome(
     if status not in (PaperlessTask.Status.FAILURE, PaperlessTask.Status.REVOKED):
         raise ValueError("Unsupported task outcome")
     close_old_connections()
+    if status == PaperlessTask.Status.FAILURE:
+        from django.core.exceptions import ValidationError
+
+        from documents.models import DocumentJob
+
+        try:
+            job = DocumentJob.objects.filter(pk=task_id).first()
+        except ValidationError:
+            job = None
+        if job is not None and job.status not in {
+            DocumentJob.Status.FAILED,
+            DocumentJob.Status.REJECTED,
+            DocumentJob.Status.ATTENTION,
+        }:
+            return
     tasks = PaperlessTask.objects.filter(task_id=task_id)
     if task_type is not None:
         tasks = tasks.filter(task_type=task_type)

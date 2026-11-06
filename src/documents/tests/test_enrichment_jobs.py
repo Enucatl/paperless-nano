@@ -144,8 +144,9 @@ def test_metadata_retries_temporary_computation(sample_doc, metadata, settings):
 
 @pytest.fixture(autouse=True)
 def local_processors(monkeypatch, request):
-    """Drive separately claimed inference before checking authoritative changes."""
+    """Run metadata jobs with explicitly authorized server execution."""
     import sys
+
     from documents import enrichment_jobs
     from paperless_testing.factories import UserFactory
     from paperless_testing.queued import drive_processors
@@ -162,7 +163,8 @@ def local_processors(monkeypatch, request):
 @pytest.mark.parametrize("overwrite", [False, True])
 def test_queued_retagger_preserves_selected_targets(sample_doc, metadata, overwrite):
     """Queued retagging applies requested replacements only after validation."""
-    from documents.server_processor import process
+    from documents.deferred_operations import claim
+    from documents.deferred_operations import submit_result
     from paperless_testing.factories import UserFactory
 
     assigned = CorrespondentFactory()
@@ -183,7 +185,15 @@ def test_queued_retagger_preserves_selected_targets(sample_doc, metadata, overwr
     run_enrichment(str(job.pk))
     sample_doc.refresh_from_db()
     assert sample_doc.correspondent_id == assigned.pk
-    process(job.pk, "metadata", UserFactory(is_superuser=True))
+    processor = UserFactory(is_superuser=True)
+    leased = claim(job.pk, "metadata", processor)
+    submit_result(
+        job.pk,
+        "metadata",
+        processor,
+        leased["token"],
+        Metadata().classify(leased["input"]),
+    )
     run_enrichment(str(job.pk))
     sample_doc.refresh_from_db()
     assert sample_doc.correspondent_id == (proposed.pk if overwrite else assigned.pk)
@@ -192,7 +202,8 @@ def test_queued_retagger_preserves_selected_targets(sample_doc, metadata, overwr
 
 def test_queued_retagger_rejects_changed_rules(sample_doc, metadata):
     """A rule edit while work is queued invalidates the retained application."""
-    from documents.server_processor import process
+    from documents.deferred_operations import claim
+    from documents.deferred_operations import submit_result
     from documents.job_state import RejectedResult
     from paperless_testing.factories import UserFactory
 
@@ -209,7 +220,15 @@ def test_queued_retagger_rejects_changed_rules(sample_doc, metadata):
         },
     )
     run_enrichment(str(job.pk))
-    process(job.pk, "metadata", UserFactory(is_superuser=True))
+    processor = UserFactory(is_superuser=True)
+    leased = claim(job.pk, "metadata", processor)
+    submit_result(
+        job.pk,
+        "metadata",
+        processor,
+        leased["token"],
+        Metadata().classify(leased["input"]),
+    )
     rule.match = "new"
     rule.save()
     with pytest.raises(RejectedResult):

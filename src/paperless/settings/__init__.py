@@ -706,6 +706,15 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 CELERY_WORKER_CONCURRENCY: Final[int] = get_int_from_env("PAPERLESS_TASK_WORKERS", 1)
 TASK_WORKERS = CELERY_WORKER_CONCURRENCY
+PROCESSOR_USER = os.environ.get("PAPERLESS_PROCESSOR_USER", "")
+PROCESSOR_CAPABILITIES = os.environ.get("PAPERLESS_PROCESSOR_CAPABILITIES", "").split()
+if bool(PROCESSOR_USER) != bool(PROCESSOR_CAPABILITIES) or set(
+    PROCESSOR_CAPABILITIES
+) - {"parser", "metadata", "search", "ingestion"}:
+    raise ImproperlyConfigured(
+        "Set PAPERLESS_PROCESSOR_USER and PAPERLESS_PROCESSOR_CAPABILITIES together; "
+        "capabilities must be parser, metadata, search or ingestion"
+    )
 CELERY_WORKER_MAX_TASKS_PER_CHILD = get_int_from_env(
     "PAPERLESS_WORKER_MAX_TASKS_PER_CHILD", 10
 )

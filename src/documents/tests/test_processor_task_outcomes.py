@@ -11,9 +11,9 @@ from documents.models import DocumentJob
 from documents.models import PaperlessTask
 from documents.search_operations import run_search
 from documents.search_operations import submit_search
-from documents.server_processor import process
 from paperless_testing.factories import PaperlessTaskFactory
 from paperless_testing.factories import UserFactory
+from paperless_testing.queued import drive_processors
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -45,7 +45,7 @@ def test_endpoint_exhaustion_completes_task_without_coordinator(mocker):
     processor = UserFactory(is_superuser=True)
     for attempt in range(3):
         with pytest.raises(RuntimeError, match="endpoint down"):
-            process(job.pk, "maintenance", processor)
+            drive_processors(run_search, processor)(str(job.pk))
         task.refresh_from_db()
         if attempt < 2:
             assert task.status == PaperlessTask.Status.STARTED
@@ -58,7 +58,7 @@ def test_endpoint_exhaustion_completes_task_without_coordinator(mocker):
     assert task.duration_seconds >= 10
     assert task.wait_time_seconds == 2
     completed = task.date_done
-    assert process(job.pk, "maintenance", processor) is False
+    drive_processors(run_search, processor)(str(job.pk))
     task.refresh_from_db()
     assert task.date_done == completed
 
@@ -111,3 +111,71 @@ def test_duplicate_celery_delivery_preserves_processor_failure():
     assert task.status == PaperlessTask.Status.FAILURE
     assert task.date_done == completed
     assert task.result_data == {"error_message": "endpoint down"}
+
+
+@pytest.mark.parametrize("delivery", ["signal", "lean"])
+@pytest.mark.parametrize("status", ["waiting", "queued", "running", "succeeded"])
+def test_native_failure_does_not_complete_recoverable_job(delivery, status, tmp_path):
+    """A failed Celery attempt cannot freeze durable history before recovery."""
+    from documents.signals.handlers import task_failure_handler
+    from documents.signals.handlers import task_postrun_handler
+    from paperless_worker.outcome_helper import drain
+    from paperless_worker.outcomes import OutcomeWriter
+
+    job = DocumentJob.objects.create(timeout=30, status=status)
+    task = PaperlessTaskFactory(
+        task_id=str(job.pk),
+        task_type=PaperlessTask.TaskType.SEARCH_MAINTENANCE,
+        status=PaperlessTask.Status.STARTED,
+    )
+    if delivery == "signal":
+        task_failure_handler(task_id=str(job.pk), exception=RuntimeError("temporary"))
+    else:
+        writer = OutcomeWriter(
+            tmp_path,
+            {"documents.search_operations.run_search": task.task_type},
+        )
+        writer.record_failed(
+            str(job.pk),
+            "documents.search_operations.run_search",
+            "WorkerLostError",
+            "temporary",
+        )
+        assert drain(writer.directory)
+    task.refresh_from_db()
+    assert task.status == PaperlessTask.Status.STARTED
+    assert task.date_done is None
+    job.status = DocumentJob.Status.SUCCEEDED
+    job.save(update_fields=["status"])
+    task_postrun_handler(task_id=str(job.pk), state="SUCCESS", retval={})
+    task.refresh_from_db()
+    assert task.status == PaperlessTask.Status.SUCCESS
+
+
+@pytest.mark.parametrize("status", ["waiting", "queued", "running"])
+def test_recoverable_consumption_does_not_start_native_errbacks(mocker, status):
+    """Celery ignores a failed attempt while the journal still owns continuation."""
+    from documents.tasks import consume_file
+
+    job = DocumentJob.objects.create(
+        kind="consume",
+        timeout=30,
+        status=status,
+        dispatch_options={"link_error": [{"task": "example.error_callback"}]},
+    )
+    mocker.patch(
+        "documents.ingestion_jobs.run_consumption",
+        side_effect=RuntimeError("temporary"),
+    )
+    task = PaperlessTaskFactory(
+        task_id=str(job.pk),
+        task_type=PaperlessTask.TaskType.CONSUME_FILE,
+        status=PaperlessTask.Status.STARTED,
+    )
+    result = consume_file.apply(kwargs={"job_id": str(job.pk)}, task_id=str(job.pk))
+    assert result.state == "IGNORED"
+    job.refresh_from_db()
+    task.refresh_from_db()
+    assert "delivery" not in job.result
+    assert task.status == PaperlessTask.Status.STARTED
+    assert task.date_done is None

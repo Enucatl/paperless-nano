@@ -111,7 +111,7 @@ def test_overlong_preparation_retains_outputs_without_publishing(
     with pytest.raises(ConsumerError, match="Claim expired"):
         ingestion_jobs.run_consumption(job.pk)
     job.refresh_from_db()
-    assert job.status == "waiting"
+    assert job.status == "running"
     assert job.result["invocations"]["parser.process"]["status"] == "leased"
     assert not Document.objects.exists()
     assert incoming.original_file.exists()
@@ -309,8 +309,11 @@ def test_reconciliation_uses_stable_invocation_without_repeating_effect(
     with pytest.raises(WorkerStopped):
         ingestion_jobs.run_consumption(job.pk)
     from datetime import timedelta
+
     from django.utils import timezone
-    from documents.deferred_operations import recover_waiting, reconcile
+
+    from documents.deferred_operations import reconcile
+    from documents.deferred_operations import recover_waiting
     from paperless_testing.factories import UserFactory
 
     job.refresh_from_db()
@@ -744,6 +747,7 @@ def test_external_plugin_declaration_keeps_cleanup_local(incoming, settings, moc
 def test_external_plugin_cannot_export_local_only_input(incoming, settings, mocker):
     """Processor access does not override the requester's remote restriction."""
     from django.core.exceptions import PermissionDenied
+
     from documents.deferred_operations import claim
     from paperless_testing.factories import UserFactory
 

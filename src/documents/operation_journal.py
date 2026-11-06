@@ -38,6 +38,8 @@ def invoke(
     from documents.job_state import wait
 
     job.refresh_from_db()
+    if job.status == DocumentJob.Status.CANCELLED:
+        raise PendingOperation(str(job.pk))
     invocations = job.result.setdefault("invocations", {})
     new_invocation = key not in invocations
     entry = invocations.setdefault(
@@ -71,48 +73,55 @@ def invoke(
         if policy is not None:
             entry["policy"] = json_value(policy)
     from documents.deferred_operations import server_operation
+    from documents.server_processor import selected_user
 
-    context = server_operation.get()
-    if (
-        context
-        and str(job.pk) == context["job_id"]
-        and key == context["key"]
-        and "policy" in entry
-    ):
+    processor = (
+        selected_user(entry)
+        if "policy" in entry and entry["status"] == "pending"
+        else None
+    )
+    if processor is not None:
+        from documents.deferred_operations import check_claim
         from documents.deferred_operations import claim
-        from documents.deferred_operations import submit_result
-        from documents.job_state import ProcessorFinished
+        from documents.processor_notifications import notify_pending
 
-        leased = claim(job.pk, key, context["user"])
-        if leased["status"] != "leased":
-            raise ProcessorFinished
+        job.save(update_fields=["result"])
+        token = server_operation.set({"job_id": str(job.pk), "key": key})
         try:
-            result = execute(entry["id"])
-        except Exception as error:
+            leased = claim(job.pk, key, processor)
+            if leased["status"] != "leased":
+                raise NeedsAttention(f"Invocation {key} cannot be claimed")
+            try:
+                result = execute(entry["id"])
+            except Exception as error:
+                job.refresh_from_db()
+                failed = job.result["invocations"][key]
+                failed["status"] = (
+                    ("pending" if failed["attempts"] < 3 else "failed")
+                    if failed["replay_safe"]
+                    else "unknown"
+                )
+                failed["error"] = str(error)
+                job.status = (
+                    DocumentJob.Status.WAITING
+                    if failed["status"] == "pending"
+                    else DocumentJob.Status.FAILED
+                    if failed["status"] == "failed"
+                    else DocumentJob.Status.ATTENTION
+                )
+                job.error = str(error)
+                job.save(update_fields=["result", "status", "error"])
+                notify_pending(job.pk)
+                raise
             job.refresh_from_db()
-            failed = job.result["invocations"][key]
-            failed["status"] = (
-                ("pending" if failed["attempts"] < 3 else "failed")
-                if failed["replay_safe"]
-                else "unknown"
+            entry = job.result["invocations"][key]
+            check_claim(job, entry, processor, leased["token"])
+            entry.update(
+                status="staged", result=json_value(result), processor_location="server"
             )
-            failed["error"] = str(error)
-            job.status = (
-                DocumentJob.Status.WAITING
-                if failed["status"] == "pending"
-                else DocumentJob.Status.FAILED
-                if failed["status"] == "failed"
-                else DocumentJob.Status.ATTENTION
-            )
-            job.error = str(error)
-            job.save(update_fields=["result", "status", "error"])
-            raise
-        submit_result(job.pk, key, context["user"], leased["token"], result)
-        raise ProcessorFinished
-    if context and "policy" in entry and entry["status"] != "succeeded":
-        raise NeedsAttention(
-            "Server replay reached an unexpected unfinished invocation"
-        )
+            job.save(update_fields=["result"])
+        finally:
+            server_operation.reset(token)
     if "policy" in entry:
         if entry["status"] in {"unknown", "failed", "conflicted", "cancelled"}:
             raise NeedsAttention(
@@ -197,6 +206,11 @@ def operation_failure_status(job: DocumentJob) -> str:
         return DocumentJob.Status.ATTENTION
     if any(entry["status"] == "conflicted" for entry in entries):
         return DocumentJob.Status.REJECTED
+    if any(
+        entry["status"] == "pending" and entry.get("error") and "policy" in entry
+        for entry in entries
+    ):
+        return DocumentJob.Status.WAITING
     failed = [entry for entry in entries if entry["status"] == "failed"]
     if failed:
         return (

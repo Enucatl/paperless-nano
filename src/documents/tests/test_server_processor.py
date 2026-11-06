@@ -7,8 +7,8 @@ import pytest
 from documents.models import DocumentJob
 from documents.search_operations import run_search
 from documents.search_operations import submit_search
-from documents.server_processor import process
 from paperless_testing.factories import UserFactory
+from paperless_testing.queued import drive_processors
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -16,46 +16,7 @@ pytestmark = [
 ]
 
 
-def test_sweep_releases_cursor_before_task_publication(mocker):
-    """Task publication may close the connection without invalidating the sweep."""
-    from django.core.management import call_command
-    from django.db import connection
-
-    if connection.vendor != "postgresql":
-        pytest.skip("PostgreSQL server-side cursor regression")
-    user = UserFactory(is_superuser=True)
-    jobs = [
-        DocumentJob.objects.create(
-            kind="search",
-            timeout=30,
-            status=DocumentJob.Status.WAITING,
-            result={
-                "invocations": {
-                    "maintenance": {
-                        "status": "pending",
-                        "operation": "search.write",
-                        "plugin": "search:1",
-                        "policy": {"permission": "documents.process_search"},
-                    }
-                }
-            },
-        )
-        for _ in range(2)
-    ]
-    execute = mocker.patch(
-        "documents.management.commands.document_processor.process",
-        side_effect=lambda *args: connection.close(),
-    )
-    call_command(
-        "document_processor",
-        user=user.username,
-        configured=True,
-        capability=["search"],
-    )
-    assert {call.args[0] for call in execute.call_args_list} == {job.pk for job in jobs}
-
-
-def test_server_stages_before_coordinator_applies(mocker):
+def test_server_accepts_result_in_same_task(mocker):
     """Computation happens once; authoritative completion follows submission."""
     provider = SimpleNamespace(identity="search:1", configuration={})
     mocker.patch(
@@ -70,14 +31,12 @@ def test_server_stages_before_coordinator_applies(mocker):
     assert job.status == DocumentJob.Status.WAITING
     execute.assert_not_called()
     processor = UserFactory(is_superuser=True)
-    process(job.pk, "maintenance", processor)
+    drive_processors(run_search, processor)(str(job.pk))
     job.refresh_from_db()
-    assert job.result["invocations"]["maintenance"]["status"] == "staged"
+    assert job.result["invocations"]["maintenance"]["status"] == "succeeded"
     assert job.result["invocations"]["maintenance"]["processor_location"] == "server"
-    assert job.status != DocumentJob.Status.SUCCEEDED
-    process(job.pk, "maintenance", processor)
+    drive_processors(run_search, processor)(str(job.pk))
     execute.assert_called_once()
-    run_search(str(job.pk))
     job.refresh_from_db()
     assert job.status == DocumentJob.Status.SUCCEEDED
 
@@ -96,7 +55,7 @@ def test_cancelled_work_never_executes_on_server(mocker):
     run_search(str(job.pk))
     processor = UserFactory(is_superuser=True)
     cancel(job.pk, processor)
-    process(job.pk, "maintenance", processor)
+    drive_processors(run_search, processor)(str(job.pk))
     execute.assert_not_called()
     job.refresh_from_db()
     assert job.status == DocumentJob.Status.CANCELLED
@@ -133,9 +92,9 @@ def test_server_can_resume_expired_safe_claim(mocker, status):
     job.status = status
     job.save(update_fields=["result", "status"])
     recover_waiting()
-    process(job.pk, "maintenance", processor)
+    drive_processors(run_search, processor)(str(job.pk))
     job.refresh_from_db()
-    assert job.result["invocations"]["maintenance"]["status"] == "staged"
+    assert job.result["invocations"]["maintenance"]["status"] == "succeeded"
     assert job.result["invocations"]["maintenance"]["attempts"] == 2
     execute.assert_called_once()
 
@@ -183,46 +142,11 @@ def test_server_preserves_rejected_configuration_before_claim(mocker):
     run_search(str(job.pk))
     provider.configuration = {"changed": True}
     with pytest.raises(NeedsAttention):
-        process(job.pk, "maintenance", UserFactory(is_superuser=True))
+        drive_processors(run_search, UserFactory(is_superuser=True))(str(job.pk))
     job.refresh_from_db()
     assert job.status == DocumentJob.Status.ATTENTION
     assert job.result["invocations"]["maintenance"].get("attempts", 0) == 0
     execute.assert_not_called()
-
-
-def test_processor_skips_busy_job_and_continues(mocker):
-    """Competing server workers do not prevent unrelated queued work."""
-    from django.core.management import call_command
-    from filelock import Timeout
-
-    processor = UserFactory()
-    for _ in range(2):
-        DocumentJob.objects.create(
-            kind="search",
-            timeout=30,
-            status=DocumentJob.Status.WAITING,
-            result={
-                "invocations": {
-                    "maintenance": {
-                        "status": "pending",
-                        "operation": "search.wipe",
-                        "plugin": "provider",
-                        "policy": {"permission": "documents.process_search"},
-                    }
-                }
-            },
-        )
-    execute = mocker.patch(
-        "documents.management.commands.document_processor.process",
-        side_effect=[Timeout("busy.lock"), None],
-    )
-    call_command(
-        "document_processor",
-        user=processor.username,
-        operation=["search.wipe"],
-        provider=["provider"],
-    )
-    assert execute.call_count == 2
 
 
 def test_capability_account_provisioning_is_idempotent():
@@ -255,85 +179,6 @@ def test_capability_account_provisioning_is_idempotent():
         )
 
 
-def test_configured_sweep_filters_capabilities_and_continues_after_outage(mocker):
-    """Only explicitly placed operation families run; one failure does not block others."""
-    from django.core.management import call_command
-
-    from paperless_services.processor_queue import capability_for
-
-    for operation in [
-        "parser.process",
-        "metadata.enrich",
-        "search.write",
-        "prepare:barcode",
-    ]:
-        DocumentJob.objects.create(
-            kind="search",
-            timeout=30,
-            status=DocumentJob.Status.WAITING,
-            result={
-                "invocations": {
-                    "work": {
-                        "status": "pending",
-                        "operation": operation,
-                        "plugin": "configured",
-                        "policy": {
-                            "permission": f"documents.process_{capability_for(operation)}"
-                        },
-                    }
-                }
-            },
-        )
-    execute = mocker.patch(
-        "documents.management.commands.document_processor.process",
-        side_effect=[RuntimeError("offline endpoint"), None, None],
-    )
-    call_command(
-        "document_processor",
-        user=UserFactory().username,
-        configured=True,
-        capability=["parser", "search", "ingestion"],
-    )
-    assert execute.call_count == 3
-
-
-def test_diagnostic_reports_revoked_permission_without_attempt(mocker):
-    """Missing grants are actionable and never consume execution attempts."""
-    from io import StringIO
-
-    from django.core.management import call_command
-
-    job = DocumentJob.objects.create(
-        kind="search",
-        timeout=30,
-        status=DocumentJob.Status.WAITING,
-        result={
-            "invocations": {
-                "work": {
-                    "status": "pending",
-                    "operation": "search.write",
-                    "plugin": "configured",
-                    "policy": {"permission": "documents.process_search"},
-                }
-            }
-        },
-    )
-    execute = mocker.patch("documents.management.commands.document_processor.process")
-    output = StringIO()
-    call_command(
-        "document_processor",
-        user=UserFactory().username,
-        configured=True,
-        capability=["search"],
-        diagnose=True,
-        stderr=output,
-    )
-    assert "processor lacks documents.process_search" in output.getvalue()
-    execute.assert_not_called()
-    job.refresh_from_db()
-    assert job.result["invocations"]["work"].get("attempts", 0) == 0
-
-
 def test_tasks_exposes_retained_operation_failure():
     """A retry waiting on an endpoint retains an actionable explanation."""
     from documents.serialisers import TaskSerializerV10
@@ -361,53 +206,3 @@ def test_tasks_exposes_retained_operation_failure():
         "status": "pending",
         "error": job.error,
     }
-
-
-@pytest.mark.parametrize("diagnose", [False, True])
-def test_processor_ignores_core_parent_while_parser_child_waits(mocker, diagnose):
-    """Core traversal entries do not imply missing processor capability grants."""
-    from io import StringIO
-
-    from django.contrib.auth.models import Permission
-    from django.core.management import call_command
-
-    processor = UserFactory()
-    processor.user_permissions.add(Permission.objects.get(codename="process_parser"))
-    job = DocumentJob.objects.create(
-        kind="consume",
-        timeout=30,
-        status=DocumentJob.Status.WAITING,
-        result={
-            "invocations": {
-                "prepare:6": {
-                    "status": "pending",
-                    "operation": "prepare:parse",
-                    "plugin": "core",
-                },
-                "parse": {
-                    "status": "pending",
-                    "operation": "parser.process",
-                    "plugin": "parser:1",
-                    "policy": {"permission": "documents.process_parser"},
-                },
-            }
-        },
-    )
-    execute = mocker.patch("documents.management.commands.document_processor.process")
-    output, errors = StringIO(), StringIO()
-    call_command(
-        "document_processor",
-        user=processor.username,
-        configured=True,
-        capability=["parser", "ingestion"],
-        diagnose=diagnose,
-        stdout=output,
-        stderr=errors,
-    )
-    assert errors.getvalue() == ""
-    assert "prepare:6" not in output.getvalue()
-    if diagnose:
-        execute.assert_not_called()
-        assert f"{job.pk} parse: eligible" in output.getvalue()
-    else:
-        execute.assert_called_once_with(job.pk, "parse", processor)

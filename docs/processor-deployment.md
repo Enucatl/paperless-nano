@@ -1,8 +1,7 @@
-# Supervised OCR and metadata processing
+# OCR and metadata processing through Celery
 
 The supported example runs PostgreSQL, Redis, and one Paperless container with
-its existing web/coordinator services plus an explicitly enabled server
-processor. Model endpoints remain external. The installed OCR adapter currently
+its web server, consumption watcher, scheduler, and autoscaling Celery worker. Model endpoints remain external. The installed OCR adapter currently
 accepts **PDF inputs only**; do not use this parser selection for a mixed-format
 consumption folder. Keep the existing deployment available until your own
 representative PDFs pass the release parity checks.
@@ -31,20 +30,15 @@ docker compose exec --user paperless webserver python manage.py document_process
 docker compose exec --user paperless webserver python manage.py createsuperuser
 ```
 
-Before provisioning, the processor reports that its account is missing and
-waits for a notification. Provisioning wakes it to reconcile pending work;
-it does not repeatedly initialize Django while waiting. Provisioning is
-idempotent and replaces only the capabilities of a dedicated non-login account;
-it refuses to repurpose a normal,
-administrative, disabled, or group-bearing account. No document-edit grant or
-API token is needed by the server processor. The uploader/requester still needs
-normal document and entity creation permissions. See the rich metadata contract
-for proposal authorization.
+Provisioning is idempotent and replaces only the capabilities of a dedicated
+non-login account; it refuses to repurpose a normal, administrative, disabled,
+or group-bearing account. It schedules eligible pending jobs through Celery after
+the account transaction commits. No document-edit grant or API token is needed
+by server execution. The uploader/requester still needs normal document and
+entity creation permissions. See the rich metadata contract for authorization.
 
-A processor missing a configured capability grant stops consuming shared work.
-After changing its grants, rerun `document_processor_account` or restart the
-processor. Provisioning broadcasts a retained account notification so every
-supervisor using that account can resume, without taking another account's work.
+Account activity and capability grants are checked before each operation.
+After changing grants, rerun `document_processor_account` to resume pending work.
 
 Create the desired metadata fields through core, before admitting documents.
 Names match extracted keys exactly; absent definitions are ignored. OCR provenance
@@ -87,25 +81,14 @@ for an explicitly authorized workstation without local fallback. Do not confuse
 external model inference with workstation placement: a server provider may call
 an external endpoint when the retained request permits it.
 
-With neither variable set, the bundled service is disabled and logs that
-provider work needs an eligible processor. A partial or invalid configuration
-fails visibly through supervision. Account or permission revocation is checked
-before every operation, including during a sweep. Inspect selection and grants
-without consuming an attempt:
-
-```sh
-docker compose exec --user paperless webserver python manage.py document_processor \
-  --user server-processor --configured \
-  --capability parser --capability metadata --capability search \
-  --capability ingestion --diagnose
-```
-
-This reports unselected work, missing grants, and eligible pending work.
-Eligibility does not certify model connectivity or retained identity validity;
-core checks those when executing. `--operation NAME --provider ID` remains
-available for exact placement. `--configured` uses the configured implementation
-and core's retained identity/configuration checks, so operators do not copy
-opaque provider identities into the normal deployment.
+With neither variable set, server provider execution is disabled. Pending work
+remains in PostgreSQL for the workstation claim/result API. Server workers never
+connect to or probe a workstation. A week of unclaimed waiting consumes no lease,
+execution attempt, provider initialization, or recurring per-job Celery task.
+An accepted workstation result schedules server continuation after commit and
+release of the job lock. Inspect Tasks, retained errors, worker logs, and account
+grants when unexpected waiting occurs. Provider identity and retained
+configuration checks remain part of the shared runner.
 
 Tasks distinguishes waiting, processing, checking a staged result, failed, and
 review-required outcomes, and displays retained operation errors. Intentional
@@ -122,43 +105,36 @@ pending or started; completed task history is preserved.
 
 ## Restart, storage, and memory
 
-The lightweight supervisor blocks on Redis notifications without loading Django.
-When work arrives it starts a `document_processor` child. The child reuses its
-Django and provider state for successive operations, including dependent steps
-queued by the coordinator, and exits after a quiet period without eligible work.
-`PAPERLESS_PROCESSOR_IDLE_TIMEOUT` controls this period in nonnegative integer
-seconds and defaults to `60`; `0` exits once available eligible work is drained.
-Waiting blocks on notifications rather than polling the database, and execution
-time does not count toward the timeout. Shutdown reaches the child process group.
+Celery owns server execution. Each document task advances through ready server
+operations, validating and accepting results locally and checkpointing between
+stages. External inference runs outside database transactions. A task returns
+when complete, cancelled, failed, or waiting for workstation-only work; unrelated
+server jobs can use the available pool capacity.
 
-The database remains authoritative for jobs, claims, and results. Redis lists
-carry work notifications, and a bounded stream per account broadcasts provisioning
-notifications. Duplicate notifications do not consume execution
-attempts. The processor reconciles outstanding work at startup and after Redis
-reconnection. The existing recovery task also repairs missed notifications and
-expired claims, daily at 03:00 by default. Configure its normal cron schedule with
-`PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON`, or use `disable` to turn off scheduled
-recovery. More frequent schedules are allowed. Both supported schedulers honor
-the setting; manual recovery and startup/reconnection reconciliation remain
-available when scheduled recovery is disabled.
+`PAPERLESS_TASK_WORKERS` sets maximum concurrency. Both standard and lean workers
+use a shared prefork pool that autoscales to zero children after idle, releasing
+Django and provider memory. `PAPERLESS_WORKER_MAX_TASKS_PER_CHILD` bounds child
+recycling (default `10`); a child may execute several tasks before replacement.
+The custom lean Celery bootstrap remains available unchanged. Remove any old
+`PAPERLESS_PROCESSOR_IDLE_TIMEOUT` or `PAPERLESS_PROCESSOR_CLASS` configuration;
+the separate processor service and Redis wake queues are retired.
 
-Waiting does not necessarily mean stuck: work may intentionally await an offline
-processor. Recovery republishes pending, unclaimed work without forcing local
-execution, leaves active leases alone, and preserves existing replay-safety rules
-for expired leases. A crash between database commit and Redis publication can
-still lose a notification. Daily recovery may delay its repair until the next
-sweep; with scheduled recovery disabled, unnoticed missed work can require
-manual recovery or restart. Interrupted leases can likewise wait for recovery.
-Whole-stack memory measurements remain a release gate; this lifecycle alone is
-not a measurement.
+PostgreSQL remains authoritative for jobs, claims, and results; Redis is the
+Celery broker and cache. Duplicate deliveries do not authorize duplicate effects.
+Existing per-job file locks serialize execution. All server workers must share
+the database, settings, and private job files on a filesystem with reliable
+advisory locks; independent copies of `DATA_DIR/jobs` are unsupported. This
+example does not establish multi-host/NFS safety.
 
-The supported example uses one PostgreSQL database and one shared local data and
-media filesystem. Competing processors use existing per-job file locks; a busy
-job retains its notification for retry so other work can proceed. Additional
-server processes must use the same database, settings, and private job files on
-a filesystem with reliable advisory locks. Do not place independent copies of
-`DATA_DIR/jobs` behind several
-processors. The example does not establish multi-host/NFS safety.
+The existing recovery task repairs missed dispatches and interrupted work, daily
+at 03:00 by default. Configure `PAPERLESS_DOCUMENT_JOB_RECOVERY_CRON` or use
+`disable` to turn off scheduled recovery. Manual recovery remains available.
+A crash between commit and broker publication may delay work until recovery.
+Pending workstation-only work remains waiting without repeated dispatches;
+active leases remain untouched. Expired claims follow retained replay-safety
+rules: uncertain external effects require reconciliation, not blind replay.
+Whole-stack memory and latency claims require measurements; changing dispatch
+alone does not establish an improvement.
 
 Stop admission and processing before a coordinated backup. Preserve PostgreSQL,
 the entire data volume (including private jobs and search data), and media

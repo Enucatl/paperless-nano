@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -11,7 +12,9 @@ from pathlib import Path
 import baseline
 
 IMAGE = "paperless-release49-inference:secrets-validation"
-CURRENT_IMAGE = "paperless-release-current:55928c30e"
+CURRENT_IMAGE = os.environ.get(
+    "BENCH_CURRENT_IMAGE", "paperless-release-celery:issue52"
+)
 SECRET = "pm-release-model-secret"
 HARNESS = "pm-release-harness-snapshot"
 CONTROLLER = "pm-release-controller"

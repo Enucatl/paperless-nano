@@ -19,7 +19,7 @@ ROOT = Path("/harness")
 OUT = Path("/evidence")
 IMAGE = "sha256:6824eec4681c4087dbff484efab2b1da399c7b0e3adfd614ed78afbabfa6fc1a"
 CURRENT_IMAGE = os.environ.get(
-    "BENCH_CURRENT_IMAGE", "paperless-release-current:55928c30e"
+    "BENCH_CURRENT_IMAGE", "paperless-release-celery:issue52"
 )
 DATABASE = "postgres:18"
 BROKER = "docker.io/library/redis:8"
@@ -692,8 +692,6 @@ def run(variant: str, number: int) -> dict:
                 "PAPERLESS_OCR_MODE": "off",
             }
             seed = SEED
-            if variant == "current":
-                env["PAPERLESS_PROCESSOR_IDLE_TIMEOUT"] = "60"
         # Match final ownership before running migrations outside the measured process.
         docker(
             "run",
@@ -873,8 +871,9 @@ def run(variant: str, number: int) -> dict:
             "snapshots": snapshots,
             "workload": results,
             "poll_interval_seconds": None if variant == "current" else 10,
-            "processor_idle_timeout_seconds": 60 if variant == "current" else None,
-            "processor_mode": "redis-events"
+            "processor_idle_timeout_seconds": None,
+            "worker_max_tasks_per_child": 10 if variant == "current" else None,
+            "processor_mode": "celery"
             if variant == "current"
             else "polling"
             if variant == "candidate"

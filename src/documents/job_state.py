@@ -1,5 +1,7 @@
 """Shared document revision and authorization checks for durable operations."""
 
+from functools import wraps
+
 from django.contrib.auth.models import User
 from django.utils import timezone
 
@@ -80,10 +82,6 @@ def wait(job: DocumentJob, entry: dict) -> None:
     raise PendingOperation(entry["id"])
 
 
-class ProcessorFinished(BaseException):
-    """Stop coordinator traversal immediately after submitting computation."""
-
-
 def sync_terminal_task(job: DocumentJob) -> None:
     """Record terminal processor failures without requiring a Celery callback."""
     from documents.models import PaperlessTask
@@ -101,3 +99,16 @@ def sync_terminal_task(job: DocumentJob) -> None:
         {"error_type": "DocumentJobError", "error_message": job.error},
         job.updated,
     )
+
+
+def track_terminal_task(runner):
+    """Complete terminal task history even when runners execute outside Celery."""
+
+    @wraps(runner)
+    def run(job_id, *args, **kwargs):
+        try:
+            return runner(job_id, *args, **kwargs)
+        finally:
+            sync_terminal_task(DocumentJob.objects.get(pk=job_id))
+
+    return run

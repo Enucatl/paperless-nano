@@ -1,9 +1,7 @@
-"""Exercise real supervised processors against disposable PostgreSQL and Redis.
+"""Exercise Celery's shared runner against disposable PostgreSQL and Redis.
 
-Run only after migrating an empty, isolated deployment, with
-PAPERLESS_PROCESSOR_VALIDATION=1 and PAPERLESS_SEARCH_PROVIDER set to
-processor_deployment_checks.EndpointSearchProvider. Add this directory to
-PYTHONPATH. The HTTP stub tests lifecycle behavior, not OCR/model correctness.
+The endpoint represents finite provider work; this checks lifecycle and durable
+handoffs, not OCR/model quality. Requires PAPERLESS_PROCESSOR_VALIDATION=1.
 """
 
 # ruff: noqa: INP001, T201
@@ -18,59 +16,68 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
+from urllib.request import Request
 from urllib.request import urlopen
 
 from documents.search.tantivy import TantivyProvider
 
 
 class EndpointSearchProvider(TantivyProvider):
-    """Use a controllable real HTTP endpoint for replay-safe finite work."""
+    """Use a controllable HTTP endpoint for replay-safe finite work."""
 
     replay_safe = True
 
     def wipe(self) -> None:
         """Complete only after the endpoint acknowledges the request."""
-        with urlopen(
-            os.environ["PAPERLESS_VALIDATION_ENDPOINT"], timeout=15
-        ) as response:
+        request = Request(
+            os.environ["PAPERLESS_VALIDATION_ENDPOINT"],
+            headers={"X-Processor-Pid": str(os.getpid())},
+        )
+        with urlopen(request, timeout=60) as response:
             assert response.status == 200
 
 
 def main() -> None:
-    """Check contention, revocation, active-child death and endpoint retries."""
+    """Check retries, offline claims, concurrency, child reuse and idle release."""
     if os.environ.get("PAPERLESS_PROCESSOR_VALIDATION") != "1":
         raise RuntimeError("Requires an explicitly isolated validation deployment")
     import django
 
     django.setup()
-    from django.contrib.auth.models import Permission
     from django.contrib.auth.models import User
     from django.core.management import call_command
+    from django.test import override_settings
     from django.utils import timezone
+    from rest_framework.test import APIClient
+
     from documents.deferred_operations import recover_waiting
     from documents.models import DocumentJob
-    from documents.models import PaperlessTask
     from documents.search import get_backend
     from documents.search_operations import run_search
     from documents.search_operations import submit_search
 
     assert not DocumentJob.objects.exists(), "Requires an empty disposable database"
     call_command("document_processor_account", user="validation", capability=["search"])
-    user = User.objects.get(username="validation")
-    permission = Permission.objects.get(codename="process_search")
-    state = {"calls": 0, "failures": 0}
+    workstation = User.objects.create_superuser(username="workstation", password=None)
+    state = {"calls": 0, "failures": 0, "block_next": False}
+    execution_pids = []
     gate = threading.Event()
     gate.set()
 
     class Endpoint(BaseHTTPRequestHandler):
-        """Expose controlled outages without changing processor code."""
+        """Expose controlled outages and long work without changing production code."""
 
         def do_GET(self) -> None:
+            execution_pids.append(int(self.headers["X-Processor-Pid"]))
             state["calls"] += 1
-            gate.wait(20)
+            if state["block_next"]:
+                state["block_next"] = False
+                gate.wait(60)
             failed = state["failures"] > 0
             if failed:
                 state["failures"] -= 1
@@ -78,169 +85,205 @@ def main() -> None:
             self.end_headers()
 
         def log_message(self, *args) -> None:
-            """Keep the check output limited to assertions and its result."""
+            """Keep output limited to assertions and results."""
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     os.environ["PAPERLESS_VALIDATION_ENDPOINT"] = (
         f"http://127.0.0.1:{server.server_port}/"
     )
-    supervisors = []
+    worker = None
+    observed_children = set()
 
-    def wait_for(predicate) -> None:
+    def children() -> set[int]:
+        """Read direct children, including pool processes and outcome helpers."""
+        if worker is None:
+            return set()
+        path = Path(f"/proc/{worker.pid}/task/{worker.pid}/children")
+        pids = {int(pid) for pid in path.read_text().split()}
+        observed_children.update(pids)
+        return pids
+
+    def wait_for(predicate, timeout=90) -> None:
         """Bound each asynchronous assertion independently."""
-        until = time.monotonic() + 30
+        until = time.monotonic() + timeout
         while not predicate():
+            children()
             if time.monotonic() >= until:
-                raise AssertionError("Processor condition did not complete within 30s")
-            time.sleep(0.05)
+                raise AssertionError("Celery condition did not complete")
+            time.sleep(0.1)
 
     def entry(job) -> dict:
-        """Read committed operation state, never an in-memory snapshot."""
+        """Read committed operation state."""
         job.refresh_from_db()
         return job.result["invocations"]["maintenance"]
 
     def admit() -> DocumentJob:
-        """Use ordinary admission and coordination before server processing."""
-        job = submit_search(get_backend().provider, "wipe", {})
-        job.timeout = 1
-        job.save(update_fields=["timeout"])
-        run_search(str(job.pk))
-        return job
-
-    def start() -> subprocess.Popen:
-        """Launch the actual lightweight supervisor and its management child."""
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                "from paperless_services.processor import Processor; Processor().run()",
-            ],
-            cwd=Path(__file__).resolve().parents[2] / "src",
-            stdout=log,
-            stderr=log,
-        )
-        supervisors.append(process)
-        return process
-
-    def stop_all() -> None:
-        """Reap every supervisor and its forwarded child shutdown."""
-        for process in supervisors:
-            process.terminate()
-        for process in supervisors:
-            process.wait(timeout=20)
-        supervisors.clear()
+        """Use ordinary admission and Celery dispatch."""
+        return submit_search(get_backend().provider, "wipe", {})
 
     def finish(job) -> None:
-        """Let the ordinary coordinator validate the staged receipt."""
-        wait_for(lambda: entry(job)["status"] == "staged")
-
-        def coordinated() -> bool:
-            """Retry delivery if the processor still holds the operation lock."""
-            run_search(str(job.pk))
-            job.refresh_from_db()
-            return job.status == DocumentJob.Status.SUCCEEDED
-
-        wait_for(coordinated)
+        """Require authoritative completion, including validation in the same task."""
+        wait_for(lambda: DocumentJob.objects.get(pk=job.pk).status == "succeeded")
+        assert entry(job)["status"] == "succeeded"
 
     with tempfile.TemporaryFile(mode="w+") as log:
         try:
-            gate.clear()
-            job = admit()
-            start()
-            start()
-            wait_for(lambda: state["calls"] == 1)
-            time.sleep(0.5)
-            assert state["calls"] == 1 and entry(job)["attempts"] == 1
-            gate.set()
-            finish(job)
-            stop_all()
-
-            start()
-            time.sleep(2)
-            user.user_permissions.remove(permission)
-            job = admit()
-            wait_for(
-                lambda: (
-                    b"Processor grant revoked" in os.pread(log.fileno(), 1_000_000, 0)
-                    or b"Processor lacks configured capability grants"
-                    in os.pread(log.fileno(), 1_000_000, 0)
-                )
+            worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "from paperless_worker.bootstrap import main; main()",
+                ],
+                cwd=Path(__file__).resolve().parents[2] / "src",
+                stdout=log,
+                stderr=log,
             )
-            assert entry(job)["status"] == "pending"
-            assert entry(job).get("attempts", 0) == 0
-            call_command(
-                "document_processor_account", user="validation", capability=["search"]
-            )
-            finish(job)
-            stop_all()
+            wait_for(lambda: b"ready." in os.pread(log.fileno(), 2_000_000, 0))
+            assert children() == set()
 
-            gate.clear()
+            # Build a durable unselected operation using the shared finite search
+            # fixture, then place its capability on a workstation for this check.
+            with patch("documents.search_operations.run_search.apply_async"):
+                offline = admit()
+            with override_settings(PROCESSOR_CAPABILITIES=()):
+                run_search(str(offline.pk))
+            offline.refresh_from_db()
+            offline.status = DocumentJob.Status.WAITING
+            offline.result["invocations"]["maintenance"].update(
+                operation="metadata.classify",
+                policy={"permission": "documents.process_metadata"},
+                status="pending",
+                attempts=0,
+                result=None,
+            )
+            for field in ("token", "processor", "lease_until", "processor_location"):
+                offline.result["invocations"]["maintenance"].pop(field, None)
+            offline.updated = timezone.now() - timedelta(days=8)
+            offline.save(update_fields=["status", "result", "updated"])
             previous_calls = state["calls"]
-            job = admit()
-            supervisor = start()
+            for _ in range(3):
+                recover_waiting()
+            time.sleep(1)
+            assert state["calls"] == previous_calls
+            assert entry(offline)["attempts"] == 0
+            assert offline.status == DocumentJob.Status.WAITING
+            assert not children()
+            assert str(offline.pk).encode() not in os.pread(log.fileno(), 2_000_000, 0)
+
+            # One long operation occupies a child; another must still complete.
+            state["block_next"] = True
+            gate.clear()
+            blocked = admit()
             wait_for(lambda: state["calls"] == previous_calls + 1)
-            children = Path(f"/proc/{supervisor.pid}/task/{supervisor.pid}/children")
-            child_pid = int(children.read_text().split()[0])
-            os.killpg(child_pid, signal.SIGKILL)
-            stop_all()
+            unrelated = admit()
+            finish(unrelated)
+            assert DocumentJob.objects.get(pk=blocked.pk).status != "succeeded"
+            assert len(children()) == 2
             gate.set()
-            time.sleep(1.1)
-            recover_waiting()
-            start()
-            finish(job)
-            assert entry(job)["attempts"] == 2
-            stop_all()
+            finish(blocked)
+
+            client = APIClient()
+            client.force_authenticate(workstation)
+            base = f"/api/operations/{offline.pk}/maintenance/"
+            response = client.post(base + "claim/")
+            assert response.status_code == 200, response.content
+            leased = response.json()
+            response = client.post(
+                base + "result/",
+                {"token": leased["token"], "result": None},
+                format="json",
+            )
+            assert response.status_code == 202, response.content
+            finish(offline)
+            assert entry(offline)["attempts"] == 1
+
+            warmed_pids = set(execution_pids)
+            before_reuse = len(execution_pids)
+            started = time.monotonic()
+            for _ in range(4):
+                finish(admit())
+            reuse_seconds = time.monotonic() - started
+            warm_pids = execution_pids[before_reuse:]
+            assert len(warm_pids) == 4
+            assert set(warm_pids) <= warmed_pids
+            assert len(set(warm_pids)) < len(warm_pids), (
+                "Warm tasks did not reuse an initialized executing child"
+            )
 
             state["failures"] = 1
             job = admit()
-            start()
             finish(job)
             assert entry(job)["attempts"] == 2
-            stop_all()
 
             state["failures"] = 10
             job = admit()
-            task = PaperlessTask.objects.get(task_id=str(job.pk))
-            task.status = PaperlessTask.Status.STARTED
-            task.date_started = timezone.now()
-            task.save(update_fields=["status", "date_started"])
-            start()
-            wait_for(lambda: entry(job)["status"] == "failed")
+            wait_for(lambda: DocumentJob.objects.get(pk=job.pk).status == "failed")
             assert entry(job)["attempts"] == 3
-            assert job.status == DocumentJob.Status.FAILED and "503" in job.error
-            wait_for(
-                lambda: (
-                    PaperlessTask.objects.get(pk=task.pk).status
-                    == PaperlessTask.Status.FAILURE
+            assert "503" in job.error
+            state["failures"] = 0
+
+            # Kill the child during safe work and recover only after lease expiry.
+            state["block_next"] = True
+            gate.clear()
+            previous_calls = state["calls"]
+            job = admit()
+            wait_for(lambda: state["calls"] == previous_calls + 1)
+            leased_entry = entry(job)
+            # Find the active task's pid through Celery's standard inspection.
+            from paperless.celery import app
+
+            active = app.control.inspect(timeout=5).active()
+            task = next(
+                task
+                for tasks in active.values()
+                for task in tasks
+                if task["id"] == str(job.pk)
+            )
+            os.kill(task["worker_pid"], signal.SIGKILL)
+            wait_for(lambda: task["worker_pid"] not in children())
+            gate.set()
+            leased_entry["lease_until"] = (
+                timezone.now() - timedelta(seconds=1)
+            ).isoformat()
+            job.result["invocations"]["maintenance"] = leased_entry
+            job.save(update_fields=["result"])
+            recover_waiting()
+            finish(job)
+            assert entry(job)["attempts"] == 2
+
+            wait_for(lambda: not children(), timeout=90)
+            assert not children()
+            print(
+                json.dumps(
+                    {
+                        "broker": "Redis 8",
+                        "max_tasks_per_child": int(
+                            os.environ.get("PAPERLESS_WORKER_MAX_TASKS_PER_CHILD", "10")
+                        ),
+                        "direct_child_pids_observed": len(observed_children),
+                        "warm_task_execution_pids": warm_pids,
+                        "four_warm_tasks_seconds": reuse_seconds,
+                        "offline_eight_day_age_no_attempts_or_provider_calls": True,
+                        "workstation_claim_result_continuation": True,
+                        "concurrency_two": True,
+                        "child_reuse": True,
+                        "idle_children": 0,
+                        "active_child_crash_recovery": True,
+                        "bounded_endpoint_retries": True,
+                    }
                 )
             )
-            task.refresh_from_db()
-            assert (
-                task.date_done is not None
-                and "503" in task.result_data["error_message"]
-            )
-            stop_all()
         except BaseException:
-            gate.set()
-            stop_all()
             log.seek(0)
             print(log.read(), file=sys.stderr)
             raise
         finally:
+            gate.set()
+            if worker is not None and worker.poll() is None:
+                worker.terminate()
+                worker.wait(timeout=30)
             server.shutdown()
-    print(
-        json.dumps(
-            {
-                "competing_processors": True,
-                "permission_revocation_and_reprovisioning": True,
-                "active_child_crash_recovery": True,
-                "endpoint_recovery": True,
-                "bounded_terminal_failure": True,
-                "top_level_task_failure": True,
-            }
-        )
-    )
 
 
 if __name__ == "__main__":

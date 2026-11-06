@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 @pytest.fixture(autouse=True)
 def processor_notifications(mocker):
     """Keep durable job tests independent of a running processor broker."""
-    return mocker.patch("documents.processor_notifications.Queue").return_value
+    return mocker.patch("documents.processor_notifications.dispatch_pending")
 
 
 @pytest.fixture(scope="session", autouse=True)

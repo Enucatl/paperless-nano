@@ -1,9 +1,10 @@
-# Original, polling and Redis-wakeup release comparison
+# Original, polling and Celery release comparison
 
 This harness compares the retained six-service deployment at core revision
 `8eb396d9833a56e6147092620b8832e39397f684`, the first integrated polling image
-recorded in `docs/inference-release-validation.md`, and current commit
-`55928c30e` with Redis wakeups. They run
+recorded in `docs/inference-release-validation.md`, and the issue #52 Celery
+candidate image `paperless-release-celery:issue52`. Set `BENCH_CURRENT_IMAGE` to
+the immutable candidate tag built from the source snapshot being tested. They run
 sequentially on the same Docker host with fresh PostgreSQL 18 and Redis 8,
 one web worker and one autoscaling task worker. It uses real OCR and metadata
 endpoints but only generated synthetic invoices; no production data is copied.
@@ -62,12 +63,13 @@ API readiness starts when the core container launches. Baseline stack readiness
 also includes first-time sidecar database/resource provisioning, so it is not a
 clean restart latency comparison.
 
-The current variant keeps its default 60-second processor idle timeout. Report
-the first 60 seconds and remaining 240 seconds separately, along with process
-identities across immediate uploads and after idle. It also changes job recovery
-from every five minutes to daily at 03:00; retain shipped defaults and count
-observed recovery deliveries rather than attributing all CPU differences to wakes.
-The original and polling variants retain their prior behavior. Pin PostgreSQL,
+The Celery candidate uses its bounded ten-task child recycling default and
+autoscales down to zero. Report process identities across immediate uploads and
+after idle to verify reuse and provider release. The historical Redis-wakeup
+comparison used a separate 60-second processor timeout; its archived results
+remain unchanged. Current job recovery runs daily at 03:00; retain shipped defaults
+and count observed recovery deliveries. The original and polling variants retain
+their prior behavior. Pin PostgreSQL,
 Redis and all app image IDs at controller startup so repeats cannot drift with tags.
 The currently available PostgreSQL 18 image can differ from the historical image;
 all fresh variants share it and the old measurements are not rewritten.
@@ -111,6 +113,17 @@ them with the local aliases in `baseline.IMAGES`. The launcher verifies image
 configuration and root filesystem layers against the retained source IDs over
 SSH; Docker's classic/containerd stores can report different IDs for identical
 transferred contents. Exporting multiple untagged IDs can lose image references.
+The real-model endpoint must be reachable before launching. The issue #52
+comparison was blocked on November 6 by both SSH and OCR HTTP connection timeouts
+to Cerebrum; no Celery performance result is available. The server-only harness
+below does not exercise offline-then-online workstation execution; run the focused
+lifecycle checks separately and retain that live-model scenario as an open gate.
+
+Build a frozen source snapshot with the included Dockerfile, using the retained
+dependency image as its base, and tag it `paperless-release-celery:issue52` (or
+set `BENCH_CURRENT_IMAGE`). The Dockerfile removes inherited processor service
+files as well as copying the current source and S6 configuration.
+
 Run the self-checks in disposable containers before the experiment, then use
 the repository's `wake-run` workflow to invoke:
 

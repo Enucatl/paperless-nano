@@ -165,8 +165,9 @@ def test_timeout_retains_input_and_leaves_document_unchanged(
 
     job.refresh_from_db()
     sample_doc.refresh_from_db()
-    assert job.status == DocumentJob.Status.WAITING
+    assert job.status == DocumentJob.Status.QUEUED
     assert job.result["invocations"]["parser.process"]["attempts"] == 1
+    assert job.result["invocations"]["parser.process"]["status"] == "leased"
     assert sample_doc.content == "test content"
     assert (jobs.job_directory(job.pk) / job.input["staged_name"]).exists()
 

@@ -146,7 +146,7 @@ def test_search_retries_safe_failures_and_stops_recovering_success(settings, moc
     )
     mocker.patch("documents.search_operations.run_search.apply_async")
     job = submit_search(provider, "optimize", {})
-    from documents.server_processor import process
+    from paperless_testing.queued import drive_processors
 
     processor = UserFactory()
     processor.user_permissions.add(Permission.objects.get(codename="process_search"))
@@ -154,7 +154,7 @@ def test_search_retries_safe_failures_and_stops_recovering_success(settings, moc
     job.refresh_from_db()
     key = next(iter(job.result["invocations"]))
     with pytest.raises(RuntimeError):
-        process(job.pk, key, processor)
+        drive_processors(run_search, processor)(str(job.pk))
     job.refresh_from_db()
     assert job.result["invocations"][key]["attempts"] == 1
     from datetime import timedelta
@@ -168,7 +168,7 @@ def test_search_retries_safe_failures_and_stops_recovering_success(settings, moc
     ).isoformat()
     job.save(update_fields=["result"])
     recover_waiting()
-    process(job.pk, key, processor)
+    drive_processors(run_search, processor)(str(job.pk))
     run_search(str(job.pk))
     job.refresh_from_db()
     assert job.status == "succeeded"

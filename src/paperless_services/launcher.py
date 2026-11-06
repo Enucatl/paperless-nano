@@ -8,7 +8,6 @@ DEFAULTS = {
     "consumer": "paperless_services.traditional.Consumer",
     "scheduler": "paperless_services.traditional.Scheduler",
     "worker": "paperless.worker.Worker",
-    "processor": "paperless_services.processor.Processor",
 }
 LEGACY_FLAGS = {
     "consumer": "PAPERLESS_USE_API_CONSUMER",

@@ -216,3 +216,33 @@ def test_custom_logging_cannot_import_application(configuration: dict) -> None:
 
     with pytest.raises(ValueError, match="Lean worker does not support"):
         logging_configuration(configuration)
+
+
+@pytest.mark.parametrize(
+    ("user", "capabilities", "valid"),
+    [
+        ("", "", True),
+        ("server", "parser metadata search ingestion", True),
+        ("server", "", False),
+        ("", "parser", False),
+        ("server", "unknown", False),
+    ],
+)
+def test_server_placement_configuration(worker_env, user, capabilities, valid):
+    """Reject incomplete placement before jobs silently wait for a workstation."""
+    worker_env["PAPERLESS_PROCESSOR_USER"] = user
+    worker_env["PAPERLESS_PROCESSOR_CAPABILITIES"] = capabilities
+    worker_env["EXPECT_VALID_PLACEMENT"] = str(valid)
+    run_python(
+        """
+import os
+from django.core.exceptions import ImproperlyConfigured
+try:
+    import paperless.settings
+except ImproperlyConfigured:
+    assert os.environ['EXPECT_VALID_PLACEMENT'] == 'False'
+else:
+    assert os.environ['EXPECT_VALID_PLACEMENT'] == 'True'
+""",
+        worker_env,
+    )

@@ -368,7 +368,7 @@ The mechanism is visible in both journal transitions and source:
 [`execution_policy`](../src/documents/job_state.py) queues finite `prepare:*`
 operations, [`prepare`](../src/documents/ingestion.py) defers each eligible plugin,
 and [`invoke`](../src/documents/operation_journal.py) stops traversal after staging
-the selected result. The [processor supervisor](../src/paperless_services/processor.py)
+the selected result. The [processor supervisor](https://github.com/Enucatl/paperless-ngx/blob/55928c30e0b842f4b881944a09d64fef8cd4ef3f/src/paperless_services/processor.py)
 then exits that Django child, waits ten seconds and starts another sweep. Only
 one newly available step of the same dependent ingestion chain is advanced in
 each sweep. This explains repeated queue gaps and repeated initialization.
@@ -772,3 +772,68 @@ invokes recovery after lease expiry; it does not establish immediate automatic
 recovery before the configured recovery schedule. Real-model outage semantics,
 representative corpus parity, upgrade qualification, whole-container crash
 windows and multi-host/NFS safety remain outside this check.
+
+## Celery consolidation comparison — 2026-11-06
+
+The issue #52 implementation has **not** completed the controlled real-model
+comparison. During preparation, `cerebrum.home.arpa` timed out on SSH port 22
+(ten-second connection deadline) and the OCR endpoint on port 8108 (five-second
+connection deadline). Atlas remained reachable and retained baseline/candidate
+images were present locally. No upload measurement was started; these connection
+checks establish an environment blocker, not an OCR failure or application
+latency result.
+
+The harness now selects `paperless-release-celery:issue52` as its current variant,
+removes inherited supervisor service files when layering over the retained
+dependency image, and records Celery execution with a ten-task child recycling
+limit. `BENCH_CURRENT_IMAGE` can select an immutable candidate tag. The preserved
+November 5 and November 6 data and plots above still describe their actual
+measured versions and brokers; they do not measure this architecture.
+
+Once the endpoint is reachable, build the candidate from a frozen source
+snapshot, run the preflight, then repeat the pinned-dependency identical-PDF
+comparison with fresh evidence storage. Server-only title-search visibility,
+ingestion/nominal-idle CPU, steady/peak PSS, child starts, and result acceptance
+latency remain unmeasured for Celery consolidation. The live offline-then-online
+workstation comparison and measurement-based selection of the recycling bound
+also remain open. Focused synthetic lifecycle checks cannot substitute for those
+real-model measurements, and no performance improvement is claimed.
+
+### Shared Celery lifecycle check — 2026-11-06
+
+The updated isolated lifecycle check passed against current source copied into
+`paperless-release-current:55928c30e`, with PostgreSQL 18, **Redis 8**, the existing
+lean Celery bootstrap, `PAPERLESS_TASK_WORKERS=2`, and the existing bounded
+`PAPERLESS_WORKER_MAX_TASKS_PER_CHILD=10` default:
+
+```sh
+scripts/validation/check_processor_deployment.sh paperless-release-current:55928c30e
+```
+
+The check observed five direct-child PIDs over the complete run; this count
+includes pool processes and may include disposable metadata/outcome helpers.
+Four successive warm finite HTTP operations completed in 0.459 seconds. The
+provider sent its actual process PID to the HTTP endpoint: all four operations
+ran in the same previously warmed pool child (PID 28 in this run), establishing
+execution reuse independently of idle sibling or helper processes. A blocked operation
+occupied one child while unrelated server work completed in the second. The
+pool returned to zero children after the normal autoscale quiet period. This
+supports retaining ten tasks as the initial bounded reuse setting; it does not
+establish an optimal recycling bound or model-memory behavior.
+
+A synthetic pending operation with an unselected metadata capability was aged
+by eight days in the journal. Three explicit recovery sweeps left it pending,
+with zero attempts, zero provider calls, zero worker children, and no per-job
+Celery deliveries. The workstation then claimed and submitted its result through
+the authenticated operation API; a real Celery task accepted the result and
+completed the finite search fixture. The eight-day age was injected, not elapsed
+wall-clock time. This fixture exercises the common journal and API; it does not
+run real metadata inference or establish document title-search visibility.
+
+The same run verified recovery after one HTTP 503, terminal failure after three
+HTTP 503 attempts, and replay-safe recovery after an active pool child was
+killed. The crash test explicitly expired the lease and invoked recovery after
+confirming the child had exited. Every container used `--rm --userns=host`; the
+script cleaned up its disposable PostgreSQL/Redis containers and network. No
+historical PDF measurements above were changed. The real-model comparison and
+provider-memory measurements remain blocked as described above.

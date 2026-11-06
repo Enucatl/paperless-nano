@@ -6,8 +6,8 @@ from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
 from django.db import transaction
 
-from documents.management.commands.document_processor import CAPABILITIES
 from documents.processor_notifications import wake_processor
+from documents.server_processor import CAPABILITIES
 
 
 class Command(BaseCommand):

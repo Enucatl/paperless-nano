@@ -6,11 +6,13 @@ import pytest
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
 
+from documents.deferred_operations import claim
+from documents.deferred_operations import submit_result
 from documents.models import DocumentJob
 from documents.search_operations import run_search
 from documents.search_operations import submit_search
-from documents.server_processor import process
 from paperless_testing.factories import UserFactory
+from paperless_testing.queued import drive_processors
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -39,7 +41,8 @@ def test_grant_revoked_after_submission_rejects_application(queued_search):
     execute.return_value = None
     job = submit_search(provider, "wipe", {})
     run_search(str(job.pk))
-    process(job.pk, "maintenance", processor)
+    leased = claim(job.pk, "maintenance", processor)
+    submit_result(job.pk, "maintenance", processor, leased["token"], None)
     processor.user_permissions.clear()
     with pytest.raises(PermissionDenied):
         run_search(str(job.pk))
@@ -57,9 +60,9 @@ def test_server_exception_preserves_effect_uncertainty(
     execute.side_effect = RuntimeError("processor failed")
     job = submit_search(provider, "wipe", {})
     run_search(str(job.pk))
-    processor_notifications.push.reset_mock()
+    processor_notifications.reset_mock()
     with pytest.raises(RuntimeError, match="processor failed"):
-        process(job.pk, "maintenance", processor)
+        drive_processors(run_search, processor)(str(job.pk))
     job.refresh_from_db()
     entry = job.result["invocations"]["maintenance"]
     assert entry["status"] == ("pending" if safe else "unknown")
@@ -67,4 +70,3 @@ def test_server_exception_preserves_effect_uncertainty(
     assert job.status == (
         DocumentJob.Status.WAITING if safe else DocumentJob.Status.ATTENTION
     )
-    assert processor_notifications.push.call_count == int(safe)

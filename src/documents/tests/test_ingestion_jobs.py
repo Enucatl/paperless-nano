@@ -169,7 +169,7 @@ def test_changed_execution_configuration_retains_input_without_publication(
         settings, "TIKA_ENDPOINT", "http://changed.invalid"
     )
 
-    with pytest.raises(ConsumerError, match="configuration or provider changed"):
+    with pytest.raises(RejectedResult, match="configuration changed during ingestion"):
         ingestion_jobs.run_consumption(job.pk)
 
     job.refresh_from_db()

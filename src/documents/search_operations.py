@@ -11,6 +11,7 @@ from filelock import FileLock
 from filelock import Timeout
 
 from documents.job_state import PendingOperation
+from documents.job_state import track_terminal_task
 from documents.models import DocumentJob
 from documents.operation_journal import NeedsAttention
 from documents.operation_journal import invoke
@@ -137,6 +138,7 @@ def _execute(provider, operation: str, inputs: dict) -> None:
 
 @shared_task(ignore_result=True)
 @defer_notifications()
+@track_terminal_task
 def run_search(job_id: str) -> None:
     """Release workers while pending and validate declarations on completion."""
     from documents.job_storage import job_directory
@@ -148,6 +150,7 @@ def run_search(job_id: str) -> None:
         ):
             job = DocumentJob.objects.get(pk=job_id)
             if job.status in {
+                DocumentJob.Status.WAITING,
                 DocumentJob.Status.SUCCEEDED,
                 DocumentJob.Status.CANCELLED,
                 DocumentJob.Status.REJECTED,

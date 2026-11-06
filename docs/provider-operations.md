@@ -68,16 +68,12 @@ Check the effective setup without processing pending work:
 
 ```sh
 docker compose exec --user paperless webserver python manage.py check
-docker compose exec --user paperless webserver python manage.py document_processor \
-  --user server-processor --configured \
-  --capability parser --capability metadata --capability search \
-  --capability ingestion --diagnose
 ```
 
-Read the startup/processor logs for import, field, permission, and endpoint
-errors. Diagnostics report selection and grants; they do not prove endpoint
-connectivity or actual processing. Run the completion checks below before
-opening general admission.
+Read the Celery worker logs and retained operation errors for import, field,
+permission, and endpoint errors. System checks do not prove endpoint connectivity
+or actual processing. Run the completion checks below before opening general
+admission.
 
 ## Stop admission and drain before a swap
 

@@ -29,6 +29,7 @@ from documents.job_state import RejectedResult
 from documents.job_state import check_permission as _check_permission
 from documents.job_state import document_revision as _revision
 from documents.job_state import sync_terminal_task
+from documents.job_state import track_terminal_task
 from documents.job_storage import atomic_copy as _copy
 from documents.job_storage import file_result as _file_result
 from documents.job_storage import job_directory
@@ -531,6 +532,7 @@ def _cleanup(job: DocumentJob) -> None:
 
 
 @defer_notifications()
+@track_terminal_task
 def run_reprocess(job_id: UUID | str) -> bool:
     """Execute or resume a job, independently of Celery lifecycle callbacks."""
     from documents.job_state import PendingOperation

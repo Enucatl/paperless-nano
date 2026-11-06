@@ -148,6 +148,12 @@ def consume_file(
         raise
     except Exception as error:
         job = DocumentJob.objects.get(pk=job_id)
+        if job.status in {
+            DocumentJob.Status.WAITING,
+            DocumentJob.Status.QUEUED,
+            DocumentJob.Status.RUNNING,
+        }:
+            raise Ignore from error
         # An uncertain replay must not dispatch the native errback a second time.
         if isinstance(error, NeedsAttention) or job.result.get("delivery"):
             PaperlessTask.objects.filter(task_id=self.request.id or job_id).update(

@@ -46,11 +46,17 @@ def locked_operation(job_id, key: str, user, *, reconcile_only=False):
     """Serialize remote mutation with the core coordinator on shared storage."""
     from documents.job_storage import job_directory
 
+    context = server_operation.get()
+    local = (
+        context is not None
+        and context["job_id"] == str(job_id)
+        and context["key"] == key
+    )
     with (
         defer_notifications(),
         (
             nullcontext()
-            if server_operation.get()
+            if local
             else FileLock(job_directory(job_id).with_suffix(".lock"), timeout=0)
         ),
         transaction.atomic(),
@@ -60,11 +66,7 @@ def locked_operation(job_id, key: str, user, *, reconcile_only=False):
         if entry is None or "policy" not in entry:
             raise OperationConflict("No remote invocation with this key")
         authorize(entry, user)
-        if (
-            not reconcile_only
-            and not server_operation.get()
-            and not entry.get("remote_allowed", True)
-        ):
+        if not reconcile_only and not local and not entry.get("remote_allowed", True):
             raise PermissionDenied("This operation requires a server processor")
         yield job, entry
 
@@ -166,8 +168,6 @@ def submit_result(job_id, key: str, user, token: str, result) -> dict:
             return {"status": entry["status"], "id": entry["id"]}
         check_claim(job, entry, user, token)
         entry.update(status="staged", result=result)
-        if server_operation.get():
-            entry["processor_location"] = "server"
         resume(job)
         return {"status": "staged", "id": entry["id"]}
 
@@ -235,16 +235,14 @@ def recover_waiting() -> None:
     """Distinguish untouched offline work from expired real execution attempts."""
     from documents.job_storage import job_directory
 
-    for identifier in (
+    for identifier in list(
         DocumentJob.objects.filter(
             status__in=[
                 DocumentJob.Status.WAITING,
                 DocumentJob.Status.RUNNING,
                 DocumentJob.Status.QUEUED,
             ]
-        )
-        .values_list("pk", flat=True)
-        .iterator()
+        ).values_list("pk", flat=True)
     ):
         try:
             with (

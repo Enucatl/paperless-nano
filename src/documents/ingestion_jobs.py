@@ -29,6 +29,7 @@ from documents.job_context import active_ingestion_job
 from documents.job_state import PendingOperation
 from documents.job_state import RejectedResult
 from documents.job_state import document_revision as _revision
+from documents.job_state import track_terminal_task
 from documents.job_storage import atomic_copy as _copy
 from documents.job_storage import job_directory
 from documents.job_storage import sync_directory as _sync_directory
@@ -324,6 +325,7 @@ def cleanup_consumption(job: DocumentJob) -> None:
 
 
 @defer_notifications()
+@track_terminal_task
 def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
     """Execute at most one ingestion attempt and recover committed completion."""
     directory = job_directory(job_id)

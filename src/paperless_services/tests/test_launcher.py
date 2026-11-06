@@ -75,11 +75,6 @@ def test_startup_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     ("service", "path", "target"),
     [
         (
-            "processor",
-            "paperless_services.processor.Processor",
-            "paperless_services.processor.Processor.run",
-        ),
-        (
             "consumer",
             "paperless_services.watcher.APIConsumer",
             "paperless_services.watcher.main",
