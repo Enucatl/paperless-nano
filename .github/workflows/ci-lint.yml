@@ -3,7 +3,7 @@ on:
   workflow_call:
   push:
     branches-ignore:
-      - dev
+      - main
       - 'translations**'
   pull_request:
     branches-ignore:

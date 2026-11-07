@@ -1,5 +1,8 @@
 # Generic external worker deployment
 
+For the existing Atlas/Cerebrum installation, follow the
+[stack migration checklist](stack-migration.md) before replacing containers.
+
 The server runs three containers: one generic Paperless image, PostgreSQL 18 and
 Redis 8. Paperless contains its web server, watcher, scheduler and autoscaling
 Celery worker. Independently packaged external workers connect through the

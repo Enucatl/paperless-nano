@@ -1,7 +1,7 @@
 name: Docker Build
 on:
   push:
-    branches: [dev]
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: docker-${{ github.ref }}
@@ -27,6 +27,8 @@ jobs:
       contents: read
       security-events: write
     uses: ./.github/workflows/ci-static-analysis.yml
+  worker-tests:
+    uses: ./.github/workflows/ci-worker.yml
   version:
     if: github.repository == 'Enucatl/paperless-ngx'
     runs-on: ubuntu-latest
@@ -39,13 +41,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch current upstream tags
-        run: git fetch --tags https://github.com/paperless-ngx/paperless-ngx.git dev
+        run: git fetch --tags https://github.com/paperless-ngx/paperless-ngx.git main
       - name: Read upstream version and fork revision
         id: version
         uses: Enucatl/docker-compose-security-baseline/.github/actions/git-version@main
   publish:
-    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/dev'
-    needs: [backend, frontend, lint, codeql, static-analysis, version]
+    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, worker-tests, lint, codeql, static-analysis, version]
     permissions:
       contents: read
       packages: write
@@ -61,6 +63,28 @@ jobs:
       version: ${{ needs.version.outputs.tag }}
       meta_tags: |
         type=raw,value=${{ needs.version.outputs.tag }}
-        type=raw,value=latest,enable=${{ github.ref == 'refs/heads/dev' }}
-      build_args: PNGX_TAG_VERSION=dev
+        type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+      build_args: PNGX_TAG_VERSION=main
+      trivy_skip_dirs: .devcontainer
+  publish-worker:
+    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, worker-tests, lint, codeql, static-analysis, version]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
+    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
+    secrets:
+      registry_token: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      image_name: ghcr.io/enucatl/paperless-inference
+      dockerfile: providers/paperless-inference/Dockerfile
+      cache_scope: worker
+      platforms: linux/amd64
+      push: true
+      version: ${{ needs.version.outputs.tag }}
+      meta_tags: |
+        type=raw,value=${{ needs.version.outputs.tag }}
+        type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
       trivy_skip_dirs: .devcontainer
