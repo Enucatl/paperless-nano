@@ -1033,7 +1033,8 @@ class TestPDFActions(DirectoriesMixin, TestCase):
             bulk_edit.merge(doc_ids)
             error_str = cm.output[0]
             expected_str = (
-                "Error merging document 2, it will not be included in the merge"
+                f"Error merging document {self.doc2.id}, "
+                "it will not be included in the merge"
             )
             self.assertIn(expected_str, error_str)
 
@@ -1194,7 +1195,7 @@ class TestPDFActions(DirectoriesMixin, TestCase):
         with self.assertLogs("paperless.bulk_edit", level="ERROR") as cm:
             bulk_edit.split(doc_ids, pages)
             error_str = cm.output[0]
-            expected_str = "Error splitting document 2"
+            expected_str = f"Error splitting document {self.doc2.id}"
             self.assertIn(expected_str, error_str)
 
         mock_consume_file.assert_not_called()
