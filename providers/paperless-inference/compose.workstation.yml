@@ -11,6 +11,8 @@ services:
       PAPERLESS_URL: ${PAPERLESS_URL:?Set the Paperless API base URL}
       PAPERLESS_API_TOKEN_FILE: /run/secrets/paperless_api_token
       PAPERLESS_WORKSTATION_STATE_DIR: /workstation
+      PAPERLESS_PARSER: ${PAPERLESS_PARSER:-paperless_inference.providers.PaddleOCRProvider}
+      PAPERLESS_ENRICHMENT_PROVIDER: ${PAPERLESS_ENRICHMENT_PROVIDER:-paperless_inference.providers.MetadataProvider}
       INFERENCE_OCR_ENDPOINT: ${INFERENCE_OCR_ENDPOINT:?Match the server OCR endpoint}
       INFERENCE_OCR_PIPELINE: PaddleOCR-VL-1.6
       INFERENCE_OCR_MODEL: PaddlePaddle/PaddleOCR-VL-1.6

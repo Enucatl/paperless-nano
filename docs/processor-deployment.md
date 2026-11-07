@@ -167,6 +167,9 @@ Paperless admission / Celery -> PostgreSQL durable operation
 The client lists authorized pending operations, claims one with a bounded lease,
 downloads the declared immutable input, and runs the installed OCR or metadata
 provider. It checks the retained provider/configuration identity and input hash.
+The installed implementations are selected locally with `PAPERLESS_PARSER` and
+`PAPERLESS_ENRICHMENT_PROVIDER`; see [provider selection and swap instructions](../providers/paperless-inference/README.md#select-providers-for-the-pull-client)
+for supported contracts, installation and pending-result handling.
 It uploads private result files and submits the proposal with its claim token.
 Paperless validates and accepts the proposal before scheduling server continuation
 and ordinary search. A submitted result is not proof that document publication

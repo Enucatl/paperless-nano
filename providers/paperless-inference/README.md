@@ -80,6 +80,54 @@ pending work through core's retained snapshots. A model name must identify an
 immutable deployment: a server silently replacing weights under the same name
 cannot be detected by this API. Cancellation does not undo a billed request.
 
+## Select providers for the pull client
+
+The pull client loads installed classes from its local `PAPERLESS_PARSER` and
+`PAPERLESS_ENRICHMENT_PROVIDER` settings, using the same dotted class paths as
+core. Their defaults are this package's `PaddleOCRProvider` and `MetadataProvider`,
+preserving the existing client selection. The claim never supplies an import
+path for the client to execute. Installing a package alone does not select it.
+
+To use another implementation, install its locked package and dependencies into
+the matching server and client images, then select the same class path and
+effective settings on both. For example, an installed parser could be selected
+with `PAPERLESS_PARSER=your_parser.providers.Parser` in the server configuration
+and the client Compose `.env`. Change the client service's provider-specific
+environment to that implementation's documented settings; remove unused Paddle
+or model variables and their interpolation requirements. Authentication,
+claims, downloads, uploads and result delivery need no changes. Keep API/model
+credentials in Compose secrets and pass only their `_FILE` paths to providers;
+configuration snapshots must exclude credentials.
+
+The client supports **parser contract v1** through `parser.process` and **rich
+metadata contract v1** through `metadata.enrich`. Parser providers use core's
+`configuration_snapshot` and `execution_snapshot` helpers, including
+`configuration_for({})` and the default execution declaration when no custom
+`selection` method exists. The portable request does not carry server-only mail
+rule context: a provider that needs database access or additional admission
+context must remain on the server. Metadata providers expose the existing
+identity/configuration properties and `enrich` method. Both implementations must
+match the retained identity, effective configuration and execution declarations.
+Core's retained remote-inference policy is enforced for metadata providers;
+local implementations can execute when that policy disables remote inference.
+Providers receive detached requests, immutable content-checked input files and
+private output directories. Explicit file references are transferred recursively;
+files with the same basename remain distinct. Generic file transport does not
+enable thumbnail, classification, search, ingestion or arbitrary journal work.
+
+Before swapping providers, stop admission and drain outstanding work under the
+old image/settings, following the [provider swap runbook](../../docs/provider-operations.md).
+Preserve the private state volume: computed results awaiting delivery are retried
+without loading any provider or repeating inference, including records from older
+clients. An uncomputed claim retained for the previous provider fails with
+`ProviderMismatch` under an incompatible replacement; it is never silently
+reinterpreted. Bring back the original image/settings to finish eligible pending
+work, or inspect/cancel it and deliberately admit new work. Do not relabel retained
+identities or delete private state to force a swap. Claim expiry and replay safety
+remain server-owned decisions; a mismatch does not reset attempts or authorize
+reconciliation. Verify final task/document completion after delivery, since
+acknowledged result staging alone is not publication.
+
 ## Source and intentional boundary changes
 
 OCR, archive/font recovery, structured metadata extraction, language list,

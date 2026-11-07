@@ -7,14 +7,14 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
 
 import niquests
 
 from paperless_inference.config import endpoint
-from paperless_inference.providers import MetadataProvider
-from paperless_inference.providers import PaddleOCRProvider
+from paperless_inference.provider_operations import compute
 
 
 class APIError(RuntimeError):
@@ -23,6 +23,17 @@ class APIError(RuntimeError):
     def __init__(self, status: int) -> None:
         self.status = status
         super().__init__(f"Paperless API returned HTTP {status}")
+
+
+def map_files(value: object, transfer: Callable[[dict], object]) -> object:
+    """Transfer explicit immutable file references wherever a contract declares them."""
+    if isinstance(value, dict):
+        if "path" in value and "sha256" in value:
+            return transfer(value)
+        return {key: map_files(item, transfer) for key, item in value.items()}
+    if isinstance(value, list):
+        return [map_files(item, transfer) for item in value]
+    return value
 
 
 class Workstation:
@@ -78,80 +89,57 @@ class Workstation:
         return f"/api/operations/{identifier}/{quote(key, safe='')}/"
 
     def compute(self, claim: dict, base: str) -> dict:
-        """Validate retained identity and inputs before invoking an installed provider."""
+        """Download declared immutable files, then execute a supported contract."""
         from paperless.parsers.contract import relative_path
         from paperless.parsers.contract import resolve_reference
-        from paperless.parsers.contract import validate_result
 
         if claim.get("version") != 2 or claim.get("status") != "leased":
             raise ValueError("Unsupported operation claim")
         if claim.get("remote_allowed") is not True:
             raise ValueError("Operation does not permit workstation execution")
+        if claim["operation"] not in {"parser.process", "metadata.enrich"}:
+            raise ValueError("Unsupported workstation operation")
         root = self.state / "files"
         if root.exists():
             shutil.rmtree(root)
         root.mkdir(mode=0o700)
-        if claim["operation"] == "metadata.enrich":
-            provider = MetadataProvider()
-            request = claim["input"]
-            if (
-                request.get("version") != 1
-                or claim["plugin"] != provider.identity["provider"]
-                or request["identity"] != provider.identity
-                or request["configuration"].get("configuration")
-                != provider.configuration
-                or request["configuration"].get("provider")
-                != "paperless_inference.providers.MetadataProvider"
-                or request["configuration"].get("allow_remote") is not True
-            ):
-                raise ValueError("Metadata provider configuration changed")
-            result = provider.enrich(request)
-            from documents.enrichment import validate_result as validate_metadata
 
-            validate_metadata(request, result, provider.identity)
-            return result
-        if claim["operation"] != "parser.process":
-            raise ValueError("Unsupported workstation operation")
-        provider = PaddleOCRProvider()
-        request = claim["input"]["request"]
-        if (
-            claim["plugin"] != provider.identity
-            or request["settings"] != provider.configuration_snapshot()
-            or claim["input"]["selection"] != provider.selection(request, root)
-        ):
-            raise ValueError("OCR provider configuration changed")
-        source = request["source"]
-        if (
-            request.get("version") != 1
-            or not isinstance(source, dict)
-            or set(source) != {"path", "size", "sha256"}
-            or type(source.get("size")) is not int
-            or source["size"] < 0
-            or not isinstance(source.get("sha256"), str)
-        ):
-            raise ValueError("Invalid immutable OCR input")
-        target = relative_path(root, source["path"])
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with (
-            self.request(
-                "GET",
-                base + "files/",
-                params={"path": source["path"]},
-                headers={"X-Operation-Token": claim["token"]},
-                stream=True,
-            ) as response,
-            target.open("wb") as output,
-        ):
-            size = 0
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                size += len(chunk)
-                if size > source["size"]:
-                    raise ValueError("Downloaded input exceeds its declared size")
-                output.write(chunk)
-        resolve_reference(root, source)
-        request = {**request, "invocation_id": claim["id"]}
-        result = provider.process(request, root)
-        validate_result(request, result, root, provider.identity)
+        def download(reference: dict) -> dict:
+            """Bound each transfer and verify the complete immutable reference."""
+            if (
+                set(reference) != {"path", "size", "sha256"}
+                or type(reference["size"]) is not int
+                or reference["size"] < 0
+                or not isinstance(reference["sha256"], str)
+            ):
+                raise ValueError("Invalid immutable input")
+            target = relative_path(root, reference["path"])
+            if target.exists():
+                resolve_reference(root, reference)
+                return reference
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with (
+                self.request(
+                    "GET",
+                    base + "files/",
+                    params={"path": reference["path"]},
+                    headers={"X-Operation-Token": claim["token"]},
+                    stream=True,
+                ) as response,
+                target.open("wb") as output,
+            ):
+                size = 0
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    size += len(chunk)
+                    if size > reference["size"]:
+                        raise ValueError("Downloaded input exceeds its declared size")
+                    output.write(chunk)
+            resolve_reference(root, reference)
+            return reference
+
+        map_files(claim["input"], download)
+        result = compute(claim, root)
+        map_files(claim["input"], lambda reference: resolve_reference(root, reference))
         return result
 
     def deliver(self, record: dict) -> None:
@@ -163,27 +151,34 @@ class Workstation:
         base = self.base(record["job_id"], record["key"])
         result = record["result"]
         uploaded = record.setdefault("uploaded", {})
-        for field in ("archive", "thumbnail"):
-            reference = result.get(field)
-            if reference is None or field in uploaded:
-                continue
+
+        def upload(reference: dict) -> dict:
+            """Reuse acknowledged uploads, including records from older clients."""
+            for remote in uploaded.values():
+                if all(remote.get(key) == reference[key] for key in ("sha256", "size")):
+                    return remote
             path = resolve_reference(self.state / "files", reference)
+            # Content names keep different provider output paths collision-free.
+            name = reference["sha256"] + path.suffix
             with path.open("rb") as stream:
                 response = self.request(
                     "POST",
                     base + "files/",
                     headers={"X-Operation-Token": record["token"]},
-                    files={"file": (path.name, stream, "application/octet-stream")},
+                    files={"file": (name, stream, "application/octet-stream")},
                 )
             remote = response.json()
             if any(remote.get(key) != reference[key] for key in ("sha256", "size")):
                 raise ValueError("Uploaded output identity changed")
-            uploaded[field] = remote
+            uploaded[reference["path"]] = remote
             self.save(record)
+            return remote
+
+        delivered = map_files(result, upload)
         response = self.request(
             "POST",
             base + "result/",
-            json={"token": record["token"], "result": {**result, **uploaded}},
+            json={"token": record["token"], "result": delivered},
         )
         if response.json().get("status") not in {"staged", "succeeded"}:
             raise ValueError("Result was not accepted for validation")
