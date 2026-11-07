@@ -26,7 +26,7 @@ from paperless_testing.dirs import DirectoriesMixin
 from paperless_testing.fakes.progress import FakeProgressManager
 
 
-@pytest.mark.usefixtures("fake_progress_manager")
+@pytest.mark.usefixtures("fake_progress_manager", "queued_document_processor")
 @override_settings(
     CONSUMER_RECURSIVE=True,
     CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED=True,

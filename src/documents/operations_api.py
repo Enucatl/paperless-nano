@@ -8,6 +8,8 @@ from tempfile import NamedTemporaryFile
 from django.core.exceptions import PermissionDenied
 from django.http import FileResponse
 from django.http import Http404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from filelock import Timeout
 from rest_framework import serializers
 from rest_framework.exceptions import APIException
@@ -56,6 +58,7 @@ class OperationAPIView(APIView):
 class OperationsView(OperationAPIView):
     """List authorized pending work and submit optional document enrichment."""
 
+    @extend_schema(responses={200: {"type": "array", "items": {"type": "object"}}})
     def get(self, request):
         """Expose operation status without leaking other processors' inputs."""
         status = request.query_params.get("status")
@@ -95,6 +98,7 @@ class OperationsView(OperationAPIView):
                 )
         return Response(results)
 
+    @extend_schema(request=SubmissionSerializer, responses={202: OpenApiTypes.OBJECT})
     def post(self, request):
         """Queue OCR, metadata, or their durable chain without waiting for a host."""
         from documents.deferred_operations import resume
@@ -126,6 +130,7 @@ class OperationsView(OperationAPIView):
 class OperationClaimView(OperationAPIView):
     """Lease one durable operation for a bounded execution attempt."""
 
+    @extend_schema(request=None, responses=OpenApiTypes.OBJECT)
     def post(self, request, job_id, key):
         """Return immutable computation input and an opaque attempt token."""
         return Response(operations.claim(job_id, key, request.user))
@@ -134,6 +139,7 @@ class OperationClaimView(OperationAPIView):
 class OperationResultView(OperationAPIView):
     """Stage processor proposals for domain validation by the core."""
 
+    @extend_schema(request=OpenApiTypes.OBJECT, responses={202: OpenApiTypes.OBJECT})
     def post(self, request, job_id, key):
         """Accept a matching claim's result idempotently."""
         token = request.data.get("token")
@@ -166,6 +172,7 @@ def input_references(value) -> set[str]:
 class OperationFileView(OperationAPIView):
     """Transport contained immutable inputs and privately staged output files."""
 
+    @extend_schema(responses={200: OpenApiTypes.BINARY})
     def get(self, request, job_id, key):
         """Read only this claim's declared input, never arbitrary job storage."""
         with operations.locked_operation(job_id, key, request.user) as (job, entry):
@@ -178,6 +185,16 @@ class OperationFileView(OperationAPIView):
             path = relative_path(job_directory(job_id), name)
             return FileResponse(path.open("rb"), as_attachment=True, filename=path.name)
 
+    @extend_schema(
+        request={
+            "multipart/form-data": {
+                "type": "object",
+                "properties": {"file": {"type": "string", "format": "binary"}},
+                "required": ["file"],
+            },
+        },
+        responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT},
+    )
     def post(self, request, job_id, key):
         """Store one output under the claim's private namespace without applying it."""
         with operations.locked_operation(job_id, key, request.user) as (job, entry):
@@ -218,6 +235,7 @@ class OperationFileView(OperationAPIView):
 class OperationCancelView(OperationAPIView):
     """Cancel queued work while retaining inputs and any uncertain effects."""
 
+    @extend_schema(request=None, responses={204: None})
     def post(self, request, job_id):
         """Invalidate outstanding claims without changing published documents."""
         operations.cancel(job_id, request.user)
@@ -227,6 +245,7 @@ class OperationCancelView(OperationAPIView):
 class OperationReconcileView(OperationAPIView):
     """Record verified effects after a processor disappears during execution."""
 
+    @extend_schema(request=OpenApiTypes.OBJECT, responses={202: OpenApiTypes.OBJECT})
     def post(self, request, job_id, key):
         """Require administrator evidence and stage the result for core validation."""
         if "result" not in request.data:

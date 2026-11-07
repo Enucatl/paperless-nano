@@ -235,10 +235,8 @@ class TestConsumer(
         rough_create_date_local = timezone.localtime(timezone.now())
 
         with self.get_consumer(filename) as consumer:
-            consumer.run()
-
-            document = Document.objects.first()
-            assert document is not None
+            result = consumer.run()
+            document = Document.objects.get(pk=result["document_id"])
 
         self.assertIsNotNone(document)
 
@@ -249,8 +247,8 @@ class TestConsumer(
         )
         self.assertIsNone(document.correspondent)
         self.assertIsNone(document.document_type)
-        self.assertEqual(document.filename, "0000001.pdf")
-        self.assertEqual(document.archive_filename, "0000001.pdf")
+        self.assertEqual(document.filename, f"{document.pk:07d}.pdf")
+        self.assertEqual(document.archive_filename, f"{document.pk:07d}.pdf")
 
         self.assertIsFile(document.source_path)
 
@@ -1132,19 +1130,16 @@ class TestConsumer(
         m.return_value.get_parser_for_file.return_value = CopyParser
 
         with self.get_consumer(settings.CONSUMPTION_DIR / "simple.png") as consumer:
-            consumer.run()
-
-            doc1 = Document.objects.filter(pk=1).first()
+            result = consumer.run()
+            doc1 = Document.objects.get(pk=result["document_id"])
 
         with self.get_consumer(settings.CONSUMPTION_DIR / "simple.pdf") as consumer:
-            consumer.run()
-
-            doc2 = Document.objects.filter(pk=2).first()
+            result = consumer.run()
+            doc2 = Document.objects.get(pk=result["document_id"])
 
         with self.get_consumer(settings.CONSUMPTION_DIR / "simple.png.pdf") as consumer:
-            consumer.run()
-
-            doc3 = Document.objects.filter(pk=3).first()
+            result = consumer.run()
+            doc3 = Document.objects.get(pk=result["document_id"])
 
         self.assertEqual(doc1.filename, "simple.png")
         self.assertEqual(doc1.archive_filename, "simple.pdf")

@@ -38,6 +38,7 @@ def staff_user(db) -> User:
     return UserFactory.create(username="staff", staff=True)
 
 
+@pytest.mark.usefixtures("queued_search_processor")
 class TestDocumentAdmin(DirectoriesMixin, TestCase):
     def get_document_from_index(self, doc):
         backend = get_backend().provider.engine

@@ -12,12 +12,17 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
 from documents.data_models import DocumentSource
+from documents.models import DocumentJob
 from documents.models import PaperlessTask
 from documents.models import Tag
 from paperless_testing.dirs import PaperlessDirs
 from paperless_testing.factories import UserFactory
 
-pytestmark = [pytest.mark.api, pytest.mark.django_db]
+pytestmark = [
+    pytest.mark.api,
+    pytest.mark.django_db,
+    pytest.mark.usefixtures("queued_document_processor"),
+]
 ENDPOINT = "/api/services/consumer/"
 PUBLISH = "documents.consumption.consume_file.apply_async"
 
@@ -450,6 +455,10 @@ def test_worker_mime_failure_is_a_failed_task_without_republishing(
         throw=False,
     )
     assert result.failed()
+    if not missing:
+        job = DocumentJob.objects.get(pk=payload["request_id"])
+        assert job.status == DocumentJob.Status.FAILED
+        assert not job.result.get("invocations")
     receipt = PaperlessTask.objects.get(task_id=payload["request_id"])
     assert receipt.status == PaperlessTask.Status.FAILURE
     assert receipt.result_data["error_message"]

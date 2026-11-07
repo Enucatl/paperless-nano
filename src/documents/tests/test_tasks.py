@@ -219,6 +219,7 @@ class TestEmptyTrashTask(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
 
 
 @override_settings(ARCHIVE_FILE_GENERATION="always")
+@pytest.mark.usefixtures("queued_document_processor")
 class TestUpdateContent(DirectoriesMixin, TestCase):
     def test_update_content_maybe_archive_file(self) -> None:
         """

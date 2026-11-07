@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 import zxingcpp
+from celery.exceptions import Ignore
 from django.conf import settings
 from django.test import TestCase
 from django.test import override_settings
@@ -24,6 +25,7 @@ from documents.data_models import DocumentMetadataOverrides
 from documents.data_models import DocumentSource
 from documents.models import Document
 from documents.models import DocumentBarcode
+from documents.models import DocumentJob
 from documents.models import Tag
 from documents.plugins.base import StopConsumeTaskError
 from documents.tests.utils import ConsumeTaskMixin
@@ -33,6 +35,8 @@ from paperless.models import ApplicationConfiguration
 from paperless_testing.assertions import FileSystemAssertsMixin
 from paperless_testing.dirs import DirectoriesMixin
 from paperless_testing.fakes.progress import FakeProgressManager
+
+pytestmark = pytest.mark.usefixtures("queued_document_processor")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -131,7 +135,7 @@ class TestBarcode(
         dupe_asn = settings.SCRATCH_DIR / "barcode-39-asn-123-second.pdf"
         shutil.copy(test_file, dupe_asn)
 
-        with self.assertRaisesRegex(ConsumerError, r"ASN 123.*trash"):
+        with self.assertRaises(Ignore):
             tasks.consume_file(
                 ConsumableDocument(
                     source=DocumentSource.ConsumeFolder,
@@ -139,6 +143,13 @@ class TestBarcode(
                 ),
                 None,
             )
+        job = DocumentJob.objects.get(kind="consume")
+        with self.assertRaises(Ignore):
+            tasks.consume_file(job_id=str(job.pk))
+        with self.assertRaisesRegex(ConsumerError, r"ASN 123.*trash"):
+            tasks.consume_file(job_id=str(job.pk))
+        job.refresh_from_db()
+        self.assertEqual(job.status, DocumentJob.Status.FAILED)
 
     @override_settings(
         CONSUMER_BARCODE_TIFF_SUPPORT=True,
@@ -604,8 +615,7 @@ class TestBarcode(
         THEN:
             - The barcode config is used
         """
-        app_config = ApplicationConfiguration.objects.first()
-        assert app_config is not None
+        app_config, _ = ApplicationConfiguration.objects.get_or_create()
         app_config.barcodes_enabled = True
         app_config.barcode_string = "CUSTOM BARCODE"
         app_config.save()

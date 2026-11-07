@@ -59,6 +59,7 @@ from paperless_testing.dirs import paperless_environment
 from paperless_testing.factories import DocumentBarcodeFactory
 from paperless_testing.factories import DocumentFactory
 from paperless_testing.permissions import grant_object
+from paperless_testing.samples import THUMBNAIL_WEBP
 from paperless_testing.samples import install_document_samples
 
 
@@ -151,6 +152,12 @@ class TestExportImport(
 
         super().setUp()
 
+    def _install_document_samples(self) -> None:
+        """Match thumbnail names to database IDs, independent of test order."""
+        install_document_samples(self.dirs.media_dir / "documents")
+        for document in (self.d1, self.d2, self.d3, self.d4):
+            shutil.copy(THUMBNAIL_WEBP, document.thumbnail_path)
+
     def _get_document_from_manifest(self, manifest, id):
         f = list(
             filter(
@@ -205,7 +212,7 @@ class TestExportImport(
 
     def test_exporter(self, *, use_filename_format=False) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         num_permission_objects = Permission.objects.count()
 
@@ -309,7 +316,7 @@ class TestExportImport(
 
     def test_exporter_with_filename_format(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         with override_settings(
             FILENAME_FORMAT="{created_year}/{correspondent}/{title}",
@@ -318,7 +325,7 @@ class TestExportImport(
 
     def test_exporter_includes_share_links_and_bundles(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         share_link = ShareLink.objects.create(
             slug="share-link-slug",
@@ -417,7 +424,7 @@ class TestExportImport(
 
     def test_update_export_changed_time(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         self._do_export()
         self.assertIsFile(self.target / "manifest.json")
@@ -453,7 +460,7 @@ class TestExportImport(
 
     def test_update_export_changed_checksum(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         self._do_export()
 
@@ -480,7 +487,7 @@ class TestExportImport(
 
     def test_update_export_deleted_document(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         manifest = self._do_export()
 
@@ -512,7 +519,7 @@ class TestExportImport(
     @override_settings(FILENAME_FORMAT="{title}/{correspondent}")
     def test_update_export_changed_location(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         self._do_export(use_filename_format=True)
         self.assertIsFile(self.target / "wow1" / "c.pdf")
@@ -554,7 +561,7 @@ class TestExportImport(
             - Zipfile contains exported files
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         args = ["document_exporter", self.target, "--zip"]
 
@@ -583,7 +590,7 @@ class TestExportImport(
             - Zipfile contains exported files
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         args = ["document_exporter", self.target, "--zip", "--use-filename-format"]
 
@@ -619,7 +626,7 @@ class TestExportImport(
             - The existing file and directory in target are removed
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         # Create stuff in target directory
         existing_file = self.target / "test.txt"
@@ -715,7 +722,7 @@ class TestExportImport(
             - Documents can be imported again
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         manifest = self._do_export()
         has_archive = False
@@ -758,7 +765,7 @@ class TestExportImport(
             - Documents can be imported again
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         manifest = self._do_export()
         has_thumbnail = False
@@ -803,7 +810,7 @@ class TestExportImport(
             - Documents can be imported again
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         manifest = self._do_export(split_manifest=True)
         has_document = False
@@ -828,7 +835,7 @@ class TestExportImport(
 
     def _export_import_barcodes(self, *, split_manifest: bool) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
         DocumentBarcodeFactory(document=self.d1, value="https://example.com")
         DocumentBarcodeFactory(document=self.d2, page=2, value="DE8937")
 
@@ -864,7 +871,7 @@ class TestExportImport(
             - Documents can be imported again
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         self._do_export(use_folder_prefix=True)
 
@@ -891,7 +898,7 @@ class TestExportImport(
             - Documents can be imported again
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         self._do_export(use_folder_prefix=True, split_manifest=True)
 
@@ -918,7 +925,7 @@ class TestExportImport(
         """
 
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         num_content_type_objects = ContentType.objects.count()
         num_permission_objects = Permission.objects.count()
@@ -934,7 +941,7 @@ class TestExportImport(
             Permission.objects.create(
                 name="test",
                 codename="test_perm",
-                content_type_id=1,
+                content_type=ContentType.objects.get_for_model(Document),
             )
             self.assertEqual(Permission.objects.count(), num_permission_objects + 1)
 
@@ -955,7 +962,7 @@ class TestExportImport(
 
     def test_exporter_with_auditlog_disabled(self) -> None:
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         with override_settings(
             AUDIT_LOG_ENABLED=False,
@@ -975,7 +982,7 @@ class TestExportImport(
               survive the round-trip with deleted_at preserved
         """
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
-        install_document_samples(Path(self.dirs.media_dir) / "documents")
+        self._install_document_samples()
 
         # d1 has self.note and self.cfi1 attached via setUp
         self.d1.delete()
@@ -1019,7 +1026,7 @@ class TestExportImport(
         """
 
         shutil.rmtree(self.dirs.media_dir / "documents")
-        install_document_samples(self.dirs.media_dir / "documents")
+        self._install_document_samples()
 
         _ = self._do_export(data_only=True)
 

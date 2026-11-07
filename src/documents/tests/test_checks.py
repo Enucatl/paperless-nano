@@ -14,14 +14,13 @@ class TestParserCheck:
 
     def test_returns_error_when_no_parsers(self, mocker: MockerFixture) -> None:
         mock_registry = mocker.patch(
-            "documents.checks.get_parser_registry",
+            "paperless.parsers.providers.get_parser_registry",
         ).return_value
         mock_registry.all_parsers.return_value = []
 
         assert parser_check(None) == [
             Error(
-                "No parsers found. This is a bug. The consumer won't be "
-                "able to consume any documents without parsers.",
+                "No parsers found. The consumer cannot consume documents.",
             ),
         ]
 

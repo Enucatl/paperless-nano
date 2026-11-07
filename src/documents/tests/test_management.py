@@ -32,6 +32,7 @@ sample_file: Path = SIMPLE_DIGITAL_PDF
 
 
 @pytest.mark.management
+@pytest.mark.usefixtures("queued_document_processor")
 @override_settings(
     FILENAME_FORMAT="{correspondent}/{title}",
     ARCHIVE_FILE_GENERATION="always",
