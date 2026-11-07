@@ -59,14 +59,14 @@ production cutover is claimed here.
 
 ## Historical implemented scope and compatibility
 
-| Issue | Result | Commit |
-| --- | --- | --- |
-| #44 | Versioned proposal contract, behavior matrix and sanitized fixtures | `0edd18808` |
-| #45 | Authorized atomic metadata application and durable recovery | `e4b57989f` |
-| #46 | Installed OCR/metadata adapters and core OCR provenance publication | `3b40cb323` |
-| #47 | Supervised processors, capability provisioning, Tasks diagnostics and PostgreSQL example | `72597e364` |
-| #48 | Installation, provider swap and rollback runbook | `e6306a8a2` |
-| #49 | Runtime validation and queued execution fixes; publication gates remain open | `f3c5aeb2c` |
+| Issue | Result                                                                                   | Commit      |
+| ----- | ---------------------------------------------------------------------------------------- | ----------- |
+| #44   | Versioned proposal contract, behavior matrix and sanitized fixtures                      | `0edd18808` |
+| #45   | Authorized atomic metadata application and durable recovery                              | `e4b57989f` |
+| #46   | Installed OCR/metadata adapters and core OCR provenance publication                      | `3b40cb323` |
+| #47   | Supervised processors, capability provisioning, Tasks diagnostics and PostgreSQL example | `72597e364` |
+| #48   | Installation, provider swap and rollback runbook                                         | `e6306a8a2` |
+| #49   | Runtime validation and queued execution fixes; publication gates remain open             | `f3c5aeb2c` |
 
 The supported candidate pairs this core branch with `paperless-inference` 0.1.0,
 Python 3.14 and PostgreSQL 18. Both wire contracts are version 1. The OCR adapter
@@ -82,24 +82,24 @@ dependencies and test artifacts stayed in temporary Docker storage. Source was
 read from the workspace with bytecode/caches disabled or copied into the container.
 Counts below overlap and must not be added into one total.
 
-| Check | Result |
-| --- | --- |
-| Pure rich-metadata contract | 42 passed |
-| Core application on PostgreSQL 18 | 53 passed, including concurrent creation and recovery |
-| Installed provider/baseline archive suite | 93 passed, including real Ghostscript and veraPDF archive validation |
-| Core parser/provenance suite | 85 passed; later provenance additions have focused coverage |
-| Processor/service/backend suite | 124 passed |
-| Tasks frontend suite | 51 passed |
-| Integrated core/service regression selection | 160 passed, 1 PostgreSQL-only skip on SQLite |
-| PostgreSQL worker registration, document updates, rich metadata and OCR provenance | 62 passed |
-| PostgreSQL processor cursor and worker-registration regressions | 19 passed |
-| Final core correctness pass | 115 passed on PostgreSQL; 114 passed and 1 PostgreSQL-only skip on SQLite |
-| Final provider payload/default checks | 12 passed |
-| Secret-file authentication and provider regressions | 16 passed; file precedence, rotation, missing/blank fallback and secret-free snapshots |
-| Core/provider dependency compatibility | All shared locked core versions unchanged; `uv pip check` passed |
-| Installation/runbook smoke checks | Fresh SQLite migration/provisioning, PostgreSQL dump/restore and data/media archive roundtrip passed |
-| Production frontend compilation | Passed as part of the core image build |
-| Migration drift | `manage.py makemigrations --check --dry-run`: no changes detected |
+| Check                                                                              | Result                                                                                               |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Pure rich-metadata contract                                                        | 42 passed                                                                                            |
+| Core application on PostgreSQL 18                                                  | 53 passed, including concurrent creation and recovery                                                |
+| Installed provider/baseline archive suite                                          | 93 passed, including real Ghostscript and veraPDF archive validation                                 |
+| Core parser/provenance suite                                                       | 85 passed; later provenance additions have focused coverage                                          |
+| Processor/service/backend suite                                                    | 124 passed                                                                                           |
+| Tasks frontend suite                                                               | 51 passed                                                                                            |
+| Integrated core/service regression selection                                       | 160 passed, 1 PostgreSQL-only skip on SQLite                                                         |
+| PostgreSQL worker registration, document updates, rich metadata and OCR provenance | 62 passed                                                                                            |
+| PostgreSQL processor cursor and worker-registration regressions                    | 19 passed                                                                                            |
+| Final core correctness pass                                                        | 115 passed on PostgreSQL; 114 passed and 1 PostgreSQL-only skip on SQLite                            |
+| Final provider payload/default checks                                              | 12 passed                                                                                            |
+| Secret-file authentication and provider regressions                                | 16 passed; file precedence, rotation, missing/blank fallback and secret-free snapshots               |
+| Core/provider dependency compatibility                                             | All shared locked core versions unchanged; `uv pip check` passed                                     |
+| Installation/runbook smoke checks                                                  | Fresh SQLite migration/provisioning, PostgreSQL dump/restore and data/media archive roundtrip passed |
+| Production frontend compilation                                                    | Passed as part of the core image build                                                               |
+| Migration drift                                                                    | `manage.py makemigrations --check --dry-run`: no changes detected                                    |
 
 The six pre-existing document-update search failures reproduced before this
 release work. Those tests now use the existing `queued_search_processor` fixture,
@@ -197,11 +197,11 @@ the idle interval completed in approximately 10.65 seconds, measured from the
 first coordinator receipt to its final completion in worker logs. The real index
 query confirmed the result. This includes the configured sweep wait.
 
-| Service | Post-startup working-set snapshot | 20+ seconds after search | Cumulative cgroup peak |
-| --- | ---: | ---: | ---: |
-| Paperless and its supervised processes | 646.4 MiB | 546.5 MiB | 804.42 MiB |
-| PostgreSQL 18 | 42.25 MiB | 42.59 MiB | 113.00 MiB |
-| Valkey 9 | 5.40 MiB | 5.63 MiB | 14.61 MiB |
+| Service                                | Post-startup working-set snapshot | 20+ seconds after search | Cumulative cgroup peak |
+| -------------------------------------- | --------------------------------: | -----------------------: | ---------------------: |
+| Paperless and its supervised processes |                         646.4 MiB |                546.5 MiB |             804.42 MiB |
+| PostgreSQL 18                          |                         42.25 MiB |                42.59 MiB |             113.00 MiB |
+| Valkey 9                               |                          5.40 MiB |                 5.63 MiB |              14.61 MiB |
 
 Working-set snapshots come from `docker stats --no-stream`; cumulative peaks come
 from each container's cgroup-v2 `memory.peak` and include file cache. Peaks are
@@ -240,18 +240,18 @@ on `2d027485f`. All data was synthetic and isolated from production. Normal HTTP
 API admission/reprocessing used a temporary authenticated test user; processors
 used the dedicated capability account. No listener or separate stage queue ran.
 
-| Live check | Result |
-| --- | --- |
-| Installed metadata provider, synthetic invoice | Valid complete proposal in 2.232 seconds |
-| Existing-document metadata application and ordinary search | Passed; title/date/summary/processing date/audit/correspondent/language applied; unrelated tag and custom field preserved |
-| New PDF through authenticated upload → OCR → archive/provenance → metadata → search | Passed; ingestion 100.417 seconds, metadata child 13.644 seconds |
-| OCR endpoint compute elapsed reported in provenance | 0.851 seconds, distinct from queue and publication latency |
-| Published files | 1,038-byte original; 9,565-byte searchable archive; all four managed metadata/provenance fields present |
-| API reprocess of the existing uploaded PDF | Passed in 20.177 seconds; retained user title, unrelated tag/custom field and non-OCR metadata |
-| Archive/source integrity | Original SHA-256 unchanged and matched OCR provenance; archive text searchable; actual veraPDF validation passed |
-| Provider swap to built-in `DefaultParser` | Fresh reprocess passed in 9.809 seconds; metadata and existing archive preserved |
-| Pending work during provider swap | Old Paddle job rejected before retry with `Processing configuration or provider changed before retry`; no silent rerouting |
-| Swap back to installed Paddle provider | Fresh reprocess passed in 19.746 seconds; metadata preserved and Paddle provenance verified |
+| Live check                                                                          | Result                                                                                                                     |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Installed metadata provider, synthetic invoice                                      | Valid complete proposal in 2.232 seconds                                                                                   |
+| Existing-document metadata application and ordinary search                          | Passed; title/date/summary/processing date/audit/correspondent/language applied; unrelated tag and custom field preserved  |
+| New PDF through authenticated upload → OCR → archive/provenance → metadata → search | Passed; ingestion 100.417 seconds, metadata child 13.644 seconds                                                           |
+| OCR endpoint compute elapsed reported in provenance                                 | 0.851 seconds, distinct from queue and publication latency                                                                 |
+| Published files                                                                     | 1,038-byte original; 9,565-byte searchable archive; all four managed metadata/provenance fields present                    |
+| API reprocess of the existing uploaded PDF                                          | Passed in 20.177 seconds; retained user title, unrelated tag/custom field and non-OCR metadata                             |
+| Archive/source integrity                                                            | Original SHA-256 unchanged and matched OCR provenance; archive text searchable; actual veraPDF validation passed           |
+| Provider swap to built-in `DefaultParser`                                           | Fresh reprocess passed in 9.809 seconds; metadata and existing archive preserved                                           |
+| Pending work during provider swap                                                   | Old Paddle job rejected before retry with `Processing configuration or provider changed before retry`; no silent rerouting |
+| Swap back to installed Paddle provider                                              | Fresh reprocess passed in 19.746 seconds; metadata preserved and Paddle provenance verified                                |
 
 The first management-shell metadata admission was accidentally run as root and
 created a lock the application user could not open. The isolated harness ownership
@@ -348,11 +348,11 @@ PSS is proportional process memory: shared pages are apportioned rather than
 counted once per process. Values below are medians of all 300 one-second samples
 within each window, not endpoint snapshots or medians across repeated runs.
 
-| Nominal-idle phase | Old stack PSS MiB | Integrated PSS MiB | Reduction | Old / integrated working set MiB |
-| --- | ---: | ---: | ---: | ---: |
-| Startup | 1,054.1 | 366.3 | 65.3% | 1,033.2 / 370.3 |
-| After features | 1,316.5 | 404.5 | 69.3% | 1,255.4 / 421.1 |
-| After later ingestion | 1,333.4 | 406.8 | 69.5% | 1,295.5 / 423.4 |
+| Nominal-idle phase    | Old stack PSS MiB | Integrated PSS MiB | Reduction | Old / integrated working set MiB |
+| --------------------- | ----------------: | -----------------: | --------: | -------------------------------: |
+| Startup               |           1,054.1 |              366.3 |     65.3% |                  1,033.2 / 370.3 |
+| After features        |           1,316.5 |              404.5 |     69.3% |                  1,255.4 / 421.1 |
+| After later ingestion |           1,333.4 |              406.8 |     69.5% |                  1,295.5 / 423.4 |
 
 Anonymous-memory medians corroborate the process-memory reduction: final idle
 falls from **1,073.6 to 296.3 MiB**. The strongest attribution is removal of
@@ -397,11 +397,11 @@ metadata projection** is accepted, shown separately below. API polling adds up
 to approximately one polling interval plus request time to the earlier marker;
 journal transition bounds are approximately 100 ms, with measured query overhead.
 
-| Upload | Old content-search marker s | Integrated marker s | Integrated newest search accepted, from admission s | Integrated serial queue waits s |
-| --- | ---: | ---: | ---: | ---: |
-| One page | 24.206 | 102.972 | 120.376 | 87.713–88.614 |
-| Three pages | 22.084 | 112.512 | 123.921 | 94.524–95.426 |
-| One page after idle | 22.077 | 106.310 | 114.611 | 90.617–91.519 |
+| Upload              | Old content-search marker s | Integrated marker s | Integrated newest search accepted, from admission s | Integrated serial queue waits s |
+| ------------------- | --------------------------: | ------------------: | --------------------------------------------------: | ------------------------------: |
+| One page            |                      24.206 |             102.972 |                                             120.376 |                   87.713–88.614 |
+| Three pages         |                      22.084 |             112.512 |                                             123.921 |                   94.524–95.426 |
+| One page after idle |                      22.077 |             106.310 |                                             114.611 |                   90.617–91.519 |
 
 The queue bounds sum nine required serial operations: six preparation plugins,
 parser work, thumbnail work and metadata. **Preparation queues alone consume
@@ -426,14 +426,14 @@ publish the correct projection; the complete run is not an all-tasks-success run
 
 ### CPU and I/O: the memory saving has a recurring execution cost
 
-| Phase | Old CPU-seconds | Integrated CPU-seconds |
-| --- | ---: | ---: |
-| Startup nominal idle, 300 s | 6.51 | 50.34 |
-| First ingestion | 10.77 | 43.35 |
-| Three-page ingestion | 8.51 | 50.37 |
-| Post-feature nominal idle, 300 s | 4.21 | 59.28 |
-| Ingestion after idle | 8.98 | 46.90 |
-| Final nominal idle, 300 s | 8.00 | 61.42 |
+| Phase                            | Old CPU-seconds | Integrated CPU-seconds |
+| -------------------------------- | --------------: | ---------------------: |
+| Startup nominal idle, 300 s      |            6.51 |                  50.34 |
+| First ingestion                  |           10.77 |                  43.35 |
+| Three-page ingestion             |            8.51 |                  50.37 |
+| Post-feature nominal idle, 300 s |            4.21 |                  59.28 |
+| Ingestion after idle             |            8.98 |                  46.90 |
+| Final nominal idle, 300 s        |            8.00 |                  61.42 |
 
 Ingestion totals are **28.26 versus 140.61 CPU-seconds (4.98×)**. The three equal
 idle windows total **18.71 versus 171.04 CPU-seconds (9.14×)**. Integrated idle
@@ -575,17 +575,17 @@ RAM, CPU totals and sampled peaks below are medians of two per-run statistics.
 Title-search latency is the median of six balanced upload observations per
 version. CPU totals include the database observer and scheduled services.
 
-| Metric | Original | First integrated / polling | Current / Redis wake |
-| --- | ---: | ---: | ---: |
-| Final steady PSS, last 240 s, MiB | 1,351.1 | 398.9 | 408.3 |
-| Final nominal-idle PSS mean, all 300 s, MiB | 1,368.8 | 428.6 | 474.0 |
-| First 60 s of final idle, PSS median MiB | 1,433.1 | 485.8 | 766.0 |
-| Sampled raw-memory peak, MiB | 1,985.5 | 1,040.4 | 1,056.7 |
-| Upload → metadata title searchable, s | 22.54 | 118.36 | 48.07 |
-| Three ingestion phases, CPU-s | 29.40 | 160.16 | 81.30 |
-| Three nominal-idle windows, 900 s total, CPU-s | 16.04 | 174.60 | 41.11 |
-| Core CPU during final 240 s of final idle, CPU-s | 0.399 | 36.822 | 0.379 |
-| HTTP API readiness from core launch, s | 12.74 | 13.00 | 14.00 |
+| Metric                                           | Original | First integrated / polling | Current / Redis wake |
+| ------------------------------------------------ | -------: | -------------------------: | -------------------: |
+| Final steady PSS, last 240 s, MiB                |  1,351.1 |                      398.9 |                408.3 |
+| Final nominal-idle PSS mean, all 300 s, MiB      |  1,368.8 |                      428.6 |                474.0 |
+| First 60 s of final idle, PSS median MiB         |  1,433.1 |                      485.8 |                766.0 |
+| Sampled raw-memory peak, MiB                     |  1,985.5 |                    1,040.4 |              1,056.7 |
+| Upload → metadata title searchable, s            |    22.54 |                     118.36 |                48.07 |
+| Three ingestion phases, CPU-s                    |    29.40 |                     160.16 |                81.30 |
+| Three nominal-idle windows, 900 s total, CPU-s   |    16.04 |                     174.60 |                41.11 |
+| Core CPU during final 240 s of final idle, CPU-s |    0.399 |                     36.822 |                0.379 |
+| HTTP API readiness from core launch, s           |    12.74 |                      13.00 |                14.00 |
 
 The current steady PSS is about **70% below the original**, but **9–13 MiB above
 polling** across the three quiet windows. Current mean RAM over the full final
@@ -643,10 +643,10 @@ inside the measured database. Query wall time cannot simply be subtracted from C
 ### Latency improvement and the remaining coordinator cost
 
 | Upload case, median of two repeats | Original title visible s | Polling title visible s | Current title visible s |
-| --- | ---: | ---: | ---: |
-| First one-page PDF | 23.088 | 115.795 | 50.961 |
-| Immediate three-page PDF | 22.071 | 124.995 | 46.125 |
-| One-page PDF after idle | 22.505 | 118.361 | 48.844 |
+| ---------------------------------- | -----------------------: | ----------------------: | ----------------------: |
+| First one-page PDF                 |                   23.088 |                 115.795 |                  50.961 |
+| Immediate three-page PDF           |                   22.071 |                 124.995 |                  46.125 |
+| One-page PDF after idle            |                   22.505 |                 118.361 |                  48.844 |
 
 The nine serial finite operations now wait only **0.03–0.80 seconds in total when
 the provider child is warm**, or **1.66–2.59 seconds cold**. Warm per-operation
@@ -927,16 +927,16 @@ passed original-checksum, OCR content, four custom fields, archive download,
 content search and metadata-title search checks. Nine successful preflight
 uploads were excluded from measurement.
 
-| Metric | Fresh original | Fresh polling | Final Celery | Earlier Redis wakeup |
-| --- | ---: | ---: | ---: | ---: |
-| Final steady PSS, last 240 s, MiB | 1,347.7 | 385.2 | 379.1 | 408.3 |
-| Final idle PSS mean, all 300 s, MiB | 1,343.8 | 407.3 | 417.5 | 474.0 |
-| First 60 s of final idle, PSS median MiB | 1,347.7 | 430.0 | 655.6 | 766.0 |
-| Sampled raw-memory peak, MiB | 1,934.1 | 991.3 | 836.4 | 1,056.7 |
-| Upload → metadata title searchable, s | 22.03 | 120.29 | 7.67 | 48.07 |
-| Three ingestion phases, CPU-s | 29.67 | 155.71 | 19.51 | 81.30 |
-| Three idle windows, exactly 900 s, CPU-s | 15.74 | 165.68 | 31.80 | 41.11 |
-| Core CPU, final 240 s of final idle, CPU-s | 0.377 | 35.073 | 1.097 | 0.379 |
+| Metric                                     | Fresh original | Fresh polling | Final Celery | Earlier Redis wakeup |
+| ------------------------------------------ | -------------: | ------------: | -----------: | -------------------: |
+| Final steady PSS, last 240 s, MiB          |        1,347.7 |         385.2 |        379.1 |                408.3 |
+| Final idle PSS mean, all 300 s, MiB        |        1,343.8 |         407.3 |        417.5 |                474.0 |
+| First 60 s of final idle, PSS median MiB   |        1,347.7 |         430.0 |        655.6 |                766.0 |
+| Sampled raw-memory peak, MiB               |        1,934.1 |         991.3 |        836.4 |              1,056.7 |
+| Upload → metadata title searchable, s      |          22.03 |        120.29 |         7.67 |                48.07 |
+| Three ingestion phases, CPU-s              |          29.67 |        155.71 |        19.51 |                81.30 |
+| Three idle windows, exactly 900 s, CPU-s   |          15.74 |        165.68 |        31.80 |                41.11 |
+| Core CPU, final 240 s of final idle, CPU-s |          0.377 |        35.073 |        1.097 |                0.379 |
 
 Memory, peak and CPU entries are medians of two per-run statistics; latency
 is the median of six uploads. The Redis-wakeup column is the preserved earlier
@@ -991,13 +991,13 @@ included in database cgroup measurements even though the observer container
 itself is excluded. The structured results now contain `idle_cpu_attribution`;
 the original headline measurements and historical archives are unchanged.
 
-| CPU over the three idle windows, 900 s | Original, median of two runs | Final Celery, median of two runs |
-| --- | ---: | ---: |
-| PostgreSQL | 3.20 s | 24.67 s |
-| Paperless core and its children | 4.49 s | 5.79 s |
-| Redis | 1.42 s | 1.35 s |
-| Original-only AI, listener and Phoenix combined | 6.62 s | absent |
-| Whole instrumented stack | 15.74 s | 31.80 s |
+| CPU over the three idle windows, 900 s          | Original, median of two runs | Final Celery, median of two runs |
+| ----------------------------------------------- | ---------------------------: | -------------------------------: |
+| PostgreSQL                                      |                       3.20 s |                          24.67 s |
+| Paperless core and its children                 |                       4.49 s |                           5.79 s |
+| Redis                                           |                       1.42 s |                           1.35 s |
+| Original-only AI, listener and Phoenix combined |                       6.62 s |                           absent |
+| Whole instrumented stack                        |                      15.74 s |                          31.80 s |
 
 The dominant persistent PostgreSQL backend used 23.97/24.26 sampled CPU-seconds
 in the two final runs, versus 2.21/2.16 for the original's dominant backend.
@@ -1029,22 +1029,22 @@ A disposable PostgreSQL 18 control loaded only the final first-run's sanitized
 30-second windows. The same SQL ran 300 times in each enabled window. No app,
 Celery, model service or production database participated:
 
-| Observer state | Database CPU per 30 s |
-| --- | ---: |
-| Off, first window | 0.0385 s |
-| On, first window | 1.1017 s |
-| On, second window | 1.0839 s |
-| Off, last window | 0.0077 s |
+| Observer state    | Database CPU per 30 s |
+| ----------------- | --------------------: |
+| Off, first window |              0.0385 s |
+| On, first window  |              1.1017 s |
+| On, second window |              1.0839 s |
+| Off, last window  |              0.0077 s |
 
 A second disposable replay collected `EXPLAIN (ANALYZE, BUFFERS)` and CPU over
 150 warm sequential calls per SQL variant:
 
-| Query variant | CPU per call | Example plan execution time |
-| --- | ---: | ---: |
-| Full journal observer plus tasks | 2.122 ms | 2.203 ms |
-| Same query without dependency arrays | 1.716 ms | 1.550 ms |
-| Job ID, tuple version and status, plus original task projection | 0.154 ms | 0.083 ms |
-| Original task projection alone | 0.120 ms | 0.069 ms |
+| Query variant                                                   | CPU per call | Example plan execution time |
+| --------------------------------------------------------------- | -----------: | --------------------------: |
+| Full journal observer plus tasks                                |     2.122 ms |                    2.203 ms |
+| Same query without dependency arrays                            |     1.716 ms |                    1.550 ms |
+| Job ID, tuple version and status, plus original task projection |     0.154 ms |                    0.083 ms |
+| Original task projection alone                                  |     0.120 ms |                    0.069 ms |
 
 The full plan's job scan took 0.004 ms; its job aggregate took 2.079 ms and task
 aggregate 0.050 ms. All buffer accesses were hits, with no shared reads in these

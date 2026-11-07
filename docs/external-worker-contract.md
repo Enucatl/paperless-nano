@@ -22,10 +22,10 @@ original requester still needs permission for the resulting document changes.
 operations. Each item includes `job_id`, `key`, `id`, `operation`, `contract`,
 `status`, `job_status` and `error`. Supported external operations are:
 
-| Operation | Discovery `contract` | Result identity |
-| --- | --- | --- |
-| `parser.process` | `paperless.external.parser:v1` | `provider` and `execution`: `paperless.external.parser:v1` |
-| `metadata.enrich` | `paperless.external.metadata` | `identity`: `{"provider":"paperless.external.metadata","contract":1}` |
+| Operation         | Discovery `contract`           | Result identity                                                       |
+| ----------------- | ------------------------------ | --------------------------------------------------------------------- |
+| `parser.process`  | `paperless.external.parser:v1` | `provider` and `execution`: `paperless.external.parser:v1`            |
+| `metadata.enrich` | `paperless.external.metadata`  | `identity`: `{"provider":"paperless.external.metadata","contract":1}` |
 
 Other operations may appear for accounts with broader grants. A null `contract`
 denotes work outside this generic boundary. Skip unsupported operations/contracts
@@ -68,16 +68,16 @@ SHA-256 before using the bytes.
 
 The parser request contains:
 
-| Field | Meaning |
-| --- | --- |
-| `version`, `revision` | Schema version 1 and opaque immutable request fingerprint; echo both. |
-| `source`, `mime_type`, `filename` | Input file reference and its admitted type/name. |
-| `settings` | Empty object for the generic descriptor; model configuration belongs to the worker. |
-| `operation` | `process` for external parsing. |
-| `archive_policy`, `output_type` | Required archive behavior; generic external requests use `output_type: pdfa`. |
-| `output_dir` | Core-owned relative namespace for this operation's renditions. |
-| `allow_remote` | Must be true for external computation. |
-| `invocation_id` | Stable invocation identity when present. |
+| Field                             | Meaning                                                                             |
+| --------------------------------- | ----------------------------------------------------------------------------------- |
+| `version`, `revision`             | Schema version 1 and opaque immutable request fingerprint; echo both.               |
+| `source`, `mime_type`, `filename` | Input file reference and its admitted type/name.                                    |
+| `settings`                        | Empty object for the generic descriptor; model configuration belongs to the worker. |
+| `operation`                       | `process` for external parsing.                                                     |
+| `archive_policy`, `output_type`   | Required archive behavior; generic external requests use `output_type: pdfa`.       |
+| `output_dir`                      | Core-owned relative namespace for this operation's renditions.                      |
+| `allow_remote`                    | Must be true for external computation.                                              |
+| `invocation_id`                   | Stable invocation identity when present.                                            |
 
 The result requires `version: 1`, the unchanged `revision`,
 `provider: "paperless.external.parser:v1"`, `text`, `page_count`, `date`, `archive`,
@@ -117,15 +117,15 @@ that an external worker must match.
 Return `version`, the unchanged `revision` and `identity`, and `worker`.
 The following proposal fields are optional; omissions preserve existing values:
 
-| Field | Constraint |
-| --- | --- |
-| `title` | String of 1–128 characters. |
-| `document_date` | ISO date from 1900-01-01 through the retained `document_date_max`. |
-| `summary` | String; an explicit empty string clears its managed field. |
-| `processing_date` | Exactly the request's retained `date`. |
-| `audit` | JSON object. |
+| Field                       | Constraint                                                                                                                                                |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`                     | String of 1–128 characters.                                                                                                                               |
+| `document_date`             | ISO date from 1900-01-01 through the retained `document_date_max`.                                                                                        |
+| `summary`                   | String; an explicit empty string clears its managed field.                                                                                                |
+| `processing_date`           | Exactly the request's retained `date`.                                                                                                                    |
+| `audit`                     | JSON object.                                                                                                                                              |
 | `correspondent`, `language` | Exactly `{"id": permitted_id}` or `{"create": "name"}`; creation requires the requester's current permission. Language names match `language:[a-z]{2,3}`. |
-| `custom_fields` | List of unique `{"field": id, "data_type": type, "value": value}` entries for the request's permitted fields and types. |
+| `custom_fields`             | List of unique `{"field": id, "data_type": type, "value": value}` entries for the request's permitted fields and types.                                   |
 
 Unknown fields, malformed values, unsupported custom-field types and unauthorized
 relations are rejected. Empty source content cannot produce metadata changes.
@@ -140,7 +140,11 @@ and optional nonempty `model` and `prompt` strings. No other keys are accepted.
 For example:
 
 ```json
-{"implementation":"example-worker:1.0","model":"model-revision","prompt":"prompt-v2"}
+{
+  "implementation": "example-worker:1.0",
+  "model": "model-revision",
+  "prompt": "prompt-v2"
+}
 ```
 
 This records the worker's reported execution identity. It is distinct from the

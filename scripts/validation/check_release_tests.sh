@@ -2,36 +2,36 @@
 # Qualify the release paths with disposable PostgreSQL, Redis and test storage.
 set -eu
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 CORE_IMAGE STANDALONE_WORKER_IMAGE" >&2
-    exit 2
+	echo "Usage: $0 CORE_IMAGE STANDALONE_WORKER_IMAGE" >&2
+	exit 2
 fi
 checkout=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 network="paperless-release-tests-$$"
 postgres="$network-postgres"
 redis="$network-redis"
 cleanup() {
-    docker rm -f "$postgres" "$redis" >/dev/null 2>&1 || true
-    docker network rm "$network" >/dev/null 2>&1 || true
+	docker rm -f "$postgres" "$redis" >/dev/null 2>&1 || true
+	docker network rm "$network" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT HUP INT TERM
 docker network create "$network" >/dev/null
 docker run --rm --userns=host -d --name "$postgres" --network "$network" \
-    --tmpfs /var/lib/postgresql \
-    -e POSTGRES_PASSWORD=validation -e POSTGRES_DB=validation postgres:18 >/dev/null
+	--tmpfs /var/lib/postgresql \
+	-e POSTGRES_PASSWORD=validation -e POSTGRES_DB=validation postgres:18 >/dev/null
 docker run --rm --userns=host -d --name "$redis" --network "$network" \
-    docker.io/library/redis:8 >/dev/null
+	docker.io/library/redis:8 >/dev/null
 docker run --rm --userns=host --network "$network" --entrypoint /bin/sh \
-    -v "$checkout:/source:ro" \
-    -e PAPERLESS_DBHOST="$postgres" -e PAPERLESS_DBNAME=validation \
-    -e PAPERLESS_DBUSER=postgres -e PAPERLESS_DBPASS=validation \
-    -e PAPERLESS_REDIS="redis://$redis:6379" \
-    -e PAPERLESS_DATA_DIR=/tmp/validation/data \
-    -e PAPERLESS_MEDIA_ROOT=/tmp/validation/media \
-    -e PAPERLESS_CONSUMPTION_DIR=/tmp/validation/consume \
-    -e PAPERLESS_SECRET_KEY=disposable-validation \
-    -e PAPERLESS_DISABLE_DBHANDLER=true -e PYTHONDONTWRITEBYTECODE=1 \
-    -e DJANGO_SETTINGS_MODULE=paperless.settings \
-    -e UV_CACHE_DIR=/tmp/uv-cache "$1" -c '
+	-v "$checkout:/source:ro" \
+	-e PAPERLESS_DBHOST="$postgres" -e PAPERLESS_DBNAME=validation \
+	-e PAPERLESS_DBUSER=postgres -e PAPERLESS_DBPASS=validation \
+	-e PAPERLESS_REDIS="redis://$redis:6379" \
+	-e PAPERLESS_DATA_DIR=/tmp/validation/data \
+	-e PAPERLESS_MEDIA_ROOT=/tmp/validation/media \
+	-e PAPERLESS_CONSUMPTION_DIR=/tmp/validation/consume \
+	-e PAPERLESS_SECRET_KEY=disposable-validation \
+	-e PAPERLESS_DISABLE_DBHANDLER=true -e PYTHONDONTWRITEBYTECODE=1 \
+	-e DJANGO_SETTINGS_MODULE=paperless.settings \
+-e UV_CACHE_DIR=/tmp/uv-cache "$1" -c '
         set -eu
         mkdir -p /tmp/checkout /tmp/validation/data /tmp/validation/media /tmp/validation/consume
         cp -a /source/src /source/pyproject.toml /source/uv.lock /tmp/checkout/
@@ -72,8 +72,8 @@ docker run --rm --userns=host --network "$network" --entrypoint /bin/sh \
         uv pip check --system
     '
 docker run --rm --userns=host --user 0:0 --entrypoint /bin/sh \
-    -v "$checkout/providers/paperless-inference:/source:ro" \
-    -e PYTHONDONTWRITEBYTECODE=1 -e UV_CACHE_DIR=/tmp/uv-cache "$2" -c '
+	-v "$checkout/providers/paperless-inference:/source:ro" \
+-e PYTHONDONTWRITEBYTECODE=1 -e UV_CACHE_DIR=/tmp/uv-cache "$2" -c '
         set -eu
         cp -a /source /tmp/worker
         uv sync --project /tmp/worker --frozen --group dev
