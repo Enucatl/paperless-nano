@@ -1,4 +1,4 @@
-# Atlas and Cerebrum migration
+# Paperless-nano: Atlas and Cerebrum migration
 
 Readiness inspection: 2026-11-07. The mounted configuration is not yet ready for
 production cutover. This checklist supplements the [deployment guide](processor-deployment.md)
@@ -16,7 +16,7 @@ and [backup/rollback runbook](provider-operations.md); it does not record a comp
   image; its referenced token and model credential files are absent. Replace these
   with the production API URL, published worker image and private credentials.
 - Wait for successful GitHub Actions publication of both
-  `ghcr.io/enucatl/paperless-ngx` and `ghcr.io/enucatl/paperless-inference` from the
+  `ghcr.io/enucatl/paperless-nano` and `ghcr.io/enucatl/paperless-nano-worker` from the
   integrated `main` revision. Record and deploy immutable digests for both images.
   A workflow definition alone does not establish successful publication.
 - Recheck the independently packaged images against an isolated representative

@@ -1,3 +1,25 @@
+# Paperless-nano
+
+Paperless-nano is [Enucatl's fork](https://github.com/Enucatl/paperless-nano) of
+[Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx), with document
+processing delegated to independent external workers. The core keeps document
+storage, permissions, validation, search and publication; the supplied worker
+owns OCR, metadata models and PDF tools.
+
+Deploy the core from `ghcr.io/enucatl/paperless-nano` and the supplied processor
+from `ghcr.io/enucatl/paperless-nano-worker`. Redis and PostgreSQL are separate
+services. Use immutable image digests from a successful publishing run.
+
+Start with the [deployment guide](docs/processor-deployment.md) and
+[worker guide](providers/paperless-inference/README.md). For the existing
+Atlas/Cerebrum stacks, follow the [migration checklist](docs/stack-migration.md)
+and [backup/rollback runbook](docs/provider-operations.md).
+
+The upstream introduction, attribution and documentation below describe
+Paperless-ngx. For this fork's installation, use the guides above.
+
+---
+
 [![ci](https://github.com/paperless-ngx/paperless-ngx/workflows/ci/badge.svg)](https://github.com/paperless-ngx/paperless-ngx/actions)
 [![Crowdin](https://badges.crowdin.net/paperless-ngx/localized.svg)](https://crowdin.com/project/paperless-ngx)
 [![Documentation Status](https://img.shields.io/github/deployments/paperless-ngx/paperless-ngx/github-pages?label=docs)](https://docs.paperless-ngx.com)

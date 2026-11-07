@@ -30,7 +30,7 @@ jobs:
   worker-tests:
     uses: ./.github/workflows/ci-worker.yml
   version:
-    if: github.repository == 'Enucatl/paperless-ngx'
+    if: github.repository == 'Enucatl/paperless-nano'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ format('{0}-nano-{1}', steps.version.outputs.base_tag, steps.version.outputs.short_sha) }}
@@ -46,7 +46,7 @@ jobs:
         id: version
         uses: Enucatl/docker-compose-security-baseline/.github/actions/git-version@main
   publish:
-    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Enucatl/paperless-nano' && github.ref == 'refs/heads/main'
     needs: [backend, frontend, worker-tests, lint, codeql, static-analysis, version]
     permissions:
       contents: read
@@ -57,7 +57,7 @@ jobs:
     secrets:
       registry_token: ${{ secrets.GITHUB_TOKEN }}
     with:
-      image_name: ghcr.io/enucatl/paperless-ngx
+      image_name: ghcr.io/enucatl/paperless-nano
       platforms: linux/amd64
       push: true
       version: ${{ needs.version.outputs.tag }}
@@ -67,7 +67,7 @@ jobs:
       build_args: PNGX_TAG_VERSION=main
       trivy_skip_dirs: .devcontainer
   publish-worker:
-    if: github.repository == 'Enucatl/paperless-ngx' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Enucatl/paperless-nano' && github.ref == 'refs/heads/main'
     needs: [backend, frontend, worker-tests, lint, codeql, static-analysis, version]
     permissions:
       contents: read
@@ -78,7 +78,7 @@ jobs:
     secrets:
       registry_token: ${{ secrets.GITHUB_TOKEN }}
     with:
-      image_name: ghcr.io/enucatl/paperless-inference
+      image_name: ghcr.io/enucatl/paperless-nano-worker
       dockerfile: providers/paperless-inference/Dockerfile
       cache_scope: worker
       platforms: linux/amd64

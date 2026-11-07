@@ -1,4 +1,4 @@
-# Generic external worker deployment
+# Paperless-nano deployment
 
 For the existing Atlas/Cerebrum installation, follow the
 [stack migration checklist](stack-migration.md) before replacing containers.
@@ -20,10 +20,11 @@ worker validates PDF/A-2u. Local built-in parser output settings are unchanged.
 
 ## Install and provision
 
-Build the generic core image from the selected release:
+Use `ghcr.io/enucatl/paperless-nano` at a verified release digest. To build
+the generic core image locally from the selected release:
 
 ```sh
-docker build -t paperless-core:release .
+docker build -t paperless-nano:release .
 ```
 
 Copy `docker/compose/docker-compose.inference.yml` to a deployment directory as
@@ -179,11 +180,12 @@ or committing it. The account needs no document-edit permission and must not be
 a superuser. Core still checks the original requester's document and entity
 permissions when applying results.
 
-To use the example worker, build its independent image:
+Use `ghcr.io/enucatl/paperless-nano-worker` at a verified release digest, or
+build the example worker independently:
 
 ```sh
 docker build -f providers/paperless-inference/Dockerfile \
-  -t paperless-inference:worker .
+  -t paperless-nano-worker:release .
 ```
 
 Copy `providers/paperless-inference/compose.workstation.yml` to its own deployment

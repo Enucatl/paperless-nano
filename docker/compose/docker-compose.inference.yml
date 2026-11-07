@@ -1,4 +1,4 @@
-# Build the generic core image; external workers have independent images.
+# Paperless Nano core; external workers have independent images.
 # See docs/processor-deployment.md before starting ingestion.
 services:
   broker:
@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: paperless
       POSTGRES_PASSWORD: ${PAPERLESS_DBPASS:?Set PAPERLESS_DBPASS in .env}
   webserver:
-    image: ${PAPERLESS_IMAGE:-paperless-core:release}
+    image: ${PAPERLESS_IMAGE:-ghcr.io/enucatl/paperless-nano:latest}
     restart: unless-stopped
     depends_on:
       - db

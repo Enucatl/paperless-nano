@@ -1,6 +1,7 @@
-# Standalone PaddleOCR and metadata worker
+# Paperless-nano worker
 
-`paperless-inference` is one external worker implementation for Paperless's
+The `paperless-inference` package, published as
+`ghcr.io/enucatl/paperless-nano-worker`, is one external worker implementation for Paperless-nano's
 versioned operation API. It owns PaddleOCR and metadata model configuration,
 prompts, credentials, PDF tools and Python dependencies. The Paperless server
 needs neither this package nor its image; other workers can implement the same
@@ -13,11 +14,12 @@ Paperless checks current permissions, document revisions and result constraints
 before publishing. The `worker` result field reports this implementation's model
 and prompt identities; the contract identity is independent of those choices.
 
-Build the worker directly, without a Paperless base image:
+Use the published image at a verified release digest, or build the worker
+directly, without a Paperless base image:
 
 ```sh
 docker build -f providers/paperless-inference/Dockerfile \
-  -t paperless-inference:worker .
+  -t paperless-nano-worker:release .
 ```
 
 The image contains Python 3.14, the frozen worker dependencies, Ghostscript,

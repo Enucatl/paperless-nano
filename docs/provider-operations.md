@@ -1,4 +1,4 @@
-# Install, replace, and roll back external workers
+# Paperless-nano: install, replace, and roll back external workers
 
 Run job-admitting and recovery commands as the application user (`--user
 paperless` in the supplied image, or your configured runtime UID). Root-created
@@ -18,7 +18,7 @@ historical qualification and current generic-worker publication gates, and the
 
 | Component       | Supported combination                                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Core            | Generic Paperless image with the external-worker contract; the `3.4.1` package version alone does not identify these fork changes.                                                                                        |
+| Core            | Generic Paperless image with the external-worker contract; the upstream package version alone does not identify these fork changes.                                                                                       |
 | External worker | Any independent implementation of the [HTTP contract](external-worker-contract.md); no Paperless Python imports or matching server image required.                                                                        |
 | Server runtime  | Python 3.14, PostgreSQL 18 and Redis 8 for the supplied deployment.                                                                                                                                                       |
 | Example worker  | Standalone `paperless-inference` package, with its own PaddleOCR and metadata endpoints, model configuration, credentials and PDF tools. Its OCR implementation accepts PDFs only.                                        |
@@ -40,7 +40,8 @@ can override environment defaults.
 
 ## Install and verify configuration
 
-Follow the [server deployment guide](processor-deployment.md) and
+Published images are `ghcr.io/enucatl/paperless-nano` for core and
+`ghcr.io/enucatl/paperless-nano-worker` for the supplied worker. Follow the [server deployment guide](processor-deployment.md) and
 [example worker guide](../providers/paperless-inference/README.md). Build and
 version them independently. Keep all processes in one server deployment on its
 same image/configuration; external workers only need contract compatibility.
