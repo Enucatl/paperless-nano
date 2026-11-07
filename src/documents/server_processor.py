@@ -10,7 +10,9 @@ CAPABILITIES = ("parser", "metadata", "search", "ingestion")
 def capability_for(operation: str) -> str:
     """Map preparation and provider operations to their execution capability."""
     return (
-        "ingestion" if operation.startswith("prepare:") else operation.split(".", 1)[0]
+        "ingestion"
+        if operation.startswith("prepare:") or operation == "parser.thumbnail"
+        else operation.split(".", 1)[0]
     )
 
 

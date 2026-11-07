@@ -1,3 +1,5 @@
+"""Worker signal tests use real transactions to permit connection cleanup."""
+
 import datetime
 import sys
 import uuid
@@ -225,7 +227,7 @@ class TestBeforeTaskPublishHandler:
         assert task.trigger_source == PaperlessTask.TriggerSource.MANUAL
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestTaskPrerunHandler:
     def test_marks_task_started(self) -> None:
         task = PaperlessTaskFactory(status=PaperlessTask.Status.PENDING)
@@ -247,7 +249,7 @@ class TestTaskPrerunHandler:
         task_prerun_handler(task_id=task_id)  # must not raise
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestTaskPostrunHandler:
     def _started_task(self) -> PaperlessTask:
 
@@ -329,7 +331,7 @@ class TestTaskPostrunHandler:
         assert task.status == PaperlessTask.Status.REVOKED
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestTaskFailureHandler:
     def test_records_failure_with_exception(self) -> None:
 
@@ -416,7 +418,7 @@ class TestApplyAiSuggestionsTracking:
         assert task.input_data == {"document_id": 42}
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestTaskRevokedHandler:
     def test_marks_task_revoked(self, mocker: pytest_mock.MockerFixture) -> None:
         """task_revoked_handler moves a queued task to REVOKED and stamps date_done."""
@@ -472,7 +474,7 @@ class TestTaskRevokedHandler:
         task_revoked_handler(request=request)  # must not raise
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "name,kind,task_type",
     [

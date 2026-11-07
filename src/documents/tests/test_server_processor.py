@@ -206,3 +206,86 @@ def test_tasks_exposes_retained_operation_failure():
         "status": "pending",
         "error": job.error,
     }
+
+
+def test_local_thumbnail_runs_while_ocr_waits_for_workstation(settings, mocker):
+    """Removing server OCR placement must not strand the core thumbnail fallback."""
+    from django.contrib.auth.models import Permission
+
+    from documents.job_state import PendingOperation
+    from documents.operation_journal import invoke
+
+    processor = UserFactory()
+    processor.user_permissions.add(Permission.objects.get(codename="process_ingestion"))
+    settings.PROCESSOR_USER = processor.username
+    settings.PROCESSOR_CAPABILITIES = ["ingestion"]
+    mocker.patch("documents.jobs._dispatch")
+    thumbnail = mocker.Mock(return_value={"thumbnail": "private rendition"})
+    thumbnail_job = DocumentJob.objects.create(timeout=60)
+    assert invoke(
+        thumbnail_job,
+        "parser.thumbnail",
+        "paperless.local-thumbnail:1",
+        {},
+        thumbnail,
+        replay_safe=True,
+        operation="parser.thumbnail",
+    ) == {"thumbnail": "private rendition"}
+    thumbnail.assert_called_once()
+    thumbnail_job.refresh_from_db()
+    entry = thumbnail_job.result["invocations"]["parser.thumbnail"]
+    assert entry["policy"] == {"permission": "documents.process_ingestion"}
+    assert entry["processor_location"] == "server"
+    assert entry["status"] == "succeeded"
+
+    ocr = mocker.Mock()
+    ocr_job = DocumentJob.objects.create(timeout=60)
+    with pytest.raises(PendingOperation):
+        invoke(
+            ocr_job,
+            "parser.process",
+            "paperless-inference.paddle:1",
+            {},
+            ocr,
+            replay_safe=True,
+            operation="parser.process",
+        )
+    ocr.assert_not_called()
+    ocr_job.refresh_from_db()
+    assert ocr_job.result["invocations"]["parser.process"].get("attempts", 0) == 0
+
+    processor.user_permissions.clear()
+    forbidden = DocumentJob.objects.create(timeout=60)
+    with pytest.raises(PendingOperation):
+        invoke(
+            forbidden,
+            "parser.thumbnail",
+            "paperless.local-thumbnail:1",
+            {},
+            thumbnail,
+            replay_safe=True,
+            operation="parser.thumbnail",
+        )
+    assert thumbnail.call_count == 1
+    forbidden.refresh_from_db()
+    assert forbidden.result["invocations"]["parser.thumbnail"].get("attempts", 0) == 0
+
+
+def test_retained_thumbnail_policy_still_requires_original_grant(settings):
+    """Changing placement must not rewrite authorization on retained operations."""
+    from django.contrib.auth.models import Permission
+
+    from documents.server_processor import selected_user
+
+    processor = UserFactory()
+    processor.user_permissions.add(Permission.objects.get(codename="process_ingestion"))
+    settings.PROCESSOR_USER = processor.username
+    settings.PROCESSOR_CAPABILITIES = ["ingestion"]
+    entry = {
+        "operation": "parser.thumbnail",
+        "policy": {"permission": "documents.process_parser"},
+    }
+    assert selected_user(entry) is None
+    processor.user_permissions.add(Permission.objects.get(codename="process_parser"))
+    assert selected_user(entry) == processor
+    assert entry["policy"] == {"permission": "documents.process_parser"}

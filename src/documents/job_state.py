@@ -62,9 +62,9 @@ def requester_id(job: DocumentJob) -> int | None:
 
 def execution_policy(operation: str, identity: str, provider=None) -> dict | None:
     """Queue finite provider work; lifecycle hooks remain core-owned."""
-    capability = (
-        "ingestion" if operation.startswith("prepare:") else operation.split(".", 1)[0]
-    )
+    from documents.server_processor import capability_for
+
+    capability = capability_for(operation)
     if capability not in {"parser", "metadata", "search", "ingestion"}:
         return None
     return {"permission": f"documents.process_{capability}"}

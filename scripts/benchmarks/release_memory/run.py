@@ -692,6 +692,10 @@ def run(variant: str, number: int) -> dict:
                 "PAPERLESS_OCR_MODE": "off",
             }
             seed = SEED
+            if variant == "current":
+                seed = seed.replace('"ai_processed"', '"processing_date"').replace(
+                    '"ai_metadata"', '"audit"'
+                )
         # Match final ownership before running migrations outside the measured process.
         docker(
             "run",

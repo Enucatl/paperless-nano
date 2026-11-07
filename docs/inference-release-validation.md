@@ -686,6 +686,10 @@ suite was rerun and no product code was changed for this comparison.
 
 ## Remaining release gates
 
+This historical gate list is superseded by the November 7 qualification below.
+The release requires the accepted 20-PDF test, not full-corpus parity or
+long-duration capacity testing; neither is planned or blocks release.
+
 - Representative multi-document/language/correspondent corpus parity against the
   real endpoints; current instrumented coverage is three PDFs/five pages within
   one synthetic English invoice scenario, not a representative corpus.
@@ -837,3 +841,297 @@ confirming the child had exited. Every container used `--rm --userns=host`; the
 script cleaned up its disposable PostgreSQL/Redis containers and network. No
 historical PDF measurements above were changed. The real-model comparison and
 provider-memory measurements remain blocked as described above.
+
+## Final Celery benchmark — 2026-11-06
+
+**All six measured runs passed.** Final Celery makes the metadata title
+searchable in a median **7.67 seconds**, compared with **22.03 seconds** for
+the fresh original deployment and **120.29 seconds** for the fresh integrated
+polling version. This completes the server-only real-model comparison previously
+blocked by Cerebrum connectivity; it does not close the other release gates.
+
+[Structured results](inference-release-celery-20261106.json) contain the full
+per-run memory, CPU, process, latency and remote-resource diagnostics.
+The unpublished raw evidence and frozen analysis are retained in
+`artifacts/release-celery-87ae92619-20261106.tar.gz`.
+
+![Final Celery compared with fresh baselines and historical Redis wakeup](inference-release-celery-summary.png)
+
+The final core and provider source is commit
+`87ae926198bb31110900531567e6eb9cb994a50b`, built from a Git archive as
+`paperless-release-celery:87ae92619-v2`, image
+`sha256:f8cda0189ed467c3267789af6136e61de53ca63834823176d49443d1b467e451`.
+The current provider package is overlaid on the retained dependency image;
+dependencies and frontend remain pinned, and `uv pip check --system` passed.
+The uncommitted processor-outcome test edit was excluded from the image.
+
+After Cerebrum rebooted, its existing extraction profile was started and all
+four services passed health checks. The benchmark used the same local host,
+PostgreSQL 18 and Redis 8 images as the earlier November 6 comparison. Its
+order was original → polling → final → final → polling → original, with fresh
+data per run, one web worker and one autoscaling task worker. Ten-task child
+recycling and normal scheduled services remained enabled. The original's
+polling was again normalized to ten seconds and metadata temperature to zero.
+
+Each run uploaded the same one-page, three-page, then one-page synthetic PDFs,
+with three 300-second idle observation windows. All **18 uploads / 30 pages**
+passed original-checksum, OCR content, four custom fields, archive download,
+content search and metadata-title search checks. Nine successful preflight
+uploads were excluded from measurement.
+
+| Metric | Fresh original | Fresh polling | Final Celery | Earlier Redis wakeup |
+| --- | ---: | ---: | ---: | ---: |
+| Final steady PSS, last 240 s, MiB | 1,347.7 | 385.2 | 379.1 | 408.3 |
+| Final idle PSS mean, all 300 s, MiB | 1,343.8 | 407.3 | 417.5 | 474.0 |
+| First 60 s of final idle, PSS median MiB | 1,347.7 | 430.0 | 655.6 | 766.0 |
+| Sampled raw-memory peak, MiB | 1,934.1 | 991.3 | 836.4 | 1,056.7 |
+| Upload → metadata title searchable, s | 22.03 | 120.29 | 7.67 | 48.07 |
+| Three ingestion phases, CPU-s | 29.67 | 155.71 | 19.51 | 81.30 |
+| Three idle windows, exactly 900 s, CPU-s | 15.74 | 165.68 | 31.80 | 41.11 |
+| Core CPU, final 240 s of final idle, CPU-s | 0.377 | 35.073 | 1.097 | 0.379 |
+
+Memory, peak and CPU entries are medians of two per-run statistics; latency
+is the median of six uploads. The Redis-wakeup column is the preserved earlier
+experiment at `55928c30e`, not a fourth freshly rerun variant. Relative to that
+historical reference, final Celery reduces title-search latency by **84.0%**,
+ingestion CPU by **76.0%**, steady PSS by **7.1%**, and nominal-idle CPU by
+**22.6%**. Against the fresh original, latency falls **65.2%**, ingestion CPU
+**34.2%**, and steady PSS **71.9%**. Instrumented idle CPU is about twice the
+original's; the attribution below identifies substantial benchmark observer cost.
+These are whole-version comparisons, not attribution of every difference to
+Celery alone.
+
+Both final repetitions reused the same sampled Celery child across the first
+two immediate uploads; the later upload after idle used a new child. All six
+final idle-window endpoints had zero worker children. There were five/four
+sampled child identities over the complete final runs, including scheduled
+work. The analysis retains its legacy `coordinator-child` label for these
+children; they now execute providers too. Empty separate-provider identity
+lists mean no separate processor process, not missing OCR execution. No
+recovery-task deliveries were observed in either final run.
+
+The first preflight exposed two benchmark setup defects. Docker interpreted
+the bare base-image ID as a registry reference; the build now uses the verified
+local base tag. The old seed called fields 2/3 `ai_processed`/`ai_metadata`,
+while the final core matches `processing_date`/`audit` by name. Its jobs all
+succeeded in about seven seconds, but the completion assertion waited 900
+seconds for the missing fields. That timeout is excluded and is not a pipeline
+latency result. The corrected current seed retains all four completion checks;
+historical variants keep their original names and mappings. The image also
+now copies the current provider package rather than inheriting the old one.
+
+All measured idle windows contain 300 complete memory and process samples.
+Remote observation retained 6,494 samples without reported errors. OCR GPU
+allocation stayed at 8,920 MiB and BGE at 2,060 MiB; unrelated GPU users also
+contributed to the whole-device maximum of 14,941 MiB. Remote and hosted-model
+resources are excluded from local-stack totals. One-second peaks are lower
+bounds, and raw memory includes file-cache accounting effects. Fast intermediate
+job states can escape the 100 ms observer: null staging/acceptance bounds do
+not establish zero overhead. Two repeats of small synthetic invoices do not
+establish production-corpus parity, long-duration stability, upgrade safety,
+or real-model offline-then-online workstation behavior.
+
+The corrected harness self-checks, Ruff formatting/lint and whitespace checks
+passed in addition to the live preflight and six measured runs. Temporary
+benchmark containers, networks and volumes were removed after archiving.
+
+### Idle CPU attribution and observer control
+
+The measured total does **not** establish twice the production idle CPU.
+Most extra CPU is PostgreSQL serving the benchmark observer, which remains
+included in database cgroup measurements even though the observer container
+itself is excluded. The structured results now contain `idle_cpu_attribution`;
+the original headline measurements and historical archives are unchanged.
+
+| CPU over the three idle windows, 900 s | Original, median of two runs | Final Celery, median of two runs |
+| --- | ---: | ---: |
+| PostgreSQL | 3.20 s | 24.67 s |
+| Paperless core and its children | 4.49 s | 5.79 s |
+| Redis | 1.42 s | 1.35 s |
+| Original-only AI, listener and Phoenix combined | 6.62 s | absent |
+| Whole instrumented stack | 15.74 s | 31.80 s |
+
+The dominant persistent PostgreSQL backend used 23.97/24.26 sampled CPU-seconds
+in the two final runs, versus 2.21/2.16 for the original's dominant backend.
+Attribution of those particular PIDs to the observer is inferred from their
+lifetime and work pattern; the original capture did not record backend
+application names. Process CPU is sampled and can omit short-lived processes.
+The controlled replay below independently verifies the observer mechanism.
+
+The observer executes `jobs_observer.py`'s full SQL projection every 100 ms.
+It scans every retained job, including completed jobs, expands each invocation
+with nested `jsonb_each`, filters allowed fields, rebuilds invocation/job objects,
+sorts, and aggregates the whole result. Only afterward does Python compare
+snapshots and discard unchanged output. The ten-second heartbeat controls log
+output, not query frequency. The original deployment has no DocumentJob table,
+so its observer substitutes an empty job array and polls only task rows.
+
+Each final run ended with 13 retained jobs, 100 invocations and 1,209 dependency
+references. Each consume job accounts for 29 invocations and 402 references.
+`operation_journal.invoke` records all earlier succeeded invocation IDs as a
+new entry's dependencies; the retained dependency volume therefore grows roughly
+quadratically with a serial chain's length. The idle journal is static, but the
+observer keeps reconstructing it ten times per second. PostgreSQL idle CPU grows
+from 1.95–1.97 seconds in startup idle to 9.76–10.02 seconds after two uploads
+and 12.80–12.83 seconds after the third, per 300-second window. Observer summary
+samples show query wall time growing from about 1 ms to about 5 ms.
+
+A disposable PostgreSQL 18 control loaded only the final first-run's sanitized
+13 job and 16 task snapshots, then alternated observer off/on/on/off for four
+30-second windows. The same SQL ran 300 times in each enabled window. No app,
+Celery, model service or production database participated:
+
+| Observer state | Database CPU per 30 s |
+| --- | ---: |
+| Off, first window | 0.0385 s |
+| On, first window | 1.1017 s |
+| On, second window | 1.0839 s |
+| Off, last window | 0.0077 s |
+
+A second disposable replay collected `EXPLAIN (ANALYZE, BUFFERS)` and CPU over
+150 warm sequential calls per SQL variant:
+
+| Query variant | CPU per call | Example plan execution time |
+| --- | ---: | ---: |
+| Full journal observer plus tasks | 2.122 ms | 2.203 ms |
+| Same query without dependency arrays | 1.716 ms | 1.550 ms |
+| Job ID, tuple version and status, plus original task projection | 0.154 ms | 0.083 ms |
+| Original task projection alone | 0.120 ms | 0.069 ms |
+
+The full plan's job scan took 0.004 ms; its job aggregate took 2.079 ms and task
+aggregate 0.050 ms. All buffer accesses were hits, with no shared reads in these
+warm plans. Nested invocation-field aggregation ran 100 times per query. These
+inclusive node timings are not additive. Removing dependencies reduces measured
+CPU by about 19%; avoiding repeated nested projection reduces it by about 93%.
+This is JSON processing on cached data, not evidence for a missing index or
+slow storage. Sanitized snapshots omit original input/result payloads and their
+materialization cost, so replay timings are not an exact replacement for the
+live measurements and must not be subtracted from those totals.
+
+The recommended first simplification is in the **benchmark observer**: check
+row identity/version frequently and rebuild sanitized projections only when a
+row changes, retaining deletion and reopened-job detection. An `updated`-only
+filter is unsafe: journal paths save `result` without updating that timestamp.
+PostgreSQL tuple versions can detect those writes; any implementation must
+preserve a consistent observation snapshot and the existing secret exclusions.
+No product processes or durability mechanisms were removed in this diagnosis.
+
+A smaller real product inefficiency is tracked in
+[#53](https://github.com/Enucatl/paperless-ngx/issues/53): scheduled mail checks
+start a Django pool child even without an account having an enabled rule.
+The logs show these deliveries and scale-ups during idle; their isolated saving
+has not been measured. The current scheduler already replaces its Python process
+with Supercronic, so it is not an additional permanently resident Python service.
+Recovery scans and watcher wakeups were inspected but not shown to dominate CPU.
+
+Control scripts, query plans and derived attribution are retained in
+`artifacts/release-idle-attribution-20261106.tar.gz`. Both controls used disposable
+`docker run --rm --userns=host` containers; temporary networks and output volumes
+were removed. No production-idle claim is made without a matched observer-free
+run, and no product code was changed.
+
+## First-release qualification — 2026-11-07
+
+The user accepted a bounded **20-PDF / 50-page / four-language** qualification
+instead of a full production-corpus parity test. All twenty generated invoices
+(English, German, French and Italian, one to four pages each) passed actual OCR,
+metadata, original SHA-256 preservation, archive page/text checks, veraPDF
+PDF/A-2u validation, language tagging, document date, correspondent presence,
+and metadata-title search. Ten uploaded with server OCR; ten waited for the real
+Cerebrum pull client. Exact stochastic titles/summaries were not asserted.
+
+The isolated test used PostgreSQL 18 and Redis 8, two autoscaling task workers,
+the supervised core image, and the existing real PaddleOCR/OpenRouter endpoints.
+All credentials were Compose secrets. No production database or documents were
+copied or replaced. The final sampled state had **20 documents, 98 succeeded
+document jobs, and 106 successful task receipts**, with no unfinished jobs.
+Scheduled tasks may add further receipts after that snapshot.
+
+### Workstation architecture and placement
+
+`/opt/docker/vllm/paperless-workstation` on Cerebrum (mounted here at
+`/export/cerebrum/vllm/paperless-workstation`) contains a separate Compose
+project alongside the existing model-serving stack. Its matching core/provider
+image starts only `python -m paperless_inference.workstation`, as UID 1000.
+It connects outbound to Paperless's authenticated operation API; it mounts
+neither the server database nor Redis nor server document/private-file storage.
+The account is not a superuser and has only `process_parser` and
+`process_metadata` permissions. API/model credentials are file-mounted Compose
+secrets, and downloaded inputs/computed delivery records use a private named
+volume. Only the selected model endpoints are contacted.
+
+The client discovers pending work, claims an attempt, verifies input hashes and
+provider/configuration identity, invokes the installed provider, uploads private
+outputs, and submits the proposal. Core validates and publishes it, then performs
+local thumbnail rendering, metadata or search continuation as placed. The client
+retains a computed proposal across uncertain delivery and retries submission
+without repeating inference. Unsupported operations remain on the server.
+It polls the API every 30 seconds while empty and five seconds after productive
+passes; it does not run the benchmark's 100 ms database observer. `--once`
+performs one bounded discovery pass. The model servers and claim client are
+separate processes and Compose projects.
+
+Ten real OCR operations waited unclaimed across an idle interval with zero
+attempts or leases, then Cerebrum claimed and completed them. A fresh existing
+document was also reprocessed through Cerebrum and reached terminal success;
+its new thumbnail invocation ran on the server under `process_ingestion`.
+A real `metadata.enrich` operation was separately assigned to Cerebrum and
+completed through claim/result acceptance and final search visibility.
+Overall, the workstation completed eleven OCR operations and one metadata
+operation. One initial OCR attempt failed because Cerebrum's hostname resolved
+to loopback inside the container. A deployment-specific host-gateway mapping
+fixed connectivity; that claim was explicitly expired in the test and recovered
+through the existing lease mechanism. This was injected recovery, not automatic
+first-attempt success or a real week of elapsed waiting.
+
+The live test exposed a real placement gap: `parser.thumbnail` inherited the
+OCR capability, stranding continuation when server OCR was disabled. Local
+thumbnail rendering now uses the existing ingestion capability. Shared policy
+creation and server selection use the same mapping. New regression tests cover
+ingestion-only rendering, unclaimed workstation OCR, permission revocation,
+and retained policies. Previously admitted thumbnails retained their original
+parser authorization; the test explicitly restored that grant to drain them.
+The fresh reprocess verifies the corrected flow without that legacy dependency.
+
+### Preservation, upgrade and recovery evidence
+
+Existing-document reprocessing passed with Paddle, the built-in parser, then
+Paddle again. Original hashes, user title, unrelated tag/custom field, existing
+metadata, archive text/pages and title search survived. Paddle output passed
+PDF/A-2u; the built-in parser passed its configured PDF/A-2b contract. A paired
+PostgreSQL dump plus data/media backup was restored into fresh volumes, and all
+twenty documents passed verification again before the fresh workstation checks.
+
+A separate retained-image upgrade/backout test seeded a synthetic stored PDF,
+unrelated metadata, completed/pending task receipts and legacy journal state.
+Upgrade preserved the source hash, metadata and receipts, quarantined an
+unfinished legacy claim without replay, preserved successful journal evidence,
+and introduced no migration drift. Restoring the paired pre-upgrade database
+and files allowed the retained old image to read its state again. This does not
+claim old broker messages execute after upgrade: pending legacy receipts require
+operator review, and rollback restores paired state rather than reversing
+migrations. Upgrade evidence records the particular candidate image measured.
+
+The final PostgreSQL/Redis regression selection passed **482 tests** and the
+provider suite passed **114**, including eight workstation tests. This final
+run includes the thumbnail placement fix and its two new regressions. Migration
+drift was absent and all 242 installed packages passed dependency checks.
+The frontend Tasks/upload/WebSocket selection passed **78 tests** and the
+production build passed with translation warnings. Real lifecycle checks covered
+concurrency two, warm-child reuse, return to zero children, eight-day injected
+offline waiting, claim/result continuation, bounded endpoint retries and killed
+child recovery. Existing focused suites cover duplicate/stale results,
+cancellation, permission revocation and publication/recovery boundaries.
+
+One harness failure escaped Unicode in a title-search expression; literal
+Unicode fixed the query without changing the app. Another incorrectly required
+PDF/A-2u from the built-in parser; validation now uses its actual PDF/A-2b
+contract. These failures and the deployment/placement recovery above remain
+part of the evidence rather than being reported as an uninterrupted clean run.
+
+This qualification supports replacement readiness within the accepted test
+scope. Full-corpus parity and long-duration capacity testing are explicitly
+excluded from release requirements and will not be performed. Chat and
+alternative search are outside this release. Immutable artifact publication/source publication and
+the actual production cutover are separate steps; neither is implied by local
+test success. The existing installation has not been replaced.

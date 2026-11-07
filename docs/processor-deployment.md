@@ -142,3 +142,116 @@ together, with the exact core/provider images and configuration. Restore the
 matching set. Provider configuration rollback and database downgrade are
 separate operations; see the [installation/swap/rollback runbook](provider-operations.md)
 for release compatibility and pending-job decisions.
+
+## Workstation pull execution
+
+The optional pull client runs `python -m paperless_inference.workstation` in a
+separate container on the workstation. It uses the same immutable core/provider
+release as the server. It does not run a web server, Celery worker, scheduler,
+PostgreSQL or Redis, and it does not mount the server's data or media directories.
+Cerebrum's existing `/opt/docker/vllm` extraction stack remains the model server;
+the pull client is a separate Compose project beside it, for example
+`/opt/docker/vllm/paperless-workstation`.
+
+```text
+Paperless admission / Celery -> PostgreSQL durable operation
+                                      ^
+                                      | HTTPS claim / input / output / result
+                                      |
+                             Cerebrum pull client
+                                      |
+                                      v
+                       PaddleOCR endpoint / metadata endpoint
+```
+
+The client lists authorized pending operations, claims one with a bounded lease,
+downloads the declared immutable input, and runs the installed OCR or metadata
+provider. It checks the retained provider/configuration identity and input hash.
+It uploads private result files and submits the proposal with its claim token.
+Paperless validates and accepts the proposal before scheduling server continuation
+and ordinary search. A submitted result is not proof that document publication
+completed; follow Tasks and verify the final document/search result.
+
+Provision a dedicated non-login account with only the capabilities the workstation
+will execute:
+
+```sh
+docker compose exec --user paperless webserver python manage.py document_processor_account \
+  --user workstation-processor --capability parser --capability metadata
+```
+
+Create a DRF API token for that account using an administrator-controlled process,
+and transfer it directly to a private workstation secret file without printing it
+or adding it to source control. The account needs no document-edit permission and
+must not be a superuser. The original document requester still needs the normal
+permissions for the proposed document and entity changes.
+
+For workstation-only OCR, remove `parser` from the server account's grants and
+`PAPERLESS_PROCESSOR_CAPABILITIES`; keep `metadata search ingestion` on the server
+if only OCR should move. For workstation-only metadata, remove `metadata` too.
+The `ingestion` capability also executes the existing local thumbnail renderer;
+disabling server OCR must not disable thumbnail publication. Retained thumbnail
+operations admitted before this routing change still require their original
+parser grant until drained; their authorization is not silently rewritten.
+Reprovision the server account with its remaining capabilities and recreate the
+server container. An offline unclaimed operation then remains durable without a
+server execution attempt, occupied child, or outbound connection to Cerebrum.
+The workstation independently initiates contact when it starts.
+
+Build the client wrapper from the matching installed provider image:
+
+```sh
+docker build -f providers/paperless-inference/Dockerfile.workstation \
+  --build-arg PAPERLESS_IMAGE=YOUR_IMMUTABLE_CORE_PROVIDER_IMAGE \
+  -t YOUR_IMMUTABLE_WORKSTATION_IMAGE .
+```
+
+Copy `providers/paperless-inference/compose.workstation.yml` to the workstation
+project as `compose.yml`. Set the nonsecret interpolation variables in `.env`:
+`PAPERLESS_WORKSTATION_IMAGE`, `PAPERLESS_URL`, `INFERENCE_OCR_ENDPOINT`, and
+`INFERENCE_METADATA_MODEL`. The model endpoint, pinned model identities,
+metadata temperature and other provider settings must exactly match the server's
+retained configuration. In particular, do not substitute `localhost` for the
+configured Cerebrum hostname: the endpoint URL participates in OCR identity.
+If the workstation resolves its own hostname to a loopback address, add a
+deployment-specific `extra_hosts` mapping to Docker's `host-gateway` for that
+hostname; do not change the retained endpoint URL to work around container DNS.
+
+Set `PAPERLESS_API_TOKEN_SECRET_FILE` and `OPENROUTER_SECRET_FILE` to the private
+credential file paths. Compose mounts both as secrets; their values do not belong
+in `.env`, image layers, command arguments or logs. The client image runs as
+UID/GID 1000, so the files must be readable by that user. Start the existing model
+stack, then the client:
+
+```sh
+# In /opt/docker/vllm:
+docker compose --profile extraction up -d --wait --wait-timeout 900
+# In /opt/docker/vllm/paperless-workstation:
+docker compose up -d
+docker compose logs workstation
+# Bounded single pass, with the resident client stopped first:
+docker compose stop workstation
+docker compose run --rm workstation --once
+```
+
+The client supports only `parser.process` and `metadata.enrich`; server-owned
+search, ingestion extensions and lifecycle hooks remain on the server. One client
+executes serially. While running, it checks for pending work every 30 seconds
+when empty, or five seconds after a productive pass; this is workstation-side
+admission polling, not the benchmark's 100 ms database observer. Logs report only
+operation counts and error types. The workstation need not be running when work
+is admitted.
+
+The named `workstation_state` volume contains private downloaded files and a
+computed-result delivery record. Persist it across container restarts. Delivery
+retries reuse that record, rather than repeating successful inference after an
+uncertain upload/submission response. A file lock prevents two processes sharing
+that state from running concurrently. The record is removed after result staging
+is acknowledged. If a claim expires or is cancelled, inspect the retained server
+state and private client record before discarding it; the client does not bypass
+claim checks or silently reroute to another Paperless URL. A crash during compute
+can require a replay-safe retry and repeat model cost.
+
+Only the workstation's outbound API and model connections are needed. No inbound
+workstation worker port or shared server filesystem is introduced. Use HTTPS for
+credential-bearing API traffic outside the trusted isolated test network.

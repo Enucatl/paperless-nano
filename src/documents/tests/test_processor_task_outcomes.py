@@ -179,3 +179,20 @@ def test_recoverable_consumption_does_not_start_native_errbacks(mocker, status):
     assert "delivery" not in job.result
     assert task.status == PaperlessTask.Status.STARTED
     assert task.date_done is None
+
+
+def test_native_failure_still_completes_tasks_without_document_job():
+    """Non-document tasks retain failure reporting, including non-UUID IDs."""
+    from uuid import uuid4
+
+    from documents.signals.handlers import task_failure_handler
+
+    for task_id in (str(uuid4()), "legacy-task-id"):
+        task = PaperlessTaskFactory(
+            task_id=task_id, status=PaperlessTask.Status.STARTED
+        )
+        task_failure_handler(task_id=task_id, exception=RuntimeError("failed"))
+        task.refresh_from_db()
+        assert task.status == PaperlessTask.Status.FAILURE
+        assert task.result_data["error_message"] == "failed"
+        assert task.date_done is not None

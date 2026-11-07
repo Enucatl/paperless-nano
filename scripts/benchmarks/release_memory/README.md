@@ -123,6 +123,11 @@ Build a frozen source snapshot with the included Dockerfile, using the retained
 dependency image as its base, and tag it `paperless-release-celery:issue52` (or
 set `BENCH_CURRENT_IMAGE`). The Dockerfile removes inherited processor service
 files as well as copying the current source and S6 configuration.
+It also overlays the current provider package on the retained Python 3.14
+dependencies. Verify the base tag resolves to image
+`sha256:6824eec4681c4087dbff484efab2b1da399c7b0e3adfd614ed78afbabfa6fc1a`
+before building. The current variant seeds `processing_date` and `audit` by
+their exact names; historical variants retain their field-ID mapping and names.
 
 Run the self-checks in disposable containers before the experiment, then use
 the repository's `wake-run` workflow to invoke:
