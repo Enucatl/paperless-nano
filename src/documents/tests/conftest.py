@@ -71,6 +71,7 @@ def searchable_document(_search_index: None) -> "Document":
 def queued_search_processor(monkeypatch):
     """Finish real queued maintenance before legacy search-result assertions."""
     from unittest.mock import Mock
+
     from documents import search_operations
     from paperless_testing.factories import UserFactory
     from paperless_testing.queued import drive_processors
@@ -82,9 +83,32 @@ def queued_search_processor(monkeypatch):
     def completed(provider, operation, inputs):
         nonlocal processor
         if processor is None:
-            processor = UserFactory(is_superuser=True)
+            processor = UserFactory(username="test-search-processor", is_superuser=True)
         job = submit(provider, operation, inputs)
         drive_processors(search_operations.run_search, processor)(job.pk)
         return job
 
     monkeypatch.setattr(search_operations, "submit_search", completed)
+
+
+@pytest.fixture
+def queued_document_processor(monkeypatch, queued_search_processor):
+    """Run authorized local operations before legacy completion assertions."""
+    from django.utils.functional import SimpleLazyObject
+
+    from documents import ingestion_jobs
+    from documents import jobs
+    from paperless_testing.factories import UserFactory
+    from paperless_testing.queued import drive_processors
+
+    processor = SimpleLazyObject(
+        lambda: UserFactory(username="test-document-processor", is_superuser=True)
+    )
+    monkeypatch.setattr(
+        jobs, "run_reprocess", drive_processors(jobs.run_reprocess, processor)
+    )
+    monkeypatch.setattr(
+        ingestion_jobs,
+        "run_consumption",
+        drive_processors(ingestion_jobs.run_consumption, processor),
+    )

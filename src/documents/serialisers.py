@@ -2474,7 +2474,7 @@ class TaskSerializerV10(OwnedObjectSerializer):
 
     operation = serializers.SerializerMethodField()
 
-    def get_operation(self, obj):
+    def get_operation(self, obj) -> dict | None:
         """Expose the current finite operation without claim credentials."""
         from uuid import UUID
 

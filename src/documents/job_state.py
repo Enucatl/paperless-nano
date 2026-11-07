@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from documents.models import Document
 from documents.models import DocumentJob
+from documents.models import PaperlessTask
 from documents.permissions import permitted_document_ids
 
 REVISION_FIELDS = (
@@ -90,16 +91,22 @@ def wait(job: DocumentJob, entry: dict) -> None:
     raise PendingOperation(entry["id"])
 
 
+def task_history_status(status: str) -> str | None:
+    """Translate durable job completion; nonterminal jobs have no final outcome."""
+    return {
+        DocumentJob.Status.SUCCEEDED: PaperlessTask.Status.SUCCESS,
+        DocumentJob.Status.CANCELLED: PaperlessTask.Status.REVOKED,
+        DocumentJob.Status.FAILED: PaperlessTask.Status.FAILURE,
+        DocumentJob.Status.REJECTED: PaperlessTask.Status.FAILURE,
+        DocumentJob.Status.ATTENTION: PaperlessTask.Status.FAILURE,
+    }.get(status)
+
+
 def sync_terminal_task(job: DocumentJob) -> None:
     """Record terminal processor failures without requiring a Celery callback."""
-    from documents.models import PaperlessTask
     from paperless_worker.outcome_helper import apply_outcome
 
-    if job.status not in {
-        DocumentJob.Status.FAILED,
-        DocumentJob.Status.REJECTED,
-        DocumentJob.Status.ATTENTION,
-    }:
+    if task_history_status(job.status) != PaperlessTask.Status.FAILURE:
         return
     apply_outcome(
         str(job.pk),

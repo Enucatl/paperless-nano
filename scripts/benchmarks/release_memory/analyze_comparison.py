@@ -125,6 +125,8 @@ def summarize_window(
     process_rows: list[dict],
     all_memory: list[dict],
     events: list[dict],
+    *,
+    counter_not_before: float | None = None,
 ) -> dict:
     """Compute sample statistics and counter deltas with explicit time bounds."""
     result = {
@@ -140,6 +142,8 @@ def summarize_window(
     first, last = memory[0], memory[-1]
     index = all_memory.index(first)
     before = all_memory[index - 1] if index else first
+    if counter_not_before is not None and before["unix"] < counter_not_before:
+        before = first
     result.update(
         first_unix=first["unix"],
         last_unix=last["unix"],
@@ -198,7 +202,13 @@ def summarize_window(
             continue
         previous = all_memory[index - 1]
         seconds = row["unix"] - previous["unix"]
-        if seconds <= 0 or set(previous["services"]) != set(row["services"]):
+        if (
+            seconds <= 0
+            or set(previous["services"]) != set(row["services"])
+            or (
+                counter_not_before is not None and previous["unix"] < counter_not_before
+            )
+        ):
             continue
         for service, current in row["services"].items():
             old = previous["services"][service]
@@ -298,6 +308,11 @@ def analyze_run(path: Path) -> dict:
     }
     starts = {s["phase"]: s["started_unix"] for s in retained.get("snapshots", [])}
     ends = {s["phase"]: s["unix"] for s in retained.get("snapshots", [])}
+    idle_bounds = {
+        s["phase"]: s["started_unix"]
+        for s in retained.get("snapshots", [])
+        if s.get("lifecycle_observer_paused")
+    }
     phases = list(dict.fromkeys(row["phase"] for row in full_memory))
     for phase in phases:
         selected_memory = [row for row in full_memory if row["phase"] == phase]
@@ -322,7 +337,13 @@ def analyze_run(path: Path) -> dict:
                 for row in selected_process
                 if lower is None or lower <= row["unix"] < upper
             ]
-            result["phases"][phase][name] = summarize_window(ms, ps, memory, events)
+            result["phases"][phase][name] = summarize_window(
+                ms,
+                ps,
+                memory,
+                events,
+                counter_not_before=idle_bounds.get(phase),
+            )
     for row in full_process:
         for process in processes(row):
             identity = process["identity"]

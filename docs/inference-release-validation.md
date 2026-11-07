@@ -1183,3 +1183,69 @@ excluded from release requirements and will not be performed. Chat and
 alternative search are outside this release. Immutable artifact publication/source publication and
 the actual production cutover are separate steps; neither is implied by local
 test success. The existing installation has not been replaced.
+
+## Observer correction and matched control (2026-11-07)
+
+Issue [#58](https://github.com/Enucatl/paperless-ngx/issues/58) changes only the
+benchmark instrumentation. It does not change application architecture or
+revalidate any historical memory, latency, CPU or broker measurements above.
+The earlier idle CPU attribution and its original control remain evidence for
+the observer version actually measured there.
+
+The current observer checks row identity and PostgreSQL tuple version (`xmin`)
+and projects sanitized diagnostics only for changed rows. Version and detail
+reads share one SQL statement/snapshot. It still detects result-only journal
+writes, new/deleted rows and reopened jobs, including versions with task rows
+but no DocumentJob table. The controller now waits for a completed-query pause
+acknowledgement before every nominal idle window and a fresh resume snapshot
+before the next workload, consistently across all compared versions. No SQL is
+issued while paused. Active tracing still polls at 100 ms and can miss short
+states; idle transitions are deliberately unobserved. Resume snapshots have no
+lower transition-time bound across that gap. A disconnected observer fails the
+run explicitly; a fresh process starts from a full snapshot rather than reusing
+its connection-local version cache.
+
+New result snapshots explicitly mark paused observation. Their idle CPU deltas
+exclude a preceding sample if it started before the recorded idle window;
+`counter_start_unix` and `counter_span_seconds` state the actual covered interval,
+which can be shorter than the nominal window by sampling boundaries. Historical
+captures without the marker keep their previous calculations. The remaining
+resource sampler's duration and pressure observations are still reported.
+
+A new disposable **PostgreSQL-only synthetic control** used 13 jobs, 100
+invocations, 1,209 dependency references and 16 task rows, matching the earlier
+diagnostic cardinalities without copying application payloads. It ran the old
+full-projection SQL, the new unchanged-row polling path and an idle connection
+in `full / versions / paused / paused / versions / full` order. Every window
+lasted approximately ten seconds; enabled windows executed exactly 100 queries.
+The same frozen images and database instance were used throughout, with warmup
+outside each window. No app, Celery, broker, model service or production data
+participated.
+
+| Observer mode                       | Per-observer PostgreSQL backend CPU, two 10 s windows | Diagnostic rows projected per window |
+| ----------------------------------- | ----------------------------------------------------: | -----------------------------------: |
+| Previous full projection at 10 Hz   |                                         0.28 / 0.26 s |           1,300 jobs and 1,600 tasks |
+| New version polling, unchanged rows |                                         0.06 / 0.06 s |                                    0 |
+| Paused during idle                  |                                         0.00 / 0.00 s |                            0; no SQL |
+
+These are **that observer connection's backend CPU**, sampled from its process
+counters at 10 ms resolution. They exclude PostgreSQL background-process CPU
+and are not total database or product idle CPU. Zero means below that counter's
+resolution. The median unchanged-row backend cost fell about **78%** in this
+small control. Client process CPU was also recorded separately. The synthetic
+fixture and short windows do not replace a matched full-stack benchmark and
+must not be subtracted from historical totals.
+
+The exact durations, query/row counts, order, client CPU and immutable image IDs
+are in [the sanitized control record](inference-observer-control-20261107.json).
+The [benchmark README](../scripts/benchmarks/release_memory/README.md#observer-correctness-and-overhead-control)
+documents the repeatable control and correctness commands. Eleven focused checks
+passed against disposable PostgreSQL and the driver/analyzers, covering
+unchanged/result-only changes, concurrent snapshot consistency,
+deletion/reinsertion/reopening, the legacy schema, pause/resume,
+partial acknowledgement records, fail-closed disconnect/fresh restart, secret
+filtering and historical/new counter boundaries. Existing observer, driver,
+comparison and latency self-checks passed too. All ran in disposable
+`docker run --rm --userns=host` containers; temporary containers and the network
+were removed, and database storage was tmpfs. No full-corpus, long-duration or
+live model benchmark was performed for this instrumentation correction.

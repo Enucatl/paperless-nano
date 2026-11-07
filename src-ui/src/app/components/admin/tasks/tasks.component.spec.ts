@@ -248,7 +248,11 @@ describe('TasksComponent', () => {
     component.pagedTasks.set([
       {
         ...tasks[0],
-        operation: { name: 'parser.process', status, error: 'Endpoint unavailable' },
+        operation: {
+          name: 'parser.process',
+          status,
+          error: 'Endpoint unavailable',
+        },
       },
     ])
     fixture.detectChanges()

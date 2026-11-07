@@ -735,7 +735,7 @@ def test_internal_engine_declaration_is_enforced(sample_doc, provider, changed):
     job = jobs.stage_reprocess(sample_doc.pk)
     with pytest.raises(
         jobs.RejectedResult,
-        match="(Selected parser changed|Processing configuration or provider changed)",
+        match=r"(Selected parser changed|Processing configuration or provider changed)",
     ):
         jobs.run_reprocess(job.pk)
     sample_doc.refresh_from_db()

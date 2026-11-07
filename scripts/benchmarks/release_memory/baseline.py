@@ -8,6 +8,8 @@ Mount the same private inference secret files used by the candidate. Never point
 these environments at the production database, broker or Paperless API.
 """
 
+# ruff: noqa: INP001
+
 import json
 from collections.abc import Callable
 from typing import Any

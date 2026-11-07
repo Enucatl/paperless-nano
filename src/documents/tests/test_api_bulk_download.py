@@ -13,6 +13,7 @@ from documents.models import Correspondent
 from documents.models import Document
 from documents.models import DocumentType
 from documents.tests.utils import SampleDirMixin
+from documents.updates import save_document_metadata
 from paperless_testing.dirs import DirectoriesMixin
 from paperless_testing.factories import UserFactory
 from paperless_testing.http import read_streaming_response
@@ -191,13 +192,12 @@ class TestBulkDownload(DirectoriesMixin, SampleDirMixin, APITestCase):
         c = Correspondent.objects.create(name="test")
         c2 = Correspondent.objects.create(name="a space name")
 
-        self.doc2.correspondent = c
-        self.doc2.title = "This is Doc 2"
-        self.doc2.save()
-
-        self.doc3.correspondent = c2
-        self.doc3.title = "Title 2 - Doc 3"
-        self.doc3.save()
+        save_document_metadata(
+            self.doc2, {"correspondent": c, "title": "This is Doc 2"}
+        )
+        save_document_metadata(
+            self.doc3, {"correspondent": c2, "title": "Title 2 - Doc 3"}
+        )
 
         response = self.client.post(
             self.ENDPOINT,
@@ -240,11 +240,8 @@ class TestBulkDownload(DirectoriesMixin, SampleDirMixin, APITestCase):
             - Files in resulting zipfile are formatted
         """
 
-        self.doc2.title = "This is Doc 2"
-        self.doc2.save()
-
-        self.doc3.title = "Title 2 - Doc 3"
-        self.doc3.save()
+        save_document_metadata(self.doc2, {"title": "This is Doc 2"})
+        save_document_metadata(self.doc3, {"title": "Title 2 - Doc 3"})
 
         response = self.client.post(
             self.ENDPOINT,
@@ -286,13 +283,12 @@ class TestBulkDownload(DirectoriesMixin, SampleDirMixin, APITestCase):
         dc1 = DocumentType.objects.create(name="bill")
         dc2 = DocumentType.objects.create(name="statement")
 
-        self.doc2.document_type = dc1
-        self.doc2.title = "This is Doc 2"
-        self.doc2.save()
-
-        self.doc3.document_type = dc2
-        self.doc3.title = "Title 2 - Doc 3"
-        self.doc3.save()
+        save_document_metadata(
+            self.doc2, {"document_type": dc1, "title": "This is Doc 2"}
+        )
+        save_document_metadata(
+            self.doc3, {"document_type": dc2, "title": "Title 2 - Doc 3"}
+        )
 
         response = self.client.post(
             self.ENDPOINT,

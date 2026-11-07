@@ -259,8 +259,13 @@ class TestTaskPostrunHandler:
             date_started=timezone.now(),
         )
 
-    def test_records_success_with_dict_result(self) -> None:
+    @pytest.mark.parametrize(
+        "task_id", ["00000000-0000-4000-8000-000000000001", "legacy-task-id"]
+    )
+    def test_records_success_with_dict_result(self, task_id: str) -> None:
         task = self._started_task()
+        task.task_id = task_id
+        task.save(update_fields=["task_id"])
 
         task_postrun_handler(
             task_id=task.task_id,
@@ -273,6 +278,18 @@ class TestTaskPostrunHandler:
         assert task.date_done is not None
         assert task.duration_seconds is not None
         assert task.wait_time_seconds is not None
+
+    def test_duplicate_result_remains_a_failure(self) -> None:
+        """A successful invocation can still report a duplicate document."""
+        task = self._started_task()
+        task_postrun_handler(
+            task_id=task.task_id,
+            retval={"duplicate_of": 42},
+            state="SUCCESS",
+        )
+        task.refresh_from_db()
+        assert task.status == PaperlessTask.Status.FAILURE
+        assert task.result_data == {"duplicate_of": 42}
 
     def test_skips_failure_state(self) -> None:
         """postrun skips FAILURE; task_failure_handler owns that path."""

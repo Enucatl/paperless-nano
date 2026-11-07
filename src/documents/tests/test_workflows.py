@@ -77,6 +77,8 @@ from paperless_testing.factories import UserFactory
 from paperless_testing.permissions import grant_global
 from paperless_testing.permissions import grant_object
 
+pytestmark = pytest.mark.usefixtures("queued_document_processor")
+
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("attachment_type", ["email", "webhook"])

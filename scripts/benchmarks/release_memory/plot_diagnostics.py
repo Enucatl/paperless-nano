@@ -1,5 +1,7 @@
 """Plot retained release diagnostics without changing historical artifacts."""
 
+# ruff: noqa: INP001
+
 import argparse
 import json
 import statistics
@@ -90,7 +92,7 @@ def comparison_summary(plt, source: Path, target: Path) -> None:
     variants = (
         ("baseline", "Legacy", "#3066be"),
         ("candidate", "Polling", "#b279a2"),
-        ("current", "Current 60s", "#54a24b"),
+        ("current", "Current", "#54a24b"),
     )
     output = {}
     for x, (variant, label, color) in enumerate(variants):
@@ -170,9 +172,9 @@ def comparison_summary(plt, source: Path, target: Path) -> None:
     figure.text(
         0.07,
         0.025,
-        "Circles: repetition 1. Squares: repetition 2. RAM and CPU use seconds 60–300 of the final idle window; latency shows all three uploads per run.\n"
-        "CPU includes all services, scheduled work and observer SQL in PostgreSQL; 1 CPU-s/min = 1.67% of one core.\n"
-        "The first 60 seconds are excluded to separate child retention from steady observation; both intervals remain in the numeric data.",
+        "Circles: repetition 1. Squares: repetition 2. RAM and CPU use seconds 60-300 of the final idle window; latency shows all three uploads per run.\n"
+        "CPU includes all services and scheduled work; observer SQL contributes only while tracing is active. 1 CPU-s/min = 1.67% of one core.\n"
+        "The first 60 seconds are reported separately; both intervals remain in the numeric data.",
         fontsize=9,
         color="#444444",
     )
@@ -185,9 +187,9 @@ def comparison_summary(plt, source: Path, target: Path) -> None:
 
 def main() -> None:
     """Export service-memory and accounting figures plus their numeric series."""
-    import matplotlib
+    import matplotlib as mpl
 
-    matplotlib.use("Agg")
+    mpl.use("Agg")
     import matplotlib.pyplot as plt
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -205,7 +207,7 @@ def main() -> None:
         variants = [
             ("baseline1", "Legacy: six services"),
             ("candidate1", "Polling: three services"),
-            ("current1", "Current: 60s child retention"),
+            ("current1", "Current"),
         ]
     figure, axes = plt.subplots(
         2, len(variants), figsize=(6.5 * len(variants), 8), sharex=True, sharey="row"
@@ -307,8 +309,8 @@ def main() -> None:
         0.07,
         0.025,
         (
-            "Orange bands: named upload/browse phases. Idle starts after metadata-title search converges; scheduled work and observer SQL remain active.\n"
-            "Real elapsed time is retained. Current retains a processor child for up to 60 seconds after work. PSS sampling may miss brief peaks.\n"
+            "Orange bands: named upload/browse phases. Idle starts after metadata-title search converges; lifecycle tracing follows the capture's recorded pause settings.\n"
+            "Real elapsed time and each capture's processor configuration are retained. PSS sampling may miss brief peaks.\n"
             "This figure shows repetition 1 only; the companion summary shows both repetitions. Individual lifetime peaks are not summed into these curves."
         )
         if args.comparison

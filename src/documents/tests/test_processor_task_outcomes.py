@@ -1,12 +1,14 @@
 """Processor failure completion does not depend on another Celery delivery."""
 
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from django.utils import timezone
 
 from documents import jobs
+from documents.job_state import sync_terminal_task
 from documents.models import DocumentJob
 from documents.models import PaperlessTask
 from documents.search_operations import run_search
@@ -111,6 +113,112 @@ def test_duplicate_celery_delivery_preserves_processor_failure():
     assert task.status == PaperlessTask.Status.FAILURE
     assert task.date_done == completed
     assert task.result_data == {"error_message": "endpoint down"}
+
+
+@pytest.mark.parametrize(
+    "job_status,expected",
+    [
+        ("waiting", PaperlessTask.Status.STARTED),
+        ("succeeded", PaperlessTask.Status.SUCCESS),
+        ("cancelled", PaperlessTask.Status.REVOKED),
+        ("failed", PaperlessTask.Status.FAILURE),
+        ("rejected", PaperlessTask.Status.FAILURE),
+        ("attention", PaperlessTask.Status.FAILURE),
+    ],
+)
+def test_postrun_uses_durable_job_completion(job_status: str, expected: str) -> None:
+    """Job completion governs history while Celery still owns its result data."""
+    from documents.signals.handlers import task_postrun_handler
+
+    job = DocumentJob.objects.create(timeout=30, status=job_status)
+    started = timezone.now() - timedelta(seconds=5)
+    task = PaperlessTaskFactory(
+        task_id=str(job.pk),
+        status=PaperlessTask.Status.STARTED,
+        date_created=started - timedelta(seconds=2),
+        date_started=started,
+    )
+    result = {"error_message": "retained diagnostic"}
+    task_postrun_handler(task_id=task.task_id, state="SUCCESS", retval=result)
+    task.refresh_from_db()
+    assert task.status == expected
+    if job_status == "waiting":
+        assert task.date_done is None
+        assert task.result_data is None
+        assert task.duration_seconds is None
+        assert task.wait_time_seconds is None
+    else:
+        assert task.result_data == result
+        assert task.duration_seconds >= 5
+        assert task.wait_time_seconds == 2
+        completed = task.date_done
+        task_postrun_handler(
+            task_id=task.task_id, state="SUCCESS", retval={"late": True}
+        )
+        task.refresh_from_db()
+        assert task.status == expected
+        assert task.result_data == result
+        assert task.date_done == completed
+
+
+@pytest.mark.parametrize("delivery", ["signal", "lean"])
+@pytest.mark.parametrize("status", ["failed", "rejected", "attention"])
+def test_native_failure_retains_its_diagnostic_for_terminal_job(
+    delivery: str,
+    status: str,
+    tmp_path: Path,
+    mocker,
+) -> None:
+    """Both native failure paths retain their own errors for failed jobs."""
+    from documents.signals.handlers import task_failure_handler
+    from paperless_worker.outcome_helper import drain
+    from paperless_worker.outcomes import OutcomeWriter
+
+    job = DocumentJob.objects.create(timeout=30, status=status, error="job diagnostic")
+    task = PaperlessTaskFactory(
+        task_id=str(job.pk),
+        task_type=PaperlessTask.TaskType.SEARCH_MAINTENANCE,
+        status=PaperlessTask.Status.STARTED,
+    )
+    if delivery == "signal":
+        task_failure_handler(
+            task_id=task.task_id, exception=RuntimeError("native error")
+        )
+    else:
+        writer = OutcomeWriter(
+            tmp_path, {"documents.search_operations.run_search": task.task_type}
+        )
+        mocker.patch.object(writer, "tick")
+        writer.record_failed(
+            task.task_id,
+            "documents.search_operations.run_search",
+            "RuntimeError",
+            "native error",
+        )
+        assert drain(writer.directory)
+    task.refresh_from_db()
+    assert task.status == PaperlessTask.Status.FAILURE
+    assert task.result_data == {
+        "error_type": "RuntimeError",
+        "error_message": "native error",
+    }
+    assert task.date_done is not None
+
+
+@pytest.mark.parametrize(
+    "status", ["queued", "waiting", "running", "committed", "succeeded", "cancelled"]
+)
+def test_terminal_sync_does_not_deliver_nonfailure_outcomes(status: str) -> None:
+    """The failure-only synchronization path cannot become a success writer."""
+    job = DocumentJob.objects.create(timeout=30, status=status)
+    task = PaperlessTaskFactory(
+        task_id=str(job.pk), status=PaperlessTask.Status.STARTED
+    )
+    sync_terminal_task(job)
+    task.refresh_from_db()
+    assert task.status == PaperlessTask.Status.STARTED
+    assert task.date_done is None
+    assert task.result_data is None
 
 
 @pytest.mark.parametrize("delivery", ["signal", "lean"])

@@ -29,7 +29,11 @@ from paperless_testing.factories import TagFactory
 from paperless_testing.factories import UserFactory
 from paperless_testing.permissions import grant_object
 
-pytestmark = [pytest.mark.search, pytest.mark.django_db]
+pytestmark = [
+    pytest.mark.search,
+    pytest.mark.django_db,
+    pytest.mark.usefixtures("queued_search_processor"),
+]
 
 # Extensions of actual Tantivy segment data files, as opposed to its own
 # bookkeeping files (meta.json, .managed.json, lock files).
@@ -940,12 +944,12 @@ class TestRebuild:
         """
         DocumentFactory.create()
 
-        def die(pairs):
+        def die():
             raise RuntimeError("terminating connection due to administrator command")
             yield  # pragma: no cover
 
         with pytest.raises(RuntimeError):
-            backend.rebuild(Document.objects.all(), iter_wrapper=die)
+            backend.provider.rebuild(die())
 
         assert needs_rebuild(paperless_dirs.index_dir) is True
 
@@ -972,6 +976,8 @@ class TestRebuild:
 
         backend.rebuild(Document.objects.all())
 
+        backend.close()
+        backend.open()
         ids = backend.search_ids(
             "group secret",
             user=group_member,
@@ -1045,6 +1051,8 @@ class TestCreatedDateOutOfRange:
         with caplog.at_level(logging.WARNING, logger="paperless.search"):
             backend.rebuild(Document.objects.all())
 
+        backend.close()
+        backend.open()
         assert sorted(backend.search_ids("rebuildcontent", user=None)) == sorted(
             [good.pk, bad.pk],
         )

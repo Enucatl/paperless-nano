@@ -104,6 +104,8 @@ def _run_document_workflow(configuration: str) -> None:
     _assert_disabled_modules_absent("configuration and registration")
 
     user = User.objects.create(username="operator", is_superuser=True, is_staff=True)
+    settings.PROCESSOR_USER = user.username
+    settings.PROCESSOR_CAPABILITIES = ("parser", "metadata", "search", "ingestion")
     client = APIClient()
     client.force_authenticate(user=user)
     if configuration == "deployment":

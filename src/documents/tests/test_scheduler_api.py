@@ -15,6 +15,8 @@ from rest_framework.test import APIClient
 from documents import scheduler_api
 from documents.models import PaperlessTask
 from paperless.settings.custom import parse_beat_schedule
+from paperless_mail.tests.factories import MailAccountFactory
+from paperless_mail.tests.factories import MailRuleFactory
 from paperless_testing.factories import UserFactory
 
 pytestmark = [pytest.mark.api, pytest.mark.django_db]
@@ -194,6 +196,77 @@ def test_calendar_uses_timezone_and_both_day_constraints(
     else:
         assert response.data == {"task_id": None, "skipped": True}
         publish.assert_not_called()
+
+
+def test_scheduled_mail_checks_live_rules_before_each_publication(
+    admin_client: APIClient,
+    job: dict,
+    mocker: MockerFixture,
+) -> None:
+    """Only an account with an enabled rule wakes a scheduled mail worker."""
+    job["task"] = "paperless_mail.tasks.process_mail_accounts"
+    publish = mocker.patch.object(
+        scheduler_api.app,
+        "send_task",
+        return_value=Mock(id="queued-mail-id"),
+    )
+
+    def dispatch(*, eligible: bool) -> None:
+        """Check the next dispatch against the current database state."""
+        publish.reset_mock()
+        response = admin_client.post(
+            ENDPOINT,
+            {"name": "Train the classifier"},
+            format="json",
+        )
+        assert response.status_code == 200
+        if eligible:
+            assert response.data == {"task_id": "queued-mail-id"}
+            publish.assert_called_once_with(
+                job["task"],
+                args=(),
+                kwargs={},
+                **job["options"],
+            )
+        else:
+            assert response.data == {"task_id": None, "skipped": True}
+            publish.assert_not_called()
+
+    dispatch(eligible=False)
+    account = MailAccountFactory()
+    dispatch(eligible=False)
+    rule = MailRuleFactory(account=account, enabled=False)
+    dispatch(eligible=False)
+    rule.enabled = True
+    rule.save()
+    dispatch(eligible=True)
+    rule.enabled = False
+    rule.save()
+    dispatch(eligible=False)
+    rule.delete()
+    rule = MailRuleFactory(account=account, enabled=True)
+    dispatch(eligible=True)
+    rule.delete()
+    dispatch(eligible=False)
+    MailRuleFactory(account=account, enabled=True)
+    dispatch(eligible=True)
+    account.delete()
+    dispatch(eligible=False)
+
+
+def test_manual_mail_fetch_without_enabled_rules(
+    admin_client: APIClient,
+    mocker: MockerFixture,
+) -> None:
+    """The manual API still publishes the requested account with no rules."""
+    account = MailAccountFactory()
+    publish = mocker.patch("paperless_mail.views.process_mail_accounts.apply_async")
+    response = admin_client.post(f"/api/mail_accounts/{account.pk}/process/")
+    assert response.status_code == 200
+    publish.assert_called_once_with(
+        kwargs={"account_ids": [account.pk]},
+        headers={"trigger_source": PaperlessTask.TriggerSource.MANUAL},
+    )
 
 
 def test_publication_keeps_signed_serializer_and_task_history(

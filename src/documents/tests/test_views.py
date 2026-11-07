@@ -28,7 +28,9 @@ from documents.models import StoragePath
 from documents.models import Tag
 from documents.models import UiSettings
 from documents.signals.handlers import update_llm_suggestions_cache
+from paperless.config import AIConfig
 from paperless.models import ApplicationConfiguration
+from paperless_ai.ai_classifier import ai_classification_identity
 from paperless_ai.exceptions import LLMProviderError
 from paperless_ai.exceptions import LLMTimeoutError
 from paperless_testing.dirs import DirectoriesMixin
@@ -415,13 +417,14 @@ class TestAISuggestions(DirectoriesMixin, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["title"], "Cached Title")
         self.assertEqual(response.json()["tags"], [self.tag1.pk])
+        identity = ":".join(ai_classification_identity(AIConfig(), None))
         mock_get_cache.assert_called_once_with(
             self.document.pk,
-            backend=f"mock_backend:user={self.user.pk}",
+            backend=f"mock_backend:{identity}:user={self.user.pk}",
         )
         mock_refresh_cache.assert_called_once_with(
             self.document.pk,
-            backend=f"mock_backend:user={self.user.pk}",
+            backend=f"mock_backend:{identity}:user={self.user.pk}",
         )
 
     @patch("documents.views.get_llm_suggestion_cache")
@@ -554,10 +557,11 @@ class TestAISuggestions(DirectoriesMixin, TestCase):
             self.user,
             "de-de",
         )
+        identity = ":".join(ai_classification_identity(AIConfig(), "de-de"))
         self.assertEqual(
             get_llm_suggestion_cache(
                 self.document.pk,
-                backend=f"mock_backend:de-de:user={self.user.pk}",
+                backend=f"mock_backend:de-de:{identity}:user={self.user.pk}",
             ).suggestions["title"],
             "KI Title",
         )
@@ -593,10 +597,11 @@ class TestAISuggestions(DirectoriesMixin, TestCase):
             self.user,
             "fr-fr",
         )
+        identity = ":".join(ai_classification_identity(AIConfig(), "fr-fr"))
         self.assertEqual(
             get_llm_suggestion_cache(
                 self.document.pk,
-                backend=f"mock_backend:fr-fr:user={self.user.pk}",
+                backend=f"mock_backend:fr-fr:{identity}:user={self.user.pk}",
             ).suggestions["title"],
             "Titre IA",
         )
@@ -629,11 +634,12 @@ class TestAISuggestions(DirectoriesMixin, TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        # Cached under a key that carries model + endpoint...
+        identity = ":".join(ai_classification_identity(AIConfig(), None))
+        # The variant also retains the provider's configuration identity.
         self.assertIsNotNone(
             get_llm_suggestion_cache(
                 self.document.pk,
-                backend=(f"mock_backend:model-a:http://endpoint-a:user={self.user.pk}"),
+                backend=f"mock_backend:model-a:http://endpoint-a:{identity}:user={self.user.pk}",
             ),
         )
 
@@ -696,16 +702,17 @@ class TestAISuggestions(DirectoriesMixin, TestCase):
             second_user,
             None,
         )
+        identity = ":".join(ai_classification_identity(AIConfig(), None))
         self.assertIsNotNone(
             get_llm_suggestion_cache(
                 self.document.pk,
-                backend=f"mock_backend:user={second_user.pk}",
+                backend=f"mock_backend:{identity}:user={second_user.pk}",
             ),
         )
         self.assertIsNotNone(
             get_llm_suggestion_cache(
                 self.document.pk,
-                backend=f"mock_backend:user={self.user.pk}",
+                backend=f"mock_backend:{identity}:user={self.user.pk}",
             ),
         )
 

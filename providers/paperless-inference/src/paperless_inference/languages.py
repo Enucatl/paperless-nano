@@ -18,7 +18,7 @@ LANGUAGES = {
     "arz": "Egyptian Arabic",
     "mr": "Marathi",
     "vi": "Vietnamese",
-    "te": "Telugu",
+    "te": "Telugu",  # codespell:ignore te
     "sw": "Swahili",
     "ha": "Hausa",
     "tr": "Turkish",

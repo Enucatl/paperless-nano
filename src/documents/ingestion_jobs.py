@@ -435,6 +435,10 @@ def run_consumption(job_id: str, task_id: str | None = None) -> dict | None:
             and job.status == DocumentJob.Status.QUEUED
         ):
             job.status = DocumentJob.Status.REJECTED
+        elif job.status == DocumentJob.Status.RUNNING and not job.result.get(
+            "invocations"
+        ):
+            job.status = DocumentJob.Status.FAILED
         job.updated = timezone.now()
         job.save(update_fields=["status", "error", "updated"])
         raise

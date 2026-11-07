@@ -1,5 +1,7 @@
 """Compare isolated legacy and integrated OCR stacks on identical synthetic PDFs."""
 
+# ruff: noqa: INP001, T201
+
 import hashlib
 import json
 import os
@@ -503,13 +505,50 @@ def ingest(variant: str, identifier: int, pages: int, resources: dict) -> dict:
     return result
 
 
+def pause_observer(*, paused: bool) -> None:
+    """Wait for a completed-query pause or a fresh resume snapshot before proceeding."""
+    event = "observer_paused" if paused else "observer_resumed"
+    with (RUN_OUT / "jobs.jsonl").open("rb") as source:
+        source.seek(0, 2)
+        offset = source.tell()
+        if offset:
+            source.seek(-1, 2)
+        discard_partial = bool(offset and source.read(1) != b"\n")
+        docker("kill", "--signal", "USR1" if paused else "USR2", f"{PREFIX}-observer")
+        deadline = time.monotonic() + 15
+        pending = b""
+        while time.monotonic() < deadline:
+            pending += source.read()
+            lines = pending.split(b"\n")
+            pending = lines.pop()
+            if discard_partial and lines:
+                lines.pop(0)
+                discard_partial = False
+            if any(json.loads(line)["event"] == event for line in lines):
+                return
+            time.sleep(0.01)
+    raise RuntimeError(f"Lifecycle observer did not acknowledge {event}")
+
+
 def observe(phase: str) -> dict:
     """Observe one unchanged running stack for the full idle window."""
     global PHASE
+    PHASE = "observer-pause"
+    pause_observer(paused=True)
     PHASE = phase
     begin = time.time()
     time.sleep(IDLE)
-    return {"phase": phase, "started_unix": begin, "unix": time.time(), "pss": pss()}
+    end = time.time()
+    PHASE = "observer-resume"
+    snapshot = pss()
+    pause_observer(paused=False)
+    return {
+        "phase": phase,
+        "started_unix": begin,
+        "unix": end,
+        "pss": snapshot,
+        "lifecycle_observer_paused": True,
+    }
 
 
 SEED = """
@@ -692,6 +731,10 @@ def run(variant: str, number: int) -> dict:
                 "PAPERLESS_OCR_MODE": "off",
             }
             seed = SEED
+            if variant == "current":
+                seed = seed.replace('"ai_processed"', '"processing_date"').replace(
+                    '"ai_metadata"', '"audit"'
+                )
         # Match final ownership before running migrations outside the measured process.
         docker(
             "run",
@@ -867,6 +910,12 @@ def run(variant: str, number: int) -> dict:
             "api_ready_seconds": api_ready,
             "stack_ready_seconds": stack_ready,
             "idle_seconds": IDLE,
+            "lifecycle_observation": {
+                "active_interval_seconds": 0.1,
+                "row_version": "xmin",
+                "idle": "paused_with_acknowledgement",
+                "resume": "fresh_snapshot_without_lower_transition_bound",
+            },
             "services": SERVICES.copy(),
             "snapshots": snapshots,
             "workload": results,

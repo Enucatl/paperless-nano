@@ -174,7 +174,7 @@ class TestHighlightGuardDiscriminatesOnValueError:
             )
 
 
-@pytest.mark.usefixtures("_search_index")
+@pytest.mark.usefixtures("_search_index", "queued_search_processor")
 class TestApiNoLongerReturns500:
     """Pins the actual regression: a matching TEXT-mode search whose query
     string carries Tantivy syntax must return results, not a server error."""

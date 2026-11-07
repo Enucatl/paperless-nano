@@ -2,10 +2,11 @@
 
 import shutil
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
-from django.utils import timezone
 from django.core.exceptions import PermissionDenied
+from django.utils import timezone
 
 from documents import deferred_operations as operations
 from documents import jobs
@@ -208,6 +209,28 @@ def test_concurrent_edit_rejects_remote_ocr(sample_doc, remote, thumbnail_webp_f
     assert sample_doc.content == "User edit"
     job.refresh_from_db()
     assert job.status == "rejected"
+
+
+@pytest.mark.parametrize("operation", ["ocr", "metadata", "ocr_metadata"])
+def test_api_submission_missing_document(remote, operation: str) -> None:
+    """Missing targets return 404 without admitting jobs or bypassing authentication."""
+    from rest_framework.test import APIClient
+
+    client = APIClient()
+    request_id = str(uuid4())
+    data = {
+        "request_id": request_id,
+        "document_id": 2**31 - 1,
+        "operation": operation,
+    }
+    assert client.post("/api/operations/", data, format="json").status_code in {
+        401,
+        403,
+    }
+    client.force_authenticate(remote)
+    response = client.post("/api/operations/", data, format="json")
+    assert response.status_code == 404
+    assert not DocumentJob.objects.filter(pk=request_id).exists()
 
 
 def test_authenticated_api_claim_files_and_result(

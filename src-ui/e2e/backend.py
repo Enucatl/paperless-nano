@@ -43,6 +43,7 @@ def configure_environment(instance_root: Path) -> None:
 
 
 def seed_database() -> None:
+    from django.conf import settings
     from django.contrib.auth.models import Permission
     from django.contrib.auth.models import User
     from django.core.management import call_command
@@ -67,6 +68,14 @@ def seed_database() -> None:
     viewer = User.objects.create_user(
         username="viewer",
         password="viewer",  # NOSONAR
+    )
+    settings.PROCESSOR_USER = "e2e-search-processor"
+    settings.PROCESSOR_CAPABILITIES = ("search",)
+    call_command(
+        "document_processor_account",
+        user=settings.PROCESSOR_USER,
+        capability=["search"],
+        verbosity=0,
     )
 
     viewer.user_permissions.add(

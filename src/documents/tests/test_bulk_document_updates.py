@@ -83,6 +83,7 @@ def test_bulk_custom_fields_move_once_using_all_new_values(
     assert not original.exists()
 
 
+@pytest.mark.usefixtures("queued_search_processor")
 def test_bulk_custom_fields_defer_workflows_and_index_final_state(
     paperless_dirs: PaperlessDirs,
 ) -> None:

@@ -74,16 +74,75 @@ Redis and all app image IDs at controller startup so repeats cannot drift with t
 The currently available PostgreSQL 18 image can differ from the historical image;
 all fresh variants share it and the old measurements are not rewritten.
 
-A separate disposable observer uses one read-only PostgreSQL query per 100ms on
-both stacks. It records task lifecycle transitions, plus candidate job/invocation
-admission, waiting, leases, result staging and acceptance. Result/configuration
-payloads and lease tokens are excluded. Each observation includes database and
-client timing bounds; states committed and replaced between polls may be missed.
-Retained lease deadlines and job timeouts allow exact claim-time derivation even
-when the leased state was too brief to sample. Query overhead is measured in
-periodic summaries. The observer process is excluded from service memory, but its
-database connection/query cost remains in PostgreSQL and is reported. Successful
-baseline inference spans are exported after sampling, without payload attributes.
+A separate disposable observer uses one read-only PostgreSQL statement per
+100 ms during active phases on every compared version. The statement reads tuple
+versions (`xmin`) and projects sanitized details only for changed rows in that
+same database snapshot. Result-only journal writes are detected without relying
+on `updated`; membership checks retain new, deleted and reopened jobs. Versions
+without the job table use the same rule for task rows. Full snapshots are emitted
+at startup, resume and shutdown. Result/configuration payloads and lease tokens
+remain excluded.
+
+Before each idle window, the controller sends `SIGUSR1` and waits for
+`observer_paused`, emitted only after the last SQL statement has completed. The
+observer connection stays idle with **no SQL during the measured window**; memory
+and process sampling continue. After the window, `SIGUSR2` requests a fresh
+snapshot; the controller waits for `observer_resumed` before admitting the next
+workload. Pause/resume overhead has its own phase labels. Result snapshots record
+`lifecycle_observer_paused`; only these new idle summaries exclude CPU intervals
+starting before the recorded idle start. `counter_start_unix` and
+`counter_span_seconds` report the actual sampled coverage, which can be shorter
+than the nominal idle window. Historical captures without this marker retain
+their original counter calculations.
+
+States committed and replaced between active polls may be missed, and transitions
+during idle are deliberately unobserved. Resume snapshots reset their lower
+transition bound to `null`: a new snapshot must not imply timing precision across
+the gap. Retained lease deadlines and job timeouts can still derive claim times.
+The tuple-version cache lasts only one bounded benchmark connection; database
+disconnects emit a sanitized error and invalidate the run rather than reconnecting
+silently. A fresh observer starts with a full snapshot. This is not a durable
+event history or a production notification mechanism.
+
+Query overhead is measured in periodic summaries. The observer process is
+excluded from service memory, but active SQL cost remains included in PostgreSQL.
+Successful baseline inference spans are exported after sampling, without payload
+attributes. The [matched observer control](../../../docs/inference-release-validation.md#observer-correction-and-matched-control-2026-11-07)
+measures instrumentation separately; its result is not a product idle-CPU claim.
+
+### Observer correctness and overhead control
+
+`test_jobs_observer.py` uses an empty disposable PostgreSQL database supplied by
+the usual `PGHOST`, `PGDATABASE`, `PGUSER` and `PGPASSWORD` environment. Run it with
+`python -m pytest -c /dev/null test_jobs_observer.py` inside a disposable core image
+with pytest and psycopg. Its fixtures replace only the synthetic observer tables;
+never point this check at an application database. Existing script self-checks
+remain available.
+
+`observer_control.py` creates the same synthetic tables in another empty database
+and prints sanitized JSON for six ten-second windows in forward/reverse order:
+full projection, unchanged-row version polling, paused, paused, version polling,
+full projection. It measures the individual SQL backend's CPU, not database
+background processes or deployed Paperless. Share the PostgreSQL PID namespace
+so `/proc/<backend-pid>/stat` refers to that backend. For example, after starting a
+fresh `postgres:18` container named `observer-postgres` on an isolated
+`observer-control` network and waiting for readiness:
+
+```sh
+docker run --rm --userns=host --network observer-control \
+  --pid=container:observer-postgres \
+  -v "$PWD/scripts/benchmarks/release_memory:/harness:ro" \
+  -e PGHOST=observer-postgres -e PGDATABASE=observer \
+  -e PGUSER=postgres -e PGPASSWORD=disposable-control \
+  -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python \
+  YOUR_FROZEN_CORE_IMAGE /harness/observer_control.py
+```
+
+Use the same disposable password/database when provisioning that PostgreSQL
+container. Remove it and its temporary network/storage afterward. No app,
+Celery, Redis or model service participates in this PostgreSQL-only control.
+Run long controls through `wake-run` in the main Codex thread, as required by the
+repository instructions.
 
 `launch.py` uses the host's existing SSH authentication to stream `remote.py`
 observations directly into Docker storage. It observes the existing OCR
@@ -123,6 +182,11 @@ Build a frozen source snapshot with the included Dockerfile, using the retained
 dependency image as its base, and tag it `paperless-release-celery:issue52` (or
 set `BENCH_CURRENT_IMAGE`). The Dockerfile removes inherited processor service
 files as well as copying the current source and S6 configuration.
+It also overlays the current provider package on the retained Python 3.14
+dependencies. Verify the base tag resolves to image
+`sha256:6824eec4681c4087dbff484efab2b1da399c7b0e3adfd614ed78afbabfa6fc1a`
+before building. The current variant seeds `processing_date` and `audit` by
+their exact names; historical variants retain their field-ID mapping and names.
 
 Run the self-checks in disposable containers before the experiment, then use
 the repository's `wake-run` workflow to invoke:

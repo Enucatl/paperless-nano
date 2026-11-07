@@ -202,7 +202,9 @@ describe('Additional service tests for UserService', () => {
   it('should allow revoking processor permissions', () => {
     subscription = service.listAll().subscribe()
     httpTestingController
-      .expectOne(`${environment.apiBaseUrl}${endpoint}/?page=1&page_size=100000`)
+      .expectOne(
+        `${environment.apiBaseUrl}${endpoint}/?page=1&page_size=100000`
+      )
       .flush({
         results: [
           {

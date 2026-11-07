@@ -1,5 +1,7 @@
 """Summarize remote resources within the completed matched-pair time windows."""
 
+# ruff: noqa: INP001, T201
+
 import json
 import statistics
 import sys

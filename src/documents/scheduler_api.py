@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from paperless.celery import app
+from paperless_mail.models import MailRule
 
 
 class SuperuserPermission(BasePermission):
@@ -84,6 +85,11 @@ class SchedulerAPIView(APIView):
             and now.day in schedule.day_of_month
             and now.month in schedule.month_of_year
             and now.isoweekday() % 7 in schedule.day_of_week
+        ):
+            return Response({"task_id": None, "skipped": True})
+        if (
+            entry["task"] == "paperless_mail.tasks.process_mail_accounts"
+            and not MailRule.objects.filter(enabled=True).exists()
         ):
             return Response({"task_id": None, "skipped": True})
         result = app.send_task(
