@@ -80,12 +80,14 @@ pending work through core's retained snapshots. A model name must identify an
 immutable deployment: a server silently replacing weights under the same name
 cannot be detected by this API. Cancellation does not undo a billed request.
 
-## Select providers for the pull client
+<a id="select-providers-for-the-pull-client"></a>
 
-The pull client loads installed classes from its local `PAPERLESS_PARSER` and
+## Select providers for the remote processor
+
+Paperless Processor (`python -m paperless_inference.processor`) loads installed classes from its local `PAPERLESS_PARSER` and
 `PAPERLESS_ENRICHMENT_PROVIDER` settings, using the same dotted class paths as
 core. Their defaults are this package's `PaddleOCRProvider` and `MetadataProvider`,
-preserving the existing client selection. The claim never supplies an import
+preserving the existing client selection. See the [remote processor deployment and upgrade guide](../../docs/processor-deployment.md#remote-processor-pull-execution) for the separate processor container and state-preserving upgrade path. The claim never supplies an import
 path for the client to execute. Installing a package alone does not select it.
 
 To use another implementation, install its locked package and dependencies into

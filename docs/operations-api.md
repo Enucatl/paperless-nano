@@ -33,7 +33,7 @@ The examples below use ordinary token authentication:
 `Authorization: Token <account-api-token>`. This is the account's API token,
 not an operation claim token. The shipped client reads its account token from
 `PAPERLESS_API_TOKEN_FILE=/run/secrets/paperless_api_token`, mounted by the
-[client Compose example](../providers/paperless-inference/compose.workstation.yml).
+[client Compose example](../providers/paperless-inference/compose.processor.yml).
 Use separate requester/administrator credentials in those callers' own secret
 files. All credentials, hashes, identifiers and content in examples are
 placeholders. Keep real API/model credentials in Compose secrets; do not put
@@ -191,7 +191,7 @@ hashes from these placeholders.
    computing. The operation envelope is version 2; parser and rich-metadata
    request/result contracts are version 1. The shipped client implements only
    `parser.process` and `metadata.enrich`, defaulting to `PaddleOCRProvider` and
-   `MetadataProvider`. See [provider selection and swapping](../providers/paperless-inference/README.md#select-providers-for-the-pull-client)
+   `MetadataProvider`. See [provider selection and swapping](../providers/paperless-inference/README.md#select-providers-for-the-remote-processor)
    for installing replacements and the portable-request limits. Generic file
    transport does not imply support for classification, thumbnails, search,
    ingestion or arbitrary journal operations.

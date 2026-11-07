@@ -2,6 +2,9 @@
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
@@ -16,9 +19,9 @@ from paperless.parsers.contract import resolve_reference
 from paperless_inference.provider_operations import ProviderMismatch
 from paperless_inference.providers import MetadataProvider
 from paperless_inference.providers import PaddleOCRProvider
-from paperless_inference.workstation import APIError
-from paperless_inference.workstation import Workstation
-from paperless_inference.workstation import map_files
+from paperless_inference.processor import APIError
+from paperless_inference.processor import Processor
+from paperless_inference.processor import map_files
 
 
 class AlternativeParser:
@@ -114,7 +117,7 @@ def worker(tmp_path):
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    instance = Workstation(
+    instance = Processor(
         f"http://127.0.0.1:{server.server_port}", token, tmp_path / "state"
     )
     yield instance, replies, calls
@@ -194,7 +197,7 @@ def test_metadata_delivery_retry_never_repeats_inference(worker, monkeypatch):
     replies[("GET", "/api/operations/?status=pending")] = (200, [])
     replies[("POST", base + "result/")] = (202, {"status": "staged"})
     monkeypatch.setenv("PAPERLESS_ENRICHMENT_PROVIDER", "not_installed.Provider")
-    restarted = Workstation(instance.url, instance.token_file, instance.state)
+    restarted = Processor(instance.url, instance.token_file, instance.state)
     assert restarted.run_once() == 0
     assert not restarted.pending.exists()
     assert compute.call_count == 1
@@ -317,7 +320,7 @@ def test_parser_private_transport_and_archive_reference(worker, monkeypatch, res
         monkeypatch.setenv("PAPERLESS_PARSER", "not_installed.Provider")
         replies[("POST", base + "result/")] = (202, {"status": "staged"})
         replies[("GET", "/api/operations/?status=pending")] = (200, [])
-        instance = Workstation(instance.url, instance.token_file, instance.state)
+        instance = Processor(instance.url, instance.token_file, instance.state)
         assert instance.run_once() == 0
         assert len([c for c in calls if c[1] == base + "files/"]) == 1
     else:
@@ -541,7 +544,7 @@ def test_unsupported_operation_is_not_claimed_or_executed(worker):
     operation = pending({"operation": "search.write"})
     replies[("GET", "/api/operations/?status=pending")] = (200, [operation])
     assert instance.run_once() == 0
-    with pytest.raises(ValueError, match="Unsupported workstation operation"):
+    with pytest.raises(ValueError, match="Unsupported remote processor operation"):
         instance.compute(
             {**operation, "version": 2, "status": "leased", "remote_allowed": True},
             "/unused/",
@@ -560,3 +563,60 @@ def test_file_transport_walks_explicit_nested_references():
         "text": "unchanged",
     }
     transfer.assert_called_once_with(reference)
+
+
+@pytest.mark.parametrize("module", ["processor", "workstation"])
+@pytest.mark.parametrize(
+    "settings", ["legacy", "new", "new_precedes_legacy", "empty_new_uses_legacy"]
+)
+def test_renamed_cli_preserves_pending_delivery(worker, monkeypatch, module, settings):
+    """Both commands reuse private state without loading a replacement provider."""
+    from paperless_inference.workstation import Workstation
+
+    assert Workstation is Processor
+    instance, replies, calls = worker
+    record = {
+        "job_id": str(uuid4()),
+        "key": "metadata",
+        "token": "retained-claim-token",
+        "result": {
+            "version": 1,
+            "revision": "retained-revision",
+            "identity": {"provider": "old:1", "model": "fixed", "prompt": "fixed"},
+            "title": "Computed before the rename",
+        },
+        "url": instance.url,
+    }
+    Workstation(instance.url, instance.token_file, instance.state).save(record)
+    base = instance.base(record["job_id"], record["key"])
+    replies[("POST", base + "result/")] = (202, {"status": "staged"})
+    replies[("GET", "/api/operations/?status=pending")] = (200, [])
+    monkeypatch.setenv("PAPERLESS_URL", instance.url)
+    monkeypatch.setenv("PAPERLESS_API_TOKEN_FILE", str(instance.token_file))
+    monkeypatch.setenv("PAPERLESS_PARSER", "uninstalled.Replacement")
+    monkeypatch.setenv("PAPERLESS_ENRICHMENT_PROVIDER", "uninstalled.Replacement")
+    for name in ("PAPERLESS_PROCESSOR_STATE_DIR", "PAPERLESS_WORKSTATION_STATE_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    if settings in {"new", "new_precedes_legacy"}:
+        monkeypatch.setenv("PAPERLESS_PROCESSOR_STATE_DIR", str(instance.state))
+    if settings in {"legacy", "empty_new_uses_legacy"}:
+        monkeypatch.setenv("PAPERLESS_WORKSTATION_STATE_DIR", str(instance.state))
+    elif settings == "new_precedes_legacy":
+        monkeypatch.setenv(
+            "PAPERLESS_WORKSTATION_STATE_DIR", str(instance.state.parent / "unused")
+        )
+    if settings == "empty_new_uses_legacy":
+        monkeypatch.setenv("PAPERLESS_PROCESSOR_STATE_DIR", "")
+    completed = subprocess.run(
+        [sys.executable, "-m", "paperless_inference." + module, "--once"],
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(completed.stdout) == {"completed_operations": 0}
+    assert completed.stderr == ""
+    assert not instance.pending.exists()
+    assert (instance.state / "worker.lock").is_file()
+    submissions = [json.loads(c[3]) for c in calls if c[1].endswith("result/")]
+    assert submissions == [{"token": record["token"], "result": record["result"]}]

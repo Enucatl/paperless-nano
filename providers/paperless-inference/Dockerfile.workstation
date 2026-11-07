@@ -1,8 +1,1 @@
-# Use the same immutable core/provider image as the Paperless server.
-ARG PAPERLESS_IMAGE
-FROM ${PAPERLESS_IMAGE}
-USER root
-RUN install -d -o 1000 -g 1000 /workstation
-ENV PAPERLESS_WORKSTATION_STATE_DIR=/workstation
-USER 1000:1000
-ENTRYPOINT ["python", "-m", "paperless_inference.workstation"]
+Dockerfile.processor

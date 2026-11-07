@@ -95,4 +95,4 @@ def compute(claim: dict, root: Path) -> dict:
         ):
             raise ProviderMismatch("Metadata provider changed during execution")
         return result
-    raise ValueError("Unsupported workstation operation")
+    raise ValueError("Unsupported remote processor operation")
