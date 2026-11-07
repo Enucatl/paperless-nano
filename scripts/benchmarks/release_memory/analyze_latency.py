@@ -466,7 +466,7 @@ def main(source: Path, output: Path) -> None:
                     remote_last = row["unix"]
                     remote_count += 1
     result = {
-        "method": "Claim times are derived from retained lease_until minus job timeout. Queue/staging/acceptance times are bounded by consecutive database observations requested every 100ms; intermediate transitions can be missed. Metadata child IDs use the source-defined uuid5(parent, metadata). Search association uses creation windows, not query-result equality. Process identities are sampled once per second; their counts and observed lifetimes are lower bounds, while start_ticks differences use this host kernel's clock frequency.",
+        "method": "Claim times are derived from retained lease_until minus job timeout. Queue/staging/acceptance times are bounded by consecutive database observations requested every 100ms while tracing is active; intermediate transitions can be missed. Captures may pause lifecycle tracing during idle; resumed snapshots have null lower transition bounds across that gap. Metadata child IDs use the source-defined uuid5(parent, metadata). Search association uses creation windows, not query-result equality. Process identities are sampled once per second; their counts and observed lifetimes are lower bounds, while start_ticks differences use this host kernel's clock frequency.",
         "remote": {
             "first_unix": remote_first,
             "last_unix": remote_last,

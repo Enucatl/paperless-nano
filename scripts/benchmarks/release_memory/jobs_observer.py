@@ -1,5 +1,7 @@
 """Observe isolated task/job transitions without Django or payload capture."""
 
+# ruff: noqa: INP001
+
 import hashlib
 import json
 import signal
@@ -87,6 +89,45 @@ FROM documents_paperlesstask
 """
 
 
+def poll(connection, *, has_jobs: bool, jobs: dict, tasks: dict) -> tuple:
+    """Fetch row versions and changed diagnostics in one PostgreSQL snapshot."""
+    # shortcut: xmin keys are a bounded-run cache; restart with a full snapshot after disconnects.
+    job_versions = (
+        "SELECT COALESCE(jsonb_object_agg(id, xmin::text), '{}'::jsonb) "
+        "FROM documents_documentjob"
+    )
+    task_versions = (
+        "SELECT COALESCE(jsonb_object_agg(task_id, xmin::text), '{}'::jsonb) "
+        "FROM documents_paperlesstask"
+    )
+    query = (
+        "SELECT clock_timestamp(), statement_timestamp(), ("
+        + (job_versions if has_jobs else "SELECT '{}'::jsonb")
+        + "), ("
+        + (
+            JOBS_QUERY + " WHERE id::text || ':' || xmin::text <> ALL(%s)"
+            if has_jobs
+            else "SELECT '[]'::jsonb"
+        )
+        + "), ("
+        + task_versions
+        + "), ("
+        + TASKS_QUERY
+        + " WHERE task_id || ':' || xmin::text <> ALL(%s))"
+    )
+    parameters = (
+        [
+            [*RESULT_FIELDS, "followup"],
+            [*ENTRY_FIELDS, "policy", "dependencies", "error"],
+            [f"{key}:{version}" for key, version in jobs.items()],
+        ]
+        if has_jobs
+        else []
+    )
+    parameters.append([f"{key}:{version}" for key, version in tasks.items()])
+    return connection.execute(query, parameters).fetchone()
+
+
 def error_summary(error: Any) -> dict:
     """Fingerprint errors without exposing embedded paths, text or credentials."""
     text = str(error or "")
@@ -163,8 +204,21 @@ def observe() -> None:
     import psycopg
 
     stop = threading.Event()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_: stop.set())
+    paused = threading.Event()
+    wake = threading.Event()
+
+    def control(signum, _frame) -> None:
+        """Handle idle boundaries only between completed database observations."""
+        if signum == signal.SIGUSR1:
+            paused.set()
+        elif signum == signal.SIGUSR2:
+            paused.clear()
+        else:
+            stop.set()
+        wake.set()
+
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1, signal.SIGUSR2):
+        signal.signal(signum, control)
     with psycopg.connect(
         autocommit=True,
         application_name="paperless-release-job-observer",
@@ -173,13 +227,6 @@ def observe() -> None:
         has_jobs = connection.execute(
             "SELECT to_regclass('documents_documentjob') IS NOT NULL",
         ).fetchone()[0]
-        query = (
-            "SELECT clock_timestamp(), statement_timestamp(), ("
-            + (JOBS_QUERY if has_jobs else "SELECT '[]'::jsonb")
-            + "), ("
-            + TASKS_QUERY
-            + ")"
-        )
         previous = {}
         previous_tasks = {}
         previous_poll = None
@@ -188,19 +235,30 @@ def observe() -> None:
         queries = 0
         total_query = 0.0
         max_query = 0.0
-        final = False
+        versions = {}
+        task_versions = {}
+        was_paused = False
         while True:
+            final = stop.is_set()
+            if paused.is_set() and not final:
+                if not was_paused:
+                    emit("observer_paused", observed_unix=time.time(), queries=queries)
+                    was_paused = True
+                wake.wait()
+                wake.clear()
+                continue
+            if was_paused:
+                previous_poll = None
+                previous_statement = None
+            snapshot = previous_poll is None or final
             started = time.monotonic()
             poll_unix = time.time()
-            db_clock, db_statement, rows, tasks = connection.execute(
-                query,
-                (
-                    [*RESULT_FIELDS, "followup"],
-                    [*ENTRY_FIELDS, "policy", "dependencies", "error"],
-                )
-                if has_jobs
-                else None,
-            ).fetchone()
+            db_clock, db_statement, versions, rows, task_versions, tasks = poll(
+                connection,
+                has_jobs=has_jobs,
+                jobs={} if snapshot else versions,
+                tasks={} if snapshot else task_versions,
+            )
             query_seconds = time.monotonic() - started
             observed = time.time()
             queries += 1
@@ -215,15 +273,21 @@ def observe() -> None:
                 "previous_db_statement_unix": previous_statement,
                 "query_seconds": query_seconds,
             }
-            current = {row["id"]: project(row) for row in rows}
+            current = {key: job for key, job in previous.items() if key in versions}
+            current.update({row["id"]: project(row) for row in rows})
             current_tasks = {
-                row["task_id"]: scalar_fields(row, TASK_FIELDS) for row in tasks
+                key: task
+                for key, task in previous_tasks.items()
+                if key in task_versions
             }
-            snapshot = previous_poll is None or final
+            current_tasks.update(
+                {row["task_id"]: scalar_fields(row, TASK_FIELDS) for row in tasks},
+            )
+            snapshot_name = "final" if final else "resumed" if was_paused else "initial"
             for job in current.values() if snapshot else changed(previous, current):
                 emit(
                     "job_snapshot" if snapshot else "job_transition",
-                    snapshot="final" if final else "initial" if snapshot else None,
+                    snapshot=snapshot_name if snapshot else None,
                     job=job,
                     **bounds,
                 )
@@ -234,7 +298,7 @@ def observe() -> None:
             ):
                 emit(
                     "task_snapshot" if snapshot else "task_transition",
-                    snapshot="final" if final else "initial" if snapshot else None,
+                    snapshot=snapshot_name if snapshot else None,
                     task=task,
                     **bounds,
                 )
@@ -257,14 +321,17 @@ def observe() -> None:
                     **bounds,
                 )
                 heartbeat = time.monotonic()
+            if was_paused and not final:
+                emit("observer_resumed", observed_unix=observed, queries=queries)
+            was_paused = False
             if final:
                 return
             previous = current
             previous_tasks = current_tasks
             previous_poll = poll_unix
             previous_statement = db_statement.timestamp()
-            stop.wait(max(0.0, INTERVAL - (time.monotonic() - started)))
-            final = stop.is_set()
+            wake.wait(max(0.0, INTERVAL - (time.monotonic() - started)))
+            wake.clear()
 
 
 def self_check() -> None:
@@ -325,6 +392,6 @@ if __name__ == "__main__":
     else:
         try:
             observe()
-        except Exception as error:  # noqa: BLE001 - Connection errors must not expose credentials.
+        except Exception as error:
             emit("observer_error", error_type=type(error).__name__)
             sys.exit(1)

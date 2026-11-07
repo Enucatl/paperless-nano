@@ -1,0 +1,67 @@
+{
+  "date": "2026-11-07",
+  "scope": "Synthetic PostgreSQL-only observer overhead; not deployed product CPU",
+  "cpu_scope": "Individual observer PostgreSQL backend user+system CPU from /proc/<pid>/stat",
+  "postgres_image": "sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583",
+  "postgres_package_version": "18.6-1.pgdg13+2",
+  "client_image": "sha256:ebd1c713ed5a6dab8960c8264d10cb91d9a3c5609e81ed038df73eeeaee662ea",
+  "fixture": { "jobs": 13, "invocations": 100, "dependencies": 1209, "tasks": 16 },
+  "interval_seconds": 0.1,
+  "cpu_tick_seconds": 0.01,
+  "windows": [
+    {
+      "mode": "full",
+      "wall_seconds": 10.000093160997494,
+      "queries": 100,
+      "projected_job_rows": 1300,
+      "projected_task_rows": 1600,
+      "sql_backend_cpu_seconds": 0.27999999999999997,
+      "client_cpu_seconds": 0.14739396800000004
+    },
+    {
+      "mode": "versions",
+      "wall_seconds": 10.00013393900008,
+      "queries": 100,
+      "projected_job_rows": 0,
+      "projected_task_rows": 0,
+      "sql_backend_cpu_seconds": 0.06,
+      "client_cpu_seconds": 0.068443547
+    },
+    {
+      "mode": "paused",
+      "wall_seconds": 10.000092017999123,
+      "queries": 0,
+      "projected_job_rows": 0,
+      "projected_task_rows": 0,
+      "sql_backend_cpu_seconds": 0.0,
+      "client_cpu_seconds": 0.00018779699999993404
+    },
+    {
+      "mode": "paused",
+      "wall_seconds": 10.000134168996738,
+      "queries": 0,
+      "projected_job_rows": 0,
+      "projected_task_rows": 0,
+      "sql_backend_cpu_seconds": 0.0,
+      "client_cpu_seconds": 0.000270674999999998
+    },
+    {
+      "mode": "versions",
+      "wall_seconds": 10.000084254003013,
+      "queries": 100,
+      "projected_job_rows": 0,
+      "projected_task_rows": 0,
+      "sql_backend_cpu_seconds": 0.06,
+      "client_cpu_seconds": 0.07075055400000008
+    },
+    {
+      "mode": "full",
+      "wall_seconds": 10.000089614000899,
+      "queries": 100,
+      "projected_job_rows": 1300,
+      "projected_task_rows": 1600,
+      "sql_backend_cpu_seconds": 0.25999999999999995,
+      "client_cpu_seconds": 0.14484498
+    }
+  ]
+}
