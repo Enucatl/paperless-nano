@@ -1,5 +1,9 @@
 # OCR and metadata processing through Celery
 
+See the [Operations API reference](operations-api.md) for the separate requester,
+remote processor, cancellation and administrator reconciliation flows, including
+permissions, HTTP examples and result-acceptance semantics.
+
 The supported example runs PostgreSQL, Redis, and one Paperless container with
 its web server, consumption watcher, scheduler, and autoscaling Celery worker. Model endpoints remain external. The installed OCR adapter currently
 accepts **PDF inputs only**; do not use this parser selection for a mixed-format
