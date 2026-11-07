@@ -163,7 +163,7 @@ ARG RUNTIME_PACKAGES="\
 RUN set -eux \
   echo "Installing system packages" \
     && apt-get update \
-    && apt-get install --yes --quiet --no-install-recommends ${RUNTIME_PACKAGES} \
+    && apt-get install --yes --quiet --no-install-recommends apt libapt-pkg7.0 ${RUNTIME_PACKAGES} \
     && echo "Installing pre-built updates" \
       && curl --fail --silent --no-progress-meter --show-error --location --remote-name-all \
         https://github.com/paperless-ngx/builder/releases/download/jbig2enc-trixie-v${JBIG2ENC_VERSION}/jbig2enc_${JBIG2ENC_VERSION}-1_${TARGETARCH}.deb \

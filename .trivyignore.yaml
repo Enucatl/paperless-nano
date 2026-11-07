@@ -2,4 +2,6 @@ misconfigurations:
   - id: DS-0002
     paths:
       - Dockerfile
-    statement: s6 starts as root for UID/GID remapping and volume ownership, then runs application services as paperless.
+      - scripts/benchmarks/idle_memory/Dockerfile
+      - scripts/benchmarks/release_memory/Dockerfile
+    statement: Paperless and its benchmark derivatives inherit s6 startup, which starts as root for UID/GID remapping and volume ownership, then runs application services as paperless.
