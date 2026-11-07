@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:python3.14-trixie-slim
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends apt libapt-pkg7.0 git default-jre-headless ghostscript fonts-dejavu-core \
+    && apt-get install --yes --no-install-recommends apt libapt-pkg7.0 zlib1g git default-jre-headless ghostscript fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 COPY providers/paperless-inference/install-verapdf.sh /tmp/install-verapdf.sh
 RUN /tmp/install-verapdf.sh && rm /tmp/install-verapdf.sh
