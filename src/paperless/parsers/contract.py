@@ -50,6 +50,7 @@ class ParserResult(TypedDict):
     thumbnail: FileReference | None
     archive_type: str | None
     provenance: NotRequired[dict]
+    worker: NotRequired[dict]
 
 
 class ParserProvider(Protocol):
@@ -184,6 +185,9 @@ def validate_result(
     identity: str,
 ) -> None:
     """Reject malformed results and changed or unsafe files."""
+    from documents.external_workers import PARSER_CONTRACT
+    from documents.external_workers import validate_worker
+
     if (
         request["version"] != 1
         or not isinstance(result, dict)
@@ -200,6 +204,20 @@ def validate_result(
         or not {"date", "archive", "thumbnail", "archive_type"} <= result.keys()
     ):
         raise InvalidParserResult("Invalid parser result or provider identity")
+    if identity == PARSER_CONTRACT or "worker" in result:
+        try:
+            validate_worker(result.get("worker"))
+        except ValueError as error:
+            raise InvalidParserResult(str(error)) from error
+    if identity == PARSER_CONTRACT:
+        if result.keys() - ParserResult.__annotations__.keys():
+            raise InvalidParserResult("Unknown external parser result fields")
+        if request["archive_policy"] == "always" and result["archive"] is None:
+            raise InvalidParserResult("The external parser must supply an archive")
+        if request["archive_policy"] == "never" and result["archive"] is not None:
+            raise InvalidParserResult("The external parser must not supply an archive")
+        if result["archive"] is not None and result["archive_type"] != "pdfa":
+            raise InvalidParserResult("External archives must use PDF/A")
     try:
         json.dumps(result, allow_nan=False)
         if result["date"] is not None:

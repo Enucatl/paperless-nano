@@ -1,7 +1,7 @@
 [project]
 name = "paperless-inference"
 version = "0.1.0"
-description = "OCR and rich metadata proposal providers for Paperless-ngx"
+description = "Standalone PaddleOCR and metadata worker for the Paperless operation API"
 requires-python = ">=3.14"
 license = "GPL-3.0-only"
 dependencies = [
@@ -29,7 +29,7 @@ asyncio_mode = "auto"
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 
-# Keep the installed core runtime unchanged when extending its release image.
+# Preserve the qualified worker dependency versions independently of the server.
 [tool.uv]
 constraint-dependencies = [
   "annotated-types==0.7.0",

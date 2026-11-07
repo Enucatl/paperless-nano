@@ -95,6 +95,9 @@ scripts/nuke
 /consume/
 /export/
 
+# Private release evidence: credentials, database dumps, files and logs
+/artifacts/
+
 # this is where the compiled frontend is moved to.
 /src/documents/static/frontend/
 

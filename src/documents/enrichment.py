@@ -6,6 +6,7 @@ import json
 import re
 from datetime import date
 from typing import TYPE_CHECKING
+from typing import Literal
 from typing import NotRequired
 from typing import Protocol
 from typing import TypedDict
@@ -20,6 +21,13 @@ class EnrichmentIdentity(TypedDict):
     provider: str
     model: str
     prompt: str
+
+
+class ExternalMetadataIdentity(TypedDict):
+    """Identify the external wire contract independently of worker implementation."""
+
+    provider: Literal["paperless.external.metadata"]
+    contract: Literal[1]
 
 
 class ManagedField(TypedDict):
@@ -39,7 +47,7 @@ class EnrichmentRequest(TypedDict):
     candidates: dict[str, list[Candidate]]
     managed_fields: dict[str, ManagedField]
     configuration: dict
-    identity: EnrichmentIdentity
+    identity: EnrichmentIdentity | ExternalMetadataIdentity
     date: str
     document_date_max: str
 
@@ -64,7 +72,7 @@ class EnrichmentResult(TypedDict):
 
     version: int
     revision: str
-    identity: EnrichmentIdentity
+    identity: EnrichmentIdentity | ExternalMetadataIdentity
     title: NotRequired[str]
     document_date: NotRequired[str]
     summary: NotRequired[str]
@@ -73,12 +81,13 @@ class EnrichmentResult(TypedDict):
     correspondent: NotRequired[RelationProposal]
     language: NotRequired[RelationProposal]
     custom_fields: NotRequired[list[CustomFieldProposal]]
+    worker: NotRequired[dict]
 
 
 class EnrichmentProvider(Protocol):
     """Compute rich metadata without database or document-write authority."""
 
-    identity: EnrichmentIdentity
+    identity: EnrichmentIdentity | ExternalMetadataIdentity
     configuration: dict
 
     def enrich(self, request: EnrichmentRequest) -> EnrichmentResult:
@@ -111,18 +120,22 @@ def _date(value: object) -> date:
 def validate_result(
     request: EnrichmentRequest,
     result: EnrichmentResult,
-    identity: EnrichmentIdentity,
+    identity: EnrichmentIdentity | ExternalMetadataIdentity,
 ) -> None:
     """Check the wire contract; core must recheck current access before commit.
 
     Args:
         request: Core-owned retained admission snapshot.
         result: Untrusted provider proposal.
-        identity: Currently selected immutable provider/model/prompt identity.
+        identity: Selected provider identity or versioned external contract.
 
     Raises:
         InvalidEnrichmentResult: The result cannot safely be applied.
     """
+    from documents.external_workers import is_metadata_contract
+    from documents.external_workers import validate_worker
+
+    external = is_metadata_contract(identity)
     if (
         type(request.get("version")) is not int
         or request["version"] != 1
@@ -132,13 +145,27 @@ def validate_result(
         or result.get("revision") != request["revision"]
         or result.get("identity") != request["identity"]
         or result.get("identity") != identity
+        or (external and not is_metadata_contract(result.get("identity")))
         or not isinstance(identity, dict)
-        or set(identity) != {"provider", "model", "prompt"}
-        or any(not isinstance(value, str) or not value for value in identity.values())
+        or (
+            not external
+            and (
+                set(identity) != {"provider", "model", "prompt"}
+                or any(
+                    not isinstance(value, str) or not value
+                    for value in identity.values()
+                )
+            )
+        )
         or not {"version", "revision", "identity"} <= result.keys()
         or result.keys() - EnrichmentResult.__annotations__.keys()
     ):
         _reject("Enrichment contract, revision or identity changed")
+    if external or "worker" in result:
+        try:
+            validate_worker(result.get("worker"))
+        except ValueError as error:
+            raise InvalidEnrichmentResult(str(error)) from error
     try:
         json.dumps(result, allow_nan=False)
     except (TypeError, ValueError) as error:
@@ -149,6 +176,7 @@ def validate_result(
         "version",
         "revision",
         "identity",
+        "worker",
     }:
         _reject("Empty content cannot produce metadata changes")
     if "title" in result and (

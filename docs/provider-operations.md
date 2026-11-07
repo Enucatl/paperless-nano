@@ -1,56 +1,51 @@
-# Install, replace, and roll back inference providers
+# Install, replace, and roll back external workers
 
 Run job-admitting and recovery commands as the application user (`--user
 paperless` in the supplied image, or your configured runtime UID). Root-created
 private job files can prevent the supervised worker from opening its locks.
 
 This is the current operator runbook for the OCR and rich metadata integration
-(#43–#49). Historical design notes remain in `document-operations.md`.
+(#43, #49 and #59). Historical design notes remain in `document-operations.md`.
 Use the [supervised deployment guide](processor-deployment.md) for the concrete
 PostgreSQL Compose setup, account provisioning, and managed-field creation.
 Keep the previous deployment available until your representative documents pass
 all checks below. A passing unit test suite alone is not a release qualification.
-See the [validation report](inference-release-validation.md) for verified checks
-and the live qualification gates still blocking publication.
+See the [validation report](inference-release-validation.md) for the accepted
+historical qualification and current generic-worker publication gates, and the
+[release notes](changelog.md#first-inference-release-unreleased) for upgrade requirements.
 
 ## Compatibility and required decisions
 
 | Component | Supported combination |
 | --- | --- |
-| Core | The matching release commit containing #44–#49; the `3.4.1` package version alone does not identify these fork changes. |
-| Provider | `paperless-inference` 0.1.0 built from that same source commit and its frozen lockfile. |
-| Runtime | Python 3.14 in the matching core/provider image; PostgreSQL 18 for the shipped deployment. |
-| Contracts | Parser v1 with optional validated provenance; rich metadata v1. Classification remains a separate contract. |
-| OCR endpoint | Paddle full-document parsing API with `/metadata`; configured pipeline/model/layout identities must match its response. PDF inputs only. |
-| Metadata endpoint | OpenAI-compatible chat completion endpoint, with the configured structured-output mode and an immutable model revision. |
-| Archive tools | Ghostscript from the core image and checksum-verified veraPDF 1.30.3 from the provider image. |
-| Storage | One database and shared local data/media storage with reliable advisory file locks. Multi-host/NFS operation is not established by this example. |
+| Core | Generic Paperless image with the external-worker contract; the `3.4.1` package version alone does not identify these fork changes. |
+| External worker | Any independent implementation of the [HTTP contract](external-worker-contract.md); no Paperless Python imports or matching server image required. |
+| Server runtime | Python 3.14, PostgreSQL 18 and Redis 8 for the supplied deployment. |
+| Example worker | Standalone `paperless-inference` package, with its own PaddleOCR and metadata endpoints, model configuration, credentials and PDF tools. Its OCR implementation accepts PDFs only. |
+| Storage | Server database and local data/media storage with reliable advisory file locks. External workers use their own private scratch/delivery storage. Shared multi-host/NFS server storage is not established by this example. |
 
-Save the source commit, image IDs/digests, provider lockfile, endpoint model
-revisions, configuration, and managed-field IDs with each deployment. Neither a
-mutable image tag nor a model alias is sufficient rollback evidence. Endpoint
-credentials stay in the protected environment, never in job snapshots. Protect
-backup configuration files as carefully as credentials.
+Save server and worker image digests, supported contract versions, configuration
+and managed-field IDs with each deployment. Workers own endpoint/model/prompt
+selection and credentials. The core retains their reported execution provenance
+but does not import or configure their implementations. Protect worker secret
+files and backups; never add raw qualification archives to a release.
 
-Before admission, choose which host may run each processor capability. The
-shipped host enables parser, metadata, search, and ingestion. Omitting a
-capability intentionally leaves that work waiting for another authorized host;
-there is no automatic local fallback. Remote model calls and processor placement
-are separate decisions. Rich metadata requires
-`PAPERLESS_ENRICHMENT_ALLOW_REMOTE=true`. For automatic remote OCR, verify
-`PAPERLESS_REMOTE_OCR_MODE=always` and any overriding saved application setting.
-Explicit OCR/combined operations and remote-enabled reprocessing retain their
-own permission decision. Do not send a mixed-format consumption folder to the
-PDF-only replacement.
+The supplied server selects the core `ExternalParser` and `ExternalMetadata`
+descriptors. These create externally executed operations and cannot run locally.
+Keep `search ingestion` capabilities on the server; grant `parser metadata` only
+to the external worker accounts that need them. Remote processing still needs
+the document-level OCR permission and `PAPERLESS_ENRICHMENT_ALLOW_REMOTE=true`.
+The Compose example enables the remote OCR default. Saved application settings
+can override environment defaults.
 
 ## Install and verify configuration
 
-Follow the [provider build instructions](../providers/paperless-inference/README.md)
-and [deployment provisioning](processor-deployment.md#install-and-provision).
-Build from one exact commit and use the same image/configuration for web,
-coordinator, and server processors. Install the package before selecting its
-class paths. Do not install the external listener, stage queue, or API-writeback
-runner alongside this workflow. External model servers remain required.
+Follow the [server deployment guide](processor-deployment.md) and
+[example worker guide](../providers/paperless-inference/README.md). Build and
+version them independently. Keep all processes in one server deployment on its
+same image/configuration; external workers only need contract compatibility.
+The former external listener and direct document API-writeback runner must not
+run alongside the durable operation pipeline.
 
 Provision the dedicated processor account before uploading. To retain all bundled
 metadata outputs, create fields named exactly `summary` (longtext),
@@ -133,8 +128,8 @@ plus media. A database dump without private operation files cannot recover
 retained work; a document export is not a replacement for this set. Keep upstream
 mail/consume inputs separately if they have not yet been admitted. Save both old
 and candidate image digests (or `docker image save` archives when needed), source
-commits, and endpoint/model configuration. Validate a restoration in an isolated
-Compose project before relying on the backup.
+commits, and each worker's endpoint/model configuration and delivery-state backup.
+Validate a restoration in an isolated Compose project before relying on the backup.
 
 For that restoration, copy the saved Compose/environment files into a separate
 directory, select the saved image, use an unused project name, change the web
@@ -162,11 +157,11 @@ application for document/search checks.
 
 ## Switch and prove completion
 
-With writers stopped, change the image/configuration and selected provider class
-paths together. Keep old artifacts and settings available. Review the migration
+With writers stopped, update the server image/descriptor selection and compatible
+worker images. Keep old artifacts and settings available. Review the migration
 notes before starting the candidate image; do not let an older image migrate a
-newer database. Recreate all application and processor containers so no old
-process keeps a different implementation loaded:
+newer database. Recreate server containers after server changes, and worker containers after
+worker changes:
 
 ```sh
 docker compose up -d --force-recreate webserver
@@ -214,23 +209,32 @@ independently of the OCR/enrichment selection.
 
 ## Back out without losing later edits
 
-For a **provider configuration rollback on the same compatible core**, stop
-admission, drain or account for candidate jobs, stop writers, restore the old
-image/provider/endpoint settings, and recreate all relevant containers. Completed
-documents retain their stored text, archives, metadata, and provenance; rollback
-does not revert those results. Pending jobs retain the configuration they were
-admitted with. Returning to exactly that configuration can permit an untouched
-pending job to continue, but does not revive terminal rejected or cancelled work.
-Resolve unknown effects before submitting fresh work, then repeat completion
-checks under the old selection.
+For a **worker rollback on the same compatible core**, stop admission, finish or
+account for active claims, preserve worker delivery state, and restore the old
+worker image and its configuration. Completed documents retain their text,
+archives, metadata and provenance; switching workers does not revert results.
+Unclaimed generic operations may be handled by any compatible authorized worker.
+Drain active claims before switching, and never change the bytes of a computed
+proposal while retrying delivery with the same token.
 
-To return to the built-in parser on this core, select
-`paperless.parsers.providers.DefaultParser`; to stop rich enrichment, clear
-`PAPERLESS_ENRICHMENT_PROVIDER`. Restore the previous classifier settings as well:
-clearing rich enrichment can re-enable the existing classification fallback.
-Preserve custom fields and their values. Keep processor capabilities required by
-the retained/new jobs. Do not delete the provider package while old configured
-processes still use it.
+Changing an endpoint or model belongs to worker configuration. The server does
+not pin it in a generic request; choose and audit worker releases accordingly.
+Each returned result records the worker's actual implementation/model/prompt
+identity. The input revision, requested outputs and permissions remain core
+constraints regardless of which worker computed the result.
+
+To return to the built-in parser, select
+`paperless.parsers.providers.DefaultParser` and provision the server's `parser`
+capability. To stop rich enrichment, clear `PAPERLESS_ENRICHMENT_PROVIDER` and
+review the previous classifier settings: clearing rich enrichment can re-enable
+the classification fallback. Preserve custom fields and their values. Drain or
+review generic jobs before changing descriptor selection.
+
+When upgrading from the former installed-provider deployment, first drain or
+explicitly review/cancel its jobs under the old images and provider configuration.
+Old jobs retain their Python/provider identities and are not converted to generic
+contracts. Do not remove the old provider package until its jobs are accounted
+for. Retained thumbnail policies may still require the original parser grant.
 
 A **database downgrade is not a provider rollback**. Reverse migrations and running
 an older core against the current database are not supported by this runbook.
@@ -253,21 +257,20 @@ only after verifying the restored documents, tasks, and ordinary search.
 | Needs review | Inspect retained publication and effect evidence. Reconcile confirmed outcomes; do not blindly rerun workflows. |
 | Cancelled | Late results cannot apply. Already committed data, external requests/costs, and uncertain effects are not undone. |
 
-Changing provider code identity, model revision, prompt, endpoint, effective
-configuration, custom-field names/types, source/content revision, or relevant
-authority can invalidate pending proposals. Never silently relabel a pending request.
-Current permissions are checked again before application; revoking requester
-edit/create permissions or processor capabilities can stop previously admitted
-work. Concurrent creation of unrelated authorized entities does not itself
-invalidate a rich proposal; its retained candidate access is still rechecked.
+Changing core descriptor selection, custom-field definitions, source/content
+revision or relevant authority can invalidate pending proposals. Never silently
+relabel a pending request. Current permissions are checked again before
+application; revoking requester edit/create permissions or processor capabilities
+can stop previously admitted work. Concurrent creation of unrelated authorized
+entities does not itself invalidate a rich proposal; retained candidate access
+is still rechecked.
 
-Contract v1 rejects unknown top-level result keys and incompatible versions.
-Additional named custom fields use the existing typed `custom_fields` list;
-unsupported value types or changed result meanings need a new supported contract
-and core implementation. Ship matching core/provider artifacts and run
-the baseline against both sides before upgrading. Retained admission dates make
-retries stable; a delayed retry keeps its original processing day rather than
-stamping the retry day. No exact timestamp parity is claimed for that difference.
+Generic contract identifiers describe supported wire behavior, not worker Python
+classes or models. Workers reject unsupported contracts before claiming work.
+Unsupported result versions, changed revisions and malformed values are rejected
+by core. Retained admission dates keep retries stable; delayed processing uses
+the request's original processing day. See the [wire contract](external-worker-contract.md)
+for request/result shapes and delivery rules.
 
 Release qualification must record a real replacement-and-back exercise with
 completed and pending/conflicted jobs, an isolated backup restoration, endpoint

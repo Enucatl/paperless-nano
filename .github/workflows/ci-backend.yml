@@ -112,7 +112,7 @@ jobs:
           python-version: ${{ steps.setup-python.outputs.python-version }}
       - name: Install system dependencies
         timeout-minutes: 12
-        uses: $/.github/actions/apt-install
+        uses: ./.github/actions/apt-install
         with:
           packages: unpaper tesseract-ocr ghostscript poppler-utils qpdf
       - name: Install Python dependencies

@@ -34,6 +34,7 @@ def effective_configuration(
     provider = LocalThumbnailProvider() if thumbnail_only else parser_class()()
     implementation = configuration_snapshot(provider, {"mailrule_id": mailrule_id})
     preferences = OcrConfig()
+    from documents.external_workers import ExternalParser
     from documents.ocr_provenance import field_snapshot
 
     provenance = None if thumbnail_only else field_snapshot()
@@ -44,7 +45,9 @@ def effective_configuration(
         "allow_remote_by_default": RemoteOCRConfig().remote_ocr_by_default,
         "settings": implementation,
         "archive_policy": preferences.archive_file_generation,
-        "output_type": preferences.output_type,
+        "output_type": "pdfa"
+        if isinstance(provider, ExternalParser)
+        else preferences.output_type,
         **({"provenance_field": provenance} if provenance else {}),
     }
 

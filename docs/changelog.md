@@ -1,5 +1,81 @@
 # Changelog
 
+## First inference release (unreleased)
+
+This fork release lets independently packaged workers perform OCR and rich
+metadata processing through a versioned HTTP contract. Paperless describes the
+work and validates results; workers own model endpoints, prompts, dependencies
+and credentials. Separate core and worker regression suites pass, including the
+final PDF/A contract changes. Independent review is complete; source/image
+publication and production cutover remain pending.
+
+### Features / Enhancements
+
+- The generic core image admits external OCR and metadata work without installing
+  worker packages. Core validates proposals and applies authorized changes while
+  preserving unrelated metadata and original files.
+- `paperless-inference` is one standalone worker implementation using PaddleOCR
+  and an OpenAI-compatible metadata endpoint. Other workers can implement the
+  same [HTTP contract](external-worker-contract.md) without Paperless imports or
+  a matching server image.
+- External archives use PDF/A with the flavor selected by the worker. The example
+  validates PDF/A-2u; built-in local parser format settings remain independent.
+- Server operations run through the shared autoscaling Celery worker. The default
+  child recycling limit is ten tasks; idle worker children are released.
+- External workers claim OCR/metadata work through authenticated
+  APIs, without access to the server database, Redis or document storage. The
+  example worker retains computed results for delivery retries. Core publishes
+  accepted results and performs local thumbnail rendering and search updates.
+- Tasks report terminal processor failures and retain operation diagnostics.
+
+### Breaking Changes
+
+- Follow the [deployment guide](processor-deployment.md) to configure processor
+  placement and provision dedicated capability accounts before admitting work.
+  Unassigned capabilities leave operations waiting for an authorized processor.
+- Use independently versioned immutable server and worker images that implement
+  the same wire contract. The server uses Python 3.14, PostgreSQL 18 and Redis 8; the
+  `3.4.1` core package version alone does not identify these fork changes.
+- The example PaddleOCR worker accepts PDFs only. Create metadata fields named
+  `summary`, `processing_date` and `audit` with the documented types, and configure
+  a separate longtext field for OCR provenance. Existing ID-mapped deployments
+  must follow the [field migration instructions](rich-metadata-contract.md#custom-field-migration).
+- Before removing installed providers, drain or explicitly cancel/review their
+  pending work. Old provider identities/configuration are not rewritten into
+  generic worker requests. Preserve a paired database/data/media backup before
+  upgrading. Pending legacy task receipts require operator review; the upgrade
+  check does not establish execution of old broker messages. Rollback restores
+  the paired old state and image. See the [upgrade and rollback runbook](provider-operations.md).
+
+### Validation
+
+The generic boundary passed 494 core tests with PostgreSQL 18 and Redis 8 and
+124 standalone worker tests. The core test image removes the inference package;
+the independently built worker image has no Paperless or Django installed. The
+worker suite includes real Ghostscript/veraPDF archive tests. Migration drift was
+absent, and dependency checks passed for 241 core and 27 worker packages. This
+final split run includes normalization of external archives to worker-selected
+PDF/A flavors. Independent review corrected metadata identity annotations to
+include the generic contract; the affected selection passed 88 tests with one
+PostgreSQL-only skip on SQLite. No unresolved review finding remains.
+
+The previous coupled core/provider implementation passed twenty generated PDFs,
+fifty pages and four languages through real OCR, metadata, original hash
+preservation, archive/PDF/A validation and title search across
+server and workstation execution. Reprocessing, provider swap, paired restore
+and retained-image upgrade/backout checks passed. The final selections passed
+482 backend tests, 114 provider tests and 78 frontend tests; the production
+frontend build, migration drift and dependency checks passed. Those retained
+live-model results belong to the previous architecture; no new live-model run or
+production cutover is claimed for the generic boundary.
+
+See the [qualification report](inference-release-validation.md)
+for evidence and recovery details. Full-corpus parity, long-duration capacity,
+shared multi-host/NFS processor storage, chat and alternative search are outside
+this release.
+Raw qualification archives contain private state and credentials and are excluded
+from source publication and Docker build contexts.
+
 ## paperless-ngx 3.4.2
 
 ### Bug Fixes

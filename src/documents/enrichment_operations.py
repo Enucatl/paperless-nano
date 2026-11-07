@@ -36,7 +36,9 @@ def configured_provider(*, classification_only: bool = False):
         return classify()
     provider = import_string(settings.ENRICHMENT_PROVIDER)()
     identity = provider.identity
-    if (
+    from documents.external_workers import is_metadata_contract
+
+    if not is_metadata_contract(identity) and (
         not isinstance(identity, dict)
         or set(identity) != {"provider", "model", "prompt"}
         or any(not isinstance(value, str) or not value for value in identity.values())

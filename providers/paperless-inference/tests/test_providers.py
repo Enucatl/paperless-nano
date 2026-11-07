@@ -51,8 +51,6 @@ def response(monkeypatch, content):
 
 def test_metadata_preserves_full_baseline(monkeypatch, metadata_request):
     """Normalize fields and preserve resolver diagnostics in a valid proposal."""
-    from documents.enrichment import validate_result
-
     complete = response(
         monkeypatch,
         json.dumps(
@@ -67,7 +65,6 @@ def test_metadata_preserves_full_baseline(monkeypatch, metadata_request):
     )
     retained = deepcopy(metadata_request)
     result = MetadataProvider().enrich(metadata_request)
-    validate_result(metadata_request, result, MetadataProvider().identity)
     assert result["title"] == "A" * 128
     assert result["document_date"] == "2024-02-29"
     assert result["summary"] == ""
@@ -126,8 +123,6 @@ def test_metadata_matches_additional_properties_by_field_name(
     monkeypatch, metadata_request
 ):
     """Extra extractor properties reach existing fields without an ID allowlist."""
-    from documents.enrichment import validate_result
-
     metadata_request["managed_fields"].update(
         invoice_number={"id": 4, "data_type": "string"},
         reviewed={"id": 5, "data_type": "boolean"},
@@ -148,7 +143,6 @@ def test_metadata_matches_additional_properties_by_field_name(
     )
     retained = deepcopy(metadata_request)
     result = MetadataProvider().enrich(metadata_request)
-    validate_result(metadata_request, result, MetadataProvider().identity)
     assert result["custom_fields"] == [
         {"field": 4, "data_type": "string", "value": "INV-123"},
         {"field": 5, "data_type": "boolean", "value": False},
@@ -243,8 +237,7 @@ def test_secrets_cannot_enter_snapshot(monkeypatch, metadata_request):
 
 def test_ocr_adapter_provenance_and_identity(monkeypatch, tmp_path):
     """Return source-bound provenance and reject service deployment drift."""
-    from paperless.parsers.contract import file_reference
-    from paperless.parsers.contract import validate_result
+    from paperless_inference.files import file_reference
     from paperless_inference import paddle_ocr
 
     metadata = {"pipeline": "paddle", "model": "revision", "layout_model": "none"}
@@ -283,7 +276,6 @@ def test_ocr_adapter_provenance_and_identity(monkeypatch, tmp_path):
         "allow_remote": True,
     }
     result = provider.process(request, tmp_path)
-    validate_result(request, result, tmp_path, provider.identity)
     assert result["provenance"] == provenance
     assert result["text"] == "Text"
     fetch.return_value = {**metadata, "model": "changed"}

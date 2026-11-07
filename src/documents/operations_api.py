@@ -57,15 +57,29 @@ class OperationsView(OperationAPIView):
 
     def get(self, request):
         """Expose operation status without leaking other processors' inputs."""
+        status = request.query_params.get("status")
+        if status not in (None, "pending"):
+            raise serializers.ValidationError({"status": "Only pending is supported."})
+        jobs = DocumentJob.objects.all()
+        if status == "pending":
+            jobs = jobs.filter(status=DocumentJob.Status.WAITING)
         results = []
-        for job in DocumentJob.objects.all().iterator():
+        for job in jobs.iterator():
             for key, entry in job.result.get("invocations", {}).items():
                 if "policy" not in entry:
+                    continue
+                if status == "pending" and (
+                    entry["status"] != "pending"
+                    or not entry.get("remote_allowed", True)
+                ):
                     continue
                 try:
                     operations.authorize(entry, request.user)
                 except PermissionDenied:
-                    if operations.requester_id(job) != request.user.pk:
+                    if (
+                        status == "pending"
+                        or operations.requester_id(job) != request.user.pk
+                    ):
                         continue
                 results.append(
                     {
@@ -73,6 +87,9 @@ class OperationsView(OperationAPIView):
                         "key": key,
                         "id": entry["id"],
                         "operation": entry["operation"],
+                        "contract": entry.get("plugin")
+                        if entry["policy"].get("external_only")
+                        else None,
                         "status": entry["status"],
                         "job_status": job.status,
                         "error": entry.get("error") or job.error,

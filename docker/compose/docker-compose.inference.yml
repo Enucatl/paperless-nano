@@ -1,4 +1,4 @@
-# Build paperless-inference:release from the matching core commit first.
+# Build the generic core image; external workers have independent images.
 # See docs/processor-deployment.md before starting ingestion.
 services:
   broker:
@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: paperless
       POSTGRES_PASSWORD: ${PAPERLESS_DBPASS:?Set PAPERLESS_DBPASS in .env}
   webserver:
-    image: ${PAPERLESS_IMAGE:-paperless-inference:release}
+    image: ${PAPERLESS_IMAGE:-paperless-core:release}
     restart: unless-stopped
     depends_on:
       - db
@@ -35,10 +35,11 @@ services:
       PAPERLESS_DBENGINE: postgresql
       PAPERLESS_DBPASS: ${PAPERLESS_DBPASS:?Set PAPERLESS_DBPASS in .env}
       PAPERLESS_PROCESSOR_USER: server-processor
-      PAPERLESS_PROCESSOR_CAPABILITIES: parser metadata search ingestion
-      PAPERLESS_PARSER: paperless_inference.providers.PaddleOCRProvider
-      PAPERLESS_ENRICHMENT_PROVIDER: paperless_inference.providers.MetadataProvider
+      PAPERLESS_PROCESSOR_CAPABILITIES: search ingestion
+      PAPERLESS_PARSER: documents.external_workers.ExternalParser
+      PAPERLESS_ENRICHMENT_PROVIDER: documents.external_workers.ExternalMetadata
       PAPERLESS_ENRICHMENT_ALLOW_REMOTE: "true"
+      PAPERLESS_REMOTE_OCR_MODE: always
 volumes:
   data:
   media:

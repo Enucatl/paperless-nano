@@ -1,46 +1,50 @@
-# Installed inference providers
+# Standalone PaddleOCR and metadata worker
 
-Version 0.1.0 implements rich metadata contract v1 and parser contract v1 on
-Python 3.14. Install with the matching core release; the provider is not a
-standalone service. It imports inference/PDF libraries only when executing work.
+`paperless-inference` is one external worker implementation for Paperless's
+versioned operation API. It owns PaddleOCR and metadata model configuration,
+prompts, credentials, PDF tools and Python dependencies. The Paperless server
+needs neither this package nor its image; other workers can implement the same
+HTTP contracts using their own language and processing libraries.
 
-Build the core from the release commit, then extend that immutable image:
+The worker supports `paperless.external.parser:v1` and
+`paperless.external.metadata` contract version 1. It discovers and claims work,
+downloads content-checked inputs, produces proposals and uploads outputs.
+Paperless checks current permissions, document revisions and result constraints
+before publishing. The `worker` result field reports this implementation's model
+and prompt identities; the contract identity is independent of those choices.
+
+Build the worker directly, without a Paperless base image:
 
 ```sh
-docker build -t paperless-core:release .
 docker build -f providers/paperless-inference/Dockerfile \
-  --build-arg PAPERLESS_IMAGE=paperless-core:release \
-  -t paperless-inference:release .
+  -t paperless-inference:worker .
 ```
 
-Use this same image/configuration for core and eligible processors. The package
-lock pins Python dependencies, including the existing shared inference client
-at its source revision. Shared dependencies match the core lock; the extracted
-font recovery is tested with core's fonttools 4.62 rather than requiring the
-external runner's 4.68 minimum. The image retains core dependencies and runs
-`uv pip check`. Ghostscript comes from core; the extension installs Java and
-checksum-verified veraPDF 1.30.3. No listener, stage queue, or document API
-credentials are required. Provider installation alone does not start processors;
-follow the supervised deployment instructions.
+The image contains Python 3.14, the frozen worker dependencies, Ghostscript,
+Java and checksum-verified veraPDF 1.30.3. It runs only
+`python -m paperless_inference.workstation` as UID 1000. Use
+[`compose.workstation.yml`](compose.workstation.yml) with this image and a private
+state volume; see [processor deployment](../../docs/processor-deployment.md) for
+account provisioning and server placement.
 
-Configure:
+Configure these values on the worker:
 
 ```sh
-PAPERLESS_PARSER=paperless_inference.providers.PaddleOCRProvider
-PAPERLESS_ENRICHMENT_PROVIDER=paperless_inference.providers.MetadataProvider
-PAPERLESS_ENRICHMENT_ALLOW_REMOTE=true
+PAPERLESS_URL=https://paperless.example.invalid
+PAPERLESS_API_TOKEN_FILE=/run/secrets/paperless_api_token
 INFERENCE_OCR_ENDPOINT=http://paddle:8080
 INFERENCE_OCR_TIMEOUT=600
 INFERENCE_OCR_PIPELINE=PaddleOCR-VL-1.6
 INFERENCE_OCR_MODEL=PaddlePaddle/PaddleOCR-VL-1.6
 INFERENCE_OCR_LAYOUT_MODEL=PP-DocLayoutV3
-INFERENCE_METADATA_ENDPOINT=http://metadata:8080/v1
+INFERENCE_METADATA_ENDPOINT=https://openrouter.ai/api/v1
 INFERENCE_METADATA_MODEL=your-immutable-model-revision
+OPENROUTER_API_KEY_FILE=/run/secrets/openrouter_api_key
 ```
 
 Read the actual OCR deployment's `/metadata` response to set the three identity
-values; these examples are not an assertion about your endpoint. The provider
-checks identity before and after OCR. Explicitly allow remote OCR on submissions
+values; these examples are not an assertion about your endpoint. The worker
+checks its configured endpoint identity before and after OCR. Explicitly allow remote OCR on submissions
 or via core's remote OCR default. Create existing custom fields named `summary`
 (longtext), `processing_date` (date), and `audit` (longtext) for those outputs.
 Additional extractor properties match existing custom-field names exactly,
@@ -68,17 +72,24 @@ set the corresponding `_FILE` path in the container. Keys are read only during
 inference and never enter configuration snapshots.
 Endpoint URLs cannot contain embedded credentials or query parameters.
 
-OCR accepts PDF input, validates every page, removes image payloads from stored
-provenance, preserves original pages in searchable PDF/A-2u archives, and checks
-Unicode conformance using veraPDF. As in the baseline, `layout_model=none`
-produces text/provenance without an archive. Core supplies thumbnails separately.
+OCR accepts PDF input and the generic `output_type=pdfa` requirement, validates every page,
+removes image payloads from stored provenance, preserves original pages in
+searchable PDF/A-2u archives, and checks Unicode conformance using veraPDF.
+The worker chooses PDF/A-2u; the server requires PDF/A without choosing its flavor.
+Archive policies `auto`, `always` and `never` are supported. Malformed output
+requirements fail before inference. `layout_model=none` can produce text/provenance
+only when the request does not require an archive. Core supplies thumbnails
+separately.
 Metadata extraction returns proposals only. Empty content yields no changes;
 endpoint failure propagates to durable operation recovery.
 
-Changing model, prompt revision, endpoint or effective configuration invalidates
-pending work through core's retained snapshots. A model name must identify an
-immutable deployment: a server silently replacing weights under the same name
-cannot be detected by this API. Cancellation does not undo a billed request.
+A pending unclaimed request can be executed by any authorized worker implementing
+its contract; model and prompt changes do not require a server rebuild. An
+already computed result is saved privately and delivery retries reuse that
+result, even after worker restart or configuration changes. Preserve the state
+volume until delivery is acknowledged. Expired or cancelled claims require
+operator review of the retained proposal; the client does not discard it or
+blindly repeat inference. Cancellation cannot undo a model request's charges.
 
 ## Source and intentional boundary changes
 
@@ -95,6 +106,8 @@ Entity creation and current permission checks belong to core; a rejected proposa
 does not partially apply other metadata. See the rich metadata contract's
 documented differences for those stronger atomicity and concurrency guarantees.
 
-Tests distinguish mocked endpoint responses from actual model parity. The
+The test suite runs without Paperless or Django installed and checks HTTP
+transport, unknown contracts, unsafe files and delivery retries. Mocked endpoint
+responses remain distinct from actual model parity. The
 extracted archive suite runs real Ghostscript/veraPDF conversions; release
 validation must additionally exercise the configured live model deployment.

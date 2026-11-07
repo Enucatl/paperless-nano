@@ -28,6 +28,8 @@ src/conftest.py
 ./dist
 ./scripts
 ./resources
+# Private release evidence must never enter an image build context
+/artifacts/
 # Other stuff
 **/*.drawio.png
 .mypy_baseline

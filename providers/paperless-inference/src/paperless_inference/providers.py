@@ -164,9 +164,9 @@ class PaddleOCRProvider:
 
     def process(self, request: dict, root: Path) -> dict:
         """Create validated private OCR output without any authoritative writeback."""
-        from paperless.parsers.contract import file_reference
-        from paperless.parsers.contract import relative_path
-        from paperless.parsers.contract import resolve_reference
+        from paperless_inference.files import file_reference
+        from paperless_inference.files import relative_path
+        from paperless_inference.files import resolve_reference
         from paperless_inference.paddle_ocr import fetch_ocr_metadata
         from paperless_inference.paddle_ocr import run_paddle_ocr
 

@@ -146,3 +146,42 @@ def test_finite_provider_operations_queue_without_placement(operation):
 def test_lifecycle_hooks_remain_core_owned():
     """Completion hooks cannot be routed to a generic processor."""
     assert execution_policy("complete:post_consume", "hook") is None
+
+
+def test_pending_discovery_excludes_history_and_unclaimable_operations():
+    """A workstation discovers only authorized unclaimed work without leasing it."""
+    user = UserFactory()
+    user.user_permissions.add(Permission.objects.get(codename="process_parser"))
+    entry = {
+        "id": "invocation",
+        "operation": "parser.process",
+        "status": "pending",
+        "policy": {"permission": "documents.process_parser"},
+        "input": {"private": "not returned"},
+    }
+    job = DocumentJob.objects.create(
+        timeout=60,
+        status=DocumentJob.Status.WAITING,
+        result={"invocations": {"parser.process": entry}},
+    )
+    for state, invocation in [
+        (DocumentJob.Status.SUCCEEDED, entry),
+        (DocumentJob.Status.CANCELLED, entry),
+        (DocumentJob.Status.WAITING, {**entry, "status": "leased"}),
+        (DocumentJob.Status.WAITING, {**entry, "remote_allowed": False}),
+    ]:
+        DocumentJob.objects.create(
+            timeout=60, status=state, result={"invocations": {"parser": invocation}}
+        )
+    client = APIClient()
+    client.force_authenticate(user)
+    response = client.get("/api/operations/", {"status": "pending"})
+    assert response.status_code == 200
+    assert [row["job_id"] for row in response.json()] == [str(job.pk)]
+    assert "not returned" not in response.content.decode()
+    job.refresh_from_db()
+    assert job.result["invocations"]["parser.process"] == entry
+    assert len(client.get("/api/operations/").json()) == 5
+    user.user_permissions.clear()
+    assert client.get("/api/operations/", {"status": "pending"}).json() == []
+    assert client.get("/api/operations/", {"status": "leased"}).status_code == 400
