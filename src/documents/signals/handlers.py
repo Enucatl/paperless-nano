@@ -874,6 +874,7 @@ def task_postrun_handler(
 
         from django.core.exceptions import ValidationError
 
+        from documents.job_state import task_history_status
         from documents.models import DocumentJob
 
         try:
@@ -881,13 +882,8 @@ def task_postrun_handler(
         except ValidationError:
             job = None
         if job is not None:
-            if job.status not in {
-                "succeeded",
-                "cancelled",
-                "failed",
-                "rejected",
-                "attention",
-            }:
+            new_status = task_history_status(job.status)
+            if new_status is None:
                 PaperlessTask.objects.filter(
                     pk=task_instance.pk,
                     status__in=[
@@ -896,10 +892,6 @@ def task_postrun_handler(
                     ],
                 ).update(status=PaperlessTask.Status.STARTED)
                 return
-            new_status = {
-                "succeeded": PaperlessTask.Status.SUCCESS,
-                "cancelled": PaperlessTask.Status.REVOKED,
-            }.get(job.status, PaperlessTask.Status.FAILURE)
 
         task_instance.status = new_status
         task_instance.date_done = now

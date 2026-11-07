@@ -39,17 +39,14 @@ def apply_outcome(
     if status == PaperlessTask.Status.FAILURE:
         from django.core.exceptions import ValidationError
 
+        from documents.job_state import task_history_status
         from documents.models import DocumentJob
 
         try:
             job = DocumentJob.objects.filter(pk=task_id).first()
         except ValidationError:
             job = None
-        if job is not None and job.status not in {
-            DocumentJob.Status.FAILED,
-            DocumentJob.Status.REJECTED,
-            DocumentJob.Status.ATTENTION,
-        }:
+        if job is not None and task_history_status(job.status) != status:
             return
     tasks = PaperlessTask.objects.filter(task_id=task_id)
     if task_type is not None:

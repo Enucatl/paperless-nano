@@ -11,6 +11,7 @@ import pytest
 from django.db import OperationalError
 from django.utils import timezone
 
+from documents.models import DocumentJob
 from documents.models import PaperlessTask
 from paperless_testing.factories import PaperlessTaskFactory
 from paperless_worker import outcome_helper
@@ -44,10 +45,13 @@ def test_final_history_is_not_replaced_by_replay(status: str) -> None:
 
 
 @pytest.mark.django_db(transaction=True)
-def test_old_event_does_not_fail_newer_attempt() -> None:
+@pytest.mark.parametrize("durable_job", [False, True])
+def test_old_event_does_not_fail_newer_attempt(*, durable_job: bool) -> None:
     """Spool replay uses occurrence time rather than helper execution time."""
     now = timezone.now()
     task = PaperlessTaskFactory(status="started", date_started=now)
+    if durable_job:
+        DocumentJob.objects.create(pk=task.task_id, timeout=30, status="failed")
     outcome_helper.apply_outcome(
         task.task_id,
         "failure",
