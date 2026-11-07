@@ -1,6 +1,8 @@
 # Build the matching core commit first; supply its immutable local tag or digest.
 ARG PAPERLESS_IMAGE
 FROM ${PAPERLESS_IMAGE}
+# The inherited s6 entrypoint initializes volumes before dropping privileges.
+# hadolint ignore=DL3002
 USER root
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends git default-jre-headless \

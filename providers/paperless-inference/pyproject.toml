@@ -1,33 +1,30 @@
+[build-system]
+build-backend = "uv_build"
+requires = [ "uv-build>=0.12,<0.13" ]
+
 [project]
 name = "paperless-inference"
 version = "0.1.0"
 description = "OCR and rich metadata proposal providers for Paperless-ngx"
-requires-python = ">=3.14"
 license = "GPL-3.0-only"
+requires-python = ">=3.14"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+]
 dependencies = [
-  "shared-inference @ git+https://github.com/Enucatl/shared-inference.git@8fe5f2e1ba8eb2dc65166d60d141b8fb28f77049",
-  "niquests>=3.0",
-  "pypdf>=6.19",
-  "PyMuPDF==1.27.2.3",
   "fonttools>=4.62",
   "json-repair>=0.25",
-  "pydantic>=2.0",
+  "niquests>=3",
+  "pydantic>=2",
+  "pymupdf==1.27.2.3",
+  "pypdf>=6.19",
+  "shared-inference @ git+https://github.com/Enucatl/shared-inference.git@8fe5f2e1ba8eb2dc65166d60d141b8fb28f77049",
 ]
 
-[build-system]
-requires = ["uv_build>=0.12.0,<0.13.0"]
-build-backend = "uv_build"
-
 [dependency-groups]
-dev = ["pytest>=9", "pytest-asyncio>=0.23", "pillow>=10", "ruff>=0.16"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
-asyncio_mode = "auto"
-
-[tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+dev = [ "pillow>=10", "pytest>=9", "pytest-asyncio>=0.23", "ruff>=0.16" ]
 
 # Keep the installed core runtime unchanged when extending its release image.
 [tool.uv]
@@ -41,12 +38,19 @@ constraint-dependencies = [
   "packaging==26.0",
   "pillow==13.0.0",
   "pluggy==1.6.0",
-  "pydantic==2.12.5",
   "pydantic-core==2.41.5",
+  "pydantic==2.12.5",
   "pygments==2.20.0",
-  "pytest==9.1.1",
   "pytest-asyncio==1.3.0",
+  "pytest==9.1.1",
   "ruff==0.16.9",
   "typing-extensions==4.15.0",
   "typing-inspection==0.4.2",
 ]
+
+[tool.ruff]
+lint.select = [ "E4", "E7", "E9", "F" ]
+
+[tool.pytest]
+ini_options.testpaths = [ "tests" ]
+ini_options.asyncio_mode = "auto"

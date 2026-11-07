@@ -1,5 +1,7 @@
 """Stream read-only model-host measurements without changing its services."""
 
+# ruff: noqa: INP001, T201
+
 import csv
 import io
 import json

@@ -4,6 +4,8 @@ Run in a disposable current-image controller with Docker CLI/socket, the source
 at /source, a private /evidence output volume, and host /tmp mounted at /tmp.
 """
 
+# ruff: noqa: INP001, T201
+
 import argparse
 import json
 import os

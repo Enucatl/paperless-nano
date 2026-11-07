@@ -71,6 +71,7 @@ def searchable_document(_search_index: None) -> "Document":
 def queued_search_processor(monkeypatch):
     """Finish real queued maintenance before legacy search-result assertions."""
     from unittest.mock import Mock
+
     from documents import search_operations
     from paperless_testing.factories import UserFactory
     from paperless_testing.queued import drive_processors

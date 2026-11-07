@@ -5,6 +5,8 @@ Run inside a disposable controller with the Docker CLI/socket, this script,
 No production database, document storage or service is used.
 """
 
+# ruff: noqa: INP001, T201
+
 import argparse
 import hashlib
 import json

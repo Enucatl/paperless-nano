@@ -15,16 +15,16 @@ and the live qualification gates still blocking publication.
 
 ## Compatibility and required decisions
 
-| Component | Supported combination |
-| --- | --- |
-| Core | The matching release commit containing #44–#49; the `3.4.1` package version alone does not identify these fork changes. |
-| Provider | `paperless-inference` 0.1.0 built from that same source commit and its frozen lockfile. |
-| Runtime | Python 3.14 in the matching core/provider image; PostgreSQL 18 for the shipped deployment. |
-| Contracts | Parser v1 with optional validated provenance; rich metadata v1. Classification remains a separate contract. |
-| OCR endpoint | Paddle full-document parsing API with `/metadata`; configured pipeline/model/layout identities must match its response. PDF inputs only. |
-| Metadata endpoint | OpenAI-compatible chat completion endpoint, with the configured structured-output mode and an immutable model revision. |
-| Archive tools | Ghostscript from the core image and checksum-verified veraPDF 1.30.3 from the provider image. |
-| Storage | One database and shared local data/media storage with reliable advisory file locks. Multi-host/NFS operation is not established by this example. |
+| Component         | Supported combination                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Core              | The matching release commit containing #44–#49; the `3.4.1` package version alone does not identify these fork changes.                          |
+| Provider          | `paperless-inference` 0.1.0 built from that same source commit and its frozen lockfile.                                                          |
+| Runtime           | Python 3.14 in the matching core/provider image; PostgreSQL 18 for the shipped deployment.                                                       |
+| Contracts         | Parser v1 with optional validated provenance; rich metadata v1. Classification remains a separate contract.                                      |
+| OCR endpoint      | Paddle full-document parsing API with `/metadata`; configured pipeline/model/layout identities must match its response. PDF inputs only.         |
+| Metadata endpoint | OpenAI-compatible chat completion endpoint, with the configured structured-output mode and an immutable model revision.                          |
+| Archive tools     | Ghostscript from the core image and checksum-verified veraPDF 1.30.3 from the provider image.                                                    |
+| Storage           | One database and shared local data/media storage with reliable advisory file locks. Multi-host/NFS operation is not established by this example. |
 
 Save the source commit, image IDs/digests, provider lockfile, endpoint model
 revisions, configuration, and managed-field IDs with each deployment. Neither a
@@ -243,15 +243,15 @@ only after verifying the restored documents, tasks, and ordinary search.
 
 ## Actionable states and compatibility rules
 
-| State or change | Operator action |
-| --- | --- |
-| Waiting for processor | If intentional, retain inputs and bring the host back later. Otherwise inspect capability selection, account/grants, endpoint, and processor logs. Waiting alone consumes no attempt. |
-| Processing or expired claim | Allow the lease/recovery owner to resolve it. Pure computations may retry; uncertain effectful work requires evidence. Do not start another independent API-writeback runner. |
-| Checking result | Result delivery is staged. Wait for core validation/application; never equate submission with persistence. |
-| Failed endpoint attempt | Fix connectivity/configuration and inspect bounded retry state. A terminal failure requires deliberate fresh admission after review. |
-| Rejected/conflicted | Preserve current edits; inspect changed input, fields, provider/configuration, or permissions. Correct the cause and submit a fresh request. |
-| Needs review | Inspect retained publication and effect evidence. Reconcile confirmed outcomes; do not blindly rerun workflows. |
-| Cancelled | Late results cannot apply. Already committed data, external requests/costs, and uncertain effects are not undone. |
+| State or change             | Operator action                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Waiting for processor       | If intentional, retain inputs and bring the host back later. Otherwise inspect capability selection, account/grants, endpoint, and processor logs. Waiting alone consumes no attempt. |
+| Processing or expired claim | Allow the lease/recovery owner to resolve it. Pure computations may retry; uncertain effectful work requires evidence. Do not start another independent API-writeback runner.         |
+| Checking result             | Result delivery is staged. Wait for core validation/application; never equate submission with persistence.                                                                            |
+| Failed endpoint attempt     | Fix connectivity/configuration and inspect bounded retry state. A terminal failure requires deliberate fresh admission after review.                                                  |
+| Rejected/conflicted         | Preserve current edits; inspect changed input, fields, provider/configuration, or permissions. Correct the cause and submit a fresh request.                                          |
+| Needs review                | Inspect retained publication and effect evidence. Reconcile confirmed outcomes; do not blindly rerun workflows.                                                                       |
+| Cancelled                   | Late results cannot apply. Already committed data, external requests/costs, and uncertain effects are not undone.                                                                     |
 
 Changing provider code identity, model revision, prompt, endpoint, effective
 configuration, custom-field names/types, source/content revision, or relevant

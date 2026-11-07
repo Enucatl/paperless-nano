@@ -54,16 +54,16 @@ preserving its existing value. Null remains invalid in the core result contract.
 
 A result repeats `version`, `revision` and `identity`. Every other key is optional:
 
-| Key | Meaning |
-| --- | --- |
-| `title` | Replacement string, 1–128 characters; adapter truncates before submission. |
-| `document_date` | Replacement ISO date, from 1900-01-01 through retained `document_date_max`. |
-| `summary` | Replacement string in the managed summary field; empty string clears. |
-| `processing_date` | Retained request date in the managed processing-date field. |
-| `audit` | JSON object, serialized by core into the managed audit field. |
-| `correspondent` | Exactly `{id: permitted_id}` or `{create: observed_name}`. |
-| `language` | Exactly `{id: permitted_language_tag_id}` or `{create: "language:en"}`. |
-| `custom_fields` | List of `{field: id, data_type: retained_type, value: typed_value}` for additional managed roles. |
+| Key               | Meaning                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| `title`           | Replacement string, 1–128 characters; adapter truncates before submission.                        |
+| `document_date`   | Replacement ISO date, from 1900-01-01 through retained `document_date_max`.                       |
+| `summary`         | Replacement string in the managed summary field; empty string clears.                             |
+| `processing_date` | Retained request date in the managed processing-date field.                                       |
+| `audit`           | JSON object, serialized by core into the managed audit field.                                     |
+| `correspondent`   | Exactly `{id: permitted_id}` or `{create: observed_name}`.                                        |
+| `language`        | Exactly `{id: permitted_language_tag_id}` or `{create: "language:en"}`.                           |
+| `custom_fields`   | List of `{field: id, data_type: retained_type, value: typed_value}` for additional managed roles. |
 
 Omission always preserves. Null is rejected, including for relations and dates;
 it never implicitly clears an existing value. Empty title is invalid. Empty
@@ -92,22 +92,22 @@ Inspected source: `/export/atlas/paperless-ai`, commit
 `agents/smart_graph_agent.py`, `agents/base.py`, and `agents/paddle_ocr.py`.
 The fixture represents the observed behavior, not a captured private document.
 
-| Case | Existing runner behavior | Provider/core behavior required |
-| --- | --- | --- |
-| Long or absent title | Truthy title sliced to 128; absent/empty preserves. | Adapter slices; omits absent/empty. Boundary rejects unsliced values. |
-| Date bounds | Only 1900-01-01 through local `date.today()` is written. | Same bounds against retained local admission date; out-of-range inference omitted. Retention makes retry stable. |
-| Empty content | Whitespace-only content skips inference and removes queue entry. | Successful no-op, no processing date or audit mutation. |
-| Blank summary | `(summary or "").strip()` is written even when blank. | Adapter preserves normalization; blank explicitly clears managed summary. |
-| Correspondent exact/fuzzy match | NFKD/accent/punctuation/corporate-noise normalization; max(character, token-sort, adjusted containment) score; reuse at threshold (default 0.80). | Adapter retains resolver algorithm on authorized candidates; core rechecks proposed ID. |
-| Ambiguous correspondent | Highest score wins; equal scores sort by ascending ID then name; second-best score is audit-only, no ambiguity veto. | Preserve deterministic ordering and audit diagnostics. |
-| No correspondent match | Below threshold, no valid candidates, or noise-only observed name requests creation; blank observed name preserves. | Explicit creation proposal; core owns permission check and creation. |
-| Correspondent lookup failure | Warning; remaining metadata still patches, correspondent omitted. | Pure resolver on retained candidates removes network lookup; inference/resolution failure may omit correspondent and record diagnostics. A submitted unauthorized creation rejects the whole proposal. |
-| Language list | Inference model chooses first valid normalized code, otherwise `und`; runner takes first code or `und`. | Adapter preserves normalization/vocabulary and proposes one language tag. |
-| Language replacement | All known `language:` tags replaced; new tag has matching algorithm 0 and color `#166534`. | Core replaces authorized managed language tags, preserves unrelated/inaccessible tags, owns creation defaults. |
-| Processing date | UTC execution day, updated on retries. | Retained UTC admission day; retry must not change an already retained result. |
-| Metadata audit | JSON timestamp/model/endpoint/Paperless version/raw extracted metadata and optional resolution diagnostics. | Preserve available diagnostic content, remove credentials, include immutable identities; core records actual creation/application outcome. |
-| Unrelated fields/tags | Re-read before PATCH; retain fields outside three managed roles and tags outside language/stage tags. | Transactionally preserve unrelated values; concurrent relevant changes reject stale proposals. |
-| OCR | Reject blank transcript; publish searchable archive when layout model is not `none`, text, and `ai_ocr_output` JSON; preserve unrelated fields. | Parser proposes private archive/text/provenance; core publishes together, with source checksum validation and recovery. |
+| Case                            | Existing runner behavior                                                                                                                          | Provider/core behavior required                                                                                                                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Long or absent title            | Truthy title sliced to 128; absent/empty preserves.                                                                                               | Adapter slices; omits absent/empty. Boundary rejects unsliced values.                                                                                                                                  |
+| Date bounds                     | Only 1900-01-01 through local `date.today()` is written.                                                                                          | Same bounds against retained local admission date; out-of-range inference omitted. Retention makes retry stable.                                                                                       |
+| Empty content                   | Whitespace-only content skips inference and removes queue entry.                                                                                  | Successful no-op, no processing date or audit mutation.                                                                                                                                                |
+| Blank summary                   | `(summary or "").strip()` is written even when blank.                                                                                             | Adapter preserves normalization; blank explicitly clears managed summary.                                                                                                                              |
+| Correspondent exact/fuzzy match | NFKD/accent/punctuation/corporate-noise normalization; max(character, token-sort, adjusted containment) score; reuse at threshold (default 0.80). | Adapter retains resolver algorithm on authorized candidates; core rechecks proposed ID.                                                                                                                |
+| Ambiguous correspondent         | Highest score wins; equal scores sort by ascending ID then name; second-best score is audit-only, no ambiguity veto.                              | Preserve deterministic ordering and audit diagnostics.                                                                                                                                                 |
+| No correspondent match          | Below threshold, no valid candidates, or noise-only observed name requests creation; blank observed name preserves.                               | Explicit creation proposal; core owns permission check and creation.                                                                                                                                   |
+| Correspondent lookup failure    | Warning; remaining metadata still patches, correspondent omitted.                                                                                 | Pure resolver on retained candidates removes network lookup; inference/resolution failure may omit correspondent and record diagnostics. A submitted unauthorized creation rejects the whole proposal. |
+| Language list                   | Inference model chooses first valid normalized code, otherwise `und`; runner takes first code or `und`.                                           | Adapter preserves normalization/vocabulary and proposes one language tag.                                                                                                                              |
+| Language replacement            | All known `language:` tags replaced; new tag has matching algorithm 0 and color `#166534`.                                                        | Core replaces authorized managed language tags, preserves unrelated/inaccessible tags, owns creation defaults.                                                                                         |
+| Processing date                 | UTC execution day, updated on retries.                                                                                                            | Retained UTC admission day; retry must not change an already retained result.                                                                                                                          |
+| Metadata audit                  | JSON timestamp/model/endpoint/Paperless version/raw extracted metadata and optional resolution diagnostics.                                       | Preserve available diagnostic content, remove credentials, include immutable identities; core records actual creation/application outcome.                                                             |
+| Unrelated fields/tags           | Re-read before PATCH; retain fields outside three managed roles and tags outside language/stage tags.                                             | Transactionally preserve unrelated values; concurrent relevant changes reject stale proposals.                                                                                                         |
+| OCR                             | Reject blank transcript; publish searchable archive when layout model is not `none`, text, and `ai_ocr_output` JSON; preserve unrelated fields.   | Parser proposes private archive/text/provenance; core publishes together, with source checksum validation and recovery.                                                                                |
 
 Intentional safety differences are core-owned authorization/creation, secret-free
 snapshots, stale-result rejection, and atomic application instead of independent

@@ -259,7 +259,9 @@ class TestTaskPostrunHandler:
             date_started=timezone.now(),
         )
 
-    @pytest.mark.parametrize("task_id", [str(uuid.uuid4()), "legacy-task-id"])
+    @pytest.mark.parametrize(
+        "task_id", ["00000000-0000-4000-8000-000000000001", "legacy-task-id"]
+    )
     def test_records_success_with_dict_result(self, task_id: str) -> None:
         task = self._started_task()
         task.task_id = task_id

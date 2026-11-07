@@ -1887,13 +1887,13 @@ outcomes, hooks, version publication and cleanup retain their existing owners.
 The completion boundary is a finite operation, not a worker process. The same
 `DocumentJob` invocation records identify local and remote executions.
 
-| Override boundary | Finite work and completion expectation | Lifetime or interactive interfaces |
-| --- | --- | --- |
-| Parser provider | `parser.process` returns validated text, date, page count and private file references. Required ingestion cannot publish before successful parsing. Reprocessing keeps the old document available. | Provider construction and selection are local declarations; no host availability check belongs there. |
-| Classification provider | `metadata.classify` returns proposals for the retained content and permitted candidates. Core rechecks identity, permissions and document revision, then applies assignments. Optional enrichment does not hide an imported document. | Suggestions remain synchronous request/response calls; they do not silently wait for a remote workstation. |
-| Search provider | `search.write`, `search.rebuild`, `search.optimize`, `search.wipe` are finite maintenance operations. Deferred inputs retain plain facts, selection and configuration. Changed facts, permissions or rebuild membership invalidate acceptance. External index effects with an unknown outcome require reconciliation. | Search, matching IDs, highlights, autocomplete, health and rebuild-needed queries remain synchronous. `open`/`close` manage process resources. |
-| Ingestion extensions | Preparation and cleanup have distinct invocation IDs and outcomes. Plugin outputs must satisfy the existing metadata/file contract. Hooks, workflows and extension signals retain conservative effect handling. Core publication and assignment remain core-owned. | Plugin construction/setup describes one processing attempt; it is not a long-lived service. |
-| Service implementations | Watchers submit durable consumption requests; schedulers dispatch existing named operations; workers deliver job IDs. Finite application work uses the operation above, independent of the selected host. | `Service.run()` is a foreground lifetime contract and cannot return a deferred task receipt. Interactive service APIs return admission/status responses. |
+| Override boundary       | Finite work and completion expectation                                                                                                                                                                                                                                                                                | Lifetime or interactive interfaces                                                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Parser provider         | `parser.process` returns validated text, date, page count and private file references. Required ingestion cannot publish before successful parsing. Reprocessing keeps the old document available.                                                                                                                    | Provider construction and selection are local declarations; no host availability check belongs there.                                                    |
+| Classification provider | `metadata.classify` returns proposals for the retained content and permitted candidates. Core rechecks identity, permissions and document revision, then applies assignments. Optional enrichment does not hide an imported document.                                                                                 | Suggestions remain synchronous request/response calls; they do not silently wait for a remote workstation.                                               |
+| Search provider         | `search.write`, `search.rebuild`, `search.optimize`, `search.wipe` are finite maintenance operations. Deferred inputs retain plain facts, selection and configuration. Changed facts, permissions or rebuild membership invalidate acceptance. External index effects with an unknown outcome require reconciliation. | Search, matching IDs, highlights, autocomplete, health and rebuild-needed queries remain synchronous. `open`/`close` manage process resources.           |
+| Ingestion extensions    | Preparation and cleanup have distinct invocation IDs and outcomes. Plugin outputs must satisfy the existing metadata/file contract. Hooks, workflows and extension signals retain conservative effect handling. Core publication and assignment remain core-owned.                                                    | Plugin construction/setup describes one processing attempt; it is not a long-lived service.                                                              |
+| Service implementations | Watchers submit durable consumption requests; schedulers dispatch existing named operations; workers deliver job IDs. Finite application work uses the operation above, independent of the selected host.                                                                                                             | `Service.run()` is a foreground lifetime contract and cannot return a deferred task receipt. Interactive service APIs return admission/status responses. |
 
 Built-in classifier training/activation is a separate implementation operation,
 not an interchangeable classification inference method. Likewise, an arbitrary
@@ -1923,11 +1923,11 @@ They cannot be claimed as generic processor operations.
 Create a regular service account in Users & Groups and grant its group the
 **Process** permission for the required processor capability:
 
-| Permission row | API permission |
-| --- | --- |
-| ParserProcessor | `process_parser` |
-| MetadataProcessor | `process_metadata` |
-| SearchProcessor | `process_search` |
+| Permission row     | API permission      |
+| ------------------ | ------------------- |
+| ParserProcessor    | `process_parser`    |
+| MetadataProcessor  | `process_metadata`  |
+| SearchProcessor    | `process_search`    |
 | IngestionProcessor | `process_ingestion` |
 
 These are `documents` permissions; they do not grant the service account document
