@@ -231,6 +231,7 @@ def run_parser(
         raise RejectedResult(str(error)) from error
     if provider.identity != identity:
         raise RejectedResult("Parser identity changed during execution")
+    thumbnail_identity = None
     if result["thumbnail"] is None:
         thumbnail_provider = LocalThumbnailProvider()
         thumbnail_request = {
@@ -293,8 +294,8 @@ def run_parser(
             validate_thumbnail(thumbnail_result)
         except (ValueError, TypeError, KeyError, OSError) as error:
             raise RejectedResult(str(error)) from error
-        result["thumbnail"] = thumbnail_result["thumbnail"]
-        result["thumbnail_provider"] = selection_before["identity"]
+        result = {**result, "thumbnail": thumbnail_result["thumbnail"]}
+        thumbnail_identity = selection_before["identity"]
     try:
         validate_result(
             frozen_request,
@@ -317,6 +318,8 @@ def run_parser(
             with path.open("rb") as stream:
                 os.fsync(stream.fileno())
             _sync_directory(path.parent)
+    if thumbnail_identity is not None:
+        result["thumbnail_provider"] = thumbnail_identity
     if job_id:
         job.refresh_from_db()
         job.result["parser_result"] = result

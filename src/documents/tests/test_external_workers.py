@@ -131,6 +131,63 @@ def test_plain_worker_files_results_and_publication(
     assert job.result["parser_result"]["worker"] == result["worker"]
 
 
+def test_external_parser_local_thumbnail_survives_cached_retry(
+    sample_doc, external, thumbnail_webp_file, mocker
+):
+    """Core thumbnail provenance stays outside the retained worker proposal."""
+    from documents.external_workers import ExternalParser
+    from documents.job_storage import job_directory
+    from documents.parser_operations import run_parser
+
+    class WorkerStopped(BaseException):
+        """Interrupt publication after the parser results are retained."""
+
+    thumbnail = mocker.patch(
+        "paperless.parsers.tesseract.RasterisedDocumentParser.get_thumbnail",
+        return_value=thumbnail_webp_file,
+    )
+    client, _ = external
+    original = sample_doc.source_path.read_bytes()
+    job, base, claim = parser_claim(sample_doc, client)
+    result = parser_result(claim)
+    assert (
+        client.post(
+            base + "result/", {"token": claim["token"], "result": result}, format="json"
+        ).status_code
+        == 202
+    )
+    stopped = mocker.patch("documents.jobs._apply", side_effect=WorkerStopped)
+    with pytest.raises(WorkerStopped):
+        jobs.run_reprocess(job.pk)
+    mocker.stop(stopped)
+    job.refresh_from_db()
+    retained = job.result["parser_result"]
+    assert retained["thumbnail"] is not None
+    assert retained["thumbnail_provider"]
+    assert job.result["invocations"]["parser.process"]["result"] == result
+
+    retried = run_parser(
+        ExternalParser(),
+        sample_doc.source_path,
+        sample_doc.mime_type,
+        job.input["filename"],
+        job.configuration,
+        job_directory(job.pk),
+        job_id=str(job.pk),
+        operation="reprocess",
+        allow_remote=True,
+    )
+    assert retried == retained
+    thumbnail.assert_called_once()
+    assert jobs.run_reprocess(job.pk)
+    sample_doc.refresh_from_db()
+    job.refresh_from_db()
+    assert job.status == DocumentJob.Status.SUCCEEDED
+    assert sample_doc.content == result["text"]
+    assert sample_doc.source_path.read_bytes() == original
+    assert job.result["invocations"]["parser.process"]["result"] == result
+
+
 @pytest.mark.parametrize(
     "implementation", ["other-language-worker/1", "alternative-engine/2"]
 )
@@ -171,7 +228,15 @@ def test_metadata_workers_are_interchangeable(sample_doc, external, implementati
 
 @pytest.mark.parametrize(
     "change",
-    ["revision", "worker", "archive", "unknown", "permissions", "archive_type"],
+    [
+        "revision",
+        "worker",
+        "archive",
+        "unknown",
+        "thumbnail_provider",
+        "permissions",
+        "archive_type",
+    ],
 )
 def test_external_parser_rejects_unsafe_result(sample_doc, external, settings, change):
     """The shared result channel never weakens domain or authorization checks."""
@@ -188,6 +253,8 @@ def test_external_parser_rejects_unsafe_result(sample_doc, external, settings, c
         result["worker"] = {"implementation": ""}
     elif change == "unknown":
         result["unexpected"] = True
+    elif change == "thumbnail_provider":
+        result["thumbnail_provider"] = "worker-supplied"
     elif change == "archive_type":
         upload = client.post(
             base + "files/",
