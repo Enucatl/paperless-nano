@@ -30,6 +30,8 @@ app.loader.import_default_modules()
 expected = {
     "documents.bulk_edit.delete",
     "documents.bulk_edit.restore_archive_serial_numbers_task",
+    "documents.enrichment_jobs.execute_enrichment",
+    "documents.search_operations.run_search",
     "documents.signals.handlers.process_cf_select_update",
     "documents.workflows.webhooks.send_webhook",
     "paperless_mail.mail.apply_mail_action",
