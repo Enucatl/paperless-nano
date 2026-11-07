@@ -278,6 +278,47 @@ def test_disconnect_fails_closed_and_restart_is_full_snapshot(process, connectio
         stop_observer(restarted, reader)
 
 
+def test_control_signal_during_wait(connection):
+    """A signal interrupting a wait cannot re-enter its synchronization lock."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import signal
+import threading
+from types import SimpleNamespace
+
+import jobs_observer as observer
+
+class InterruptedWait(threading.Event):
+    def wait(self, timeout=None):
+        with self._cond:
+            signal.raise_signal(signal.SIGUSR1)
+        return False
+
+observer.threading = SimpleNamespace(Event=InterruptedWait)
+poll = observer.poll
+
+def stop_after_poll(*args, **kwargs):
+    result = poll(*args, **kwargs)
+    signal.raise_signal(signal.SIGTERM)
+    return result
+
+observer.poll = stop_after_poll
+observer.observe()
+""",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert events[-1]["event"] == "observer_summary"
+    assert events[-1]["final"] is True
+
+
 def test_idle_driver_boundaries(monkeypatch):
     """Measurement starts after pause ACK and resumes before returning to workload."""
     calls = []

@@ -19,6 +19,7 @@ from documents import deferred_operations as operations
 from documents.job_state import RejectedResult
 from documents.job_storage import job_directory
 from documents.job_storage import sync_directory
+from documents.models import Document
 from documents.models import DocumentJob
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import relative_path
@@ -47,7 +48,7 @@ class OperationAPIView(APIView):
         """Translate lifecycle conflicts without exposing internal tracebacks."""
         if isinstance(exc, (operations.OperationConflict, RejectedResult, Timeout)):
             exc = Conflict(str(exc))
-        elif isinstance(exc, DocumentJob.DoesNotExist):
+        elif isinstance(exc, (Document.DoesNotExist, DocumentJob.DoesNotExist)):
             exc = Http404()
         return super().handle_exception(exc)
 

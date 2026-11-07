@@ -6,7 +6,6 @@ import hashlib
 import json
 import signal
 import sys
-import threading
 import time
 from typing import Any
 
@@ -203,19 +202,20 @@ def observe() -> None:
     """Poll through a read-only session and emit bounded transition observations."""
     import psycopg
 
-    stop = threading.Event()
-    paused = threading.Event()
-    wake = threading.Event()
+    # Signal handlers must not re-enter synchronization locks held by this thread.
+    stop = False
+    paused = False
 
     def control(signum, _frame) -> None:
         """Handle idle boundaries only between completed database observations."""
+        nonlocal stop, paused
+
         if signum == signal.SIGUSR1:
-            paused.set()
+            paused = True
         elif signum == signal.SIGUSR2:
-            paused.clear()
+            paused = False
         else:
-            stop.set()
-        wake.set()
+            stop = True
 
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1, signal.SIGUSR2):
         signal.signal(signum, control)
@@ -239,13 +239,12 @@ def observe() -> None:
         task_versions = {}
         was_paused = False
         while True:
-            final = stop.is_set()
-            if paused.is_set() and not final:
+            final = stop
+            if paused and not final:
                 if not was_paused:
                     emit("observer_paused", observed_unix=time.time(), queries=queries)
                     was_paused = True
-                wake.wait()
-                wake.clear()
+                time.sleep(INTERVAL)
                 continue
             if was_paused:
                 previous_poll = None
@@ -330,8 +329,7 @@ def observe() -> None:
             previous_tasks = current_tasks
             previous_poll = poll_unix
             previous_statement = db_statement.timestamp()
-            wake.wait(max(0.0, INTERVAL - (time.monotonic() - started)))
-            wake.clear()
+            time.sleep(max(0.0, INTERVAL - (time.monotonic() - started)))
 
 
 def self_check() -> None:
