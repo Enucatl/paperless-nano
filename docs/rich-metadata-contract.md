@@ -258,17 +258,11 @@ reprocessing to detect it again. New bundled workers omit language from metadata
 prompts, schemas and results; the core detector needs no worker-side dependency
 and works without AI metadata extraction.
 
-Migrations backfill existing `language:<code>` tags, then remove all legacy
-language tags. One normalized code supplies the language; conflicting valid
-claims become `und`. Cleanup also maps unsupported claims to `und` when the
-native field is still unset. Existing nonblank native values survive cleanup. Documents
-without language tags remain unset until processing. Ordinary language-only saved
-filters become native language filters. Other references to deleted language tags
-are removed from saved views, workflows, and mail rules; unrelated references and
-child tags survive. Removing a workflow condition can broaden its matching.
-The cleanup cannot restore removed tags when reversing migrations; old bookmarks
-using tag IDs need updating. The search index revision changes so the normal
-startup check rebuilds old tag search terms.
+Migration `0033_document_language` backfills existing `language:<code>` tags.
+One normalized code supplies the language; conflicting valid claims become `und`.
+Documents without language tags remain unset until processing. Existing tags and
+their references are preserved. The search index revision changes so the normal
+startup check rebuilds the index with native language metadata.
 
 Before upgrading, drain pending OCR and metadata jobs, or cancel and requeue them
 after upgrade. Native language becomes part of the retained document revision,

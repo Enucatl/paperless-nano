@@ -407,6 +407,7 @@ export class SettingsService {
           DisplayField.ASN,
           DisplayField.PAGE_COUNT,
           DisplayField.SHARED,
+          DisplayField.LANGUAGE,
         ].includes(field.id)
       ) {
         return field

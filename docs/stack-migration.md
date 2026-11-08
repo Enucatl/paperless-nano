@@ -133,7 +133,8 @@ with the tested native-language backend changes and all 37 compiled UI locales.
 The independent worker's version-1 language relation proposals remain compatible;
 core publishes native language and does not recreate language tags.
 
-Migrations `0033_document_language` and `0034_remove_language_tags` are applied.
+Migration `0033_document_language` and the private tag cleanup were applied.
+The private cleanup migration was subsequently removed from the repository.
 All 2,361 documents were verified against the pre-upgrade baseline: Italian 1,345,
 German 687, English 306, French 10, Thai 6, Portuguese 1, unknown 2, unset 4.
 All seven legacy language tags were removed. The 17 unrelated tags and their 273
