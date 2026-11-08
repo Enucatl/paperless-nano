@@ -100,7 +100,7 @@ def test_apply_preserves_unrelated_metadata_and_duplicate_delivery(sample_doc, r
     assert sample_doc.correspondent.name == "Acme"
     assert set(sample_doc.tags.values_list("name", flat=True)) == {
         "unrelated",
-        "language:en",
+        "language:de",
     }
     assert sample_doc.custom_fields.get(field=extra).value == "keep"
     assert sample_doc.custom_fields.get(field__name="summary").value == ""
@@ -119,7 +119,8 @@ def test_apply_preserves_unrelated_metadata_and_duplicate_delivery(sample_doc, r
     sample_doc.refresh_from_db()
     assert sample_doc.modified == modified
     assert Correspondent.objects.filter(name="Acme").count() == 1
-    assert Tag.objects.filter(name="language:en").count() == 1
+    assert sample_doc.language == "en"
+    assert not Tag.objects.filter(name="language:en").exists()
     assert sample_doc.source_path.read_bytes() == source
     assert sample_doc.archive_path.read_bytes() == archive
 
@@ -195,7 +196,7 @@ def test_changed_snapshot_rejects_staged_result(
 
 
 @pytest.mark.parametrize(
-    "revoked", ["change_document", "add_correspondent", "add_tag", "process_metadata"]
+    "revoked", ["change_document", "add_correspondent", "process_metadata"]
 )
 def test_permission_revocation_after_delivery(sample_doc, rich, revoked):
     """Both requester and processor capabilities are checked again on application."""
@@ -283,7 +284,9 @@ def test_new_same_name_candidate_reuses_entity(sample_doc, rich):
     enrichment_jobs.run_enrichment(str(job.pk))
     sample_doc.refresh_from_db()
     assert sample_doc.correspondent_id == correspondent.pk
-    assert list(sample_doc.tags.values_list("pk", flat=True)) == [tag.pk]
+    assert not sample_doc.tags.exists()
+    assert sample_doc.language == "en"
+    assert Tag.objects.filter(pk=tag.pk).exists()
 
 
 def test_hidden_same_name_entity_is_never_reused(sample_doc, rich):
@@ -465,7 +468,8 @@ def test_concurrent_postgres_creators_use_one_entity(sample_doc, rich, mocker):
     second.refresh_from_db()
     assert sample_doc.correspondent_id == second.correspondent_id
     assert Correspondent.objects.filter(name="Acme", owner=None).count() == 1
-    assert Tag.objects.filter(name="language:en", owner=None).count() == 1
+    assert sample_doc.language == second.language == "en"
+    assert not Tag.objects.filter(name="language:en", owner=None).exists()
 
 
 def test_operator_can_acknowledge_committed_followup(sample_doc, rich, mocker):
@@ -533,7 +537,6 @@ def test_language_replacement_preserves_unrelated_descendants(sample_doc, rich):
     enrichment_jobs.run_enrichment(str(job.pk))
     assert set(sample_doc.tags.values_list("name", flat=True)) == {
         "language:de",
-        "language:en",
         "unrelated child",
     }
 
@@ -568,3 +571,31 @@ def test_managed_fields_do_not_rewrite_unrelated_document_links(
     assert linked.modified == previous_modified
     assert linked.custom_fields.get(field=field).value == [sample_doc.pk]
     assert sample_doc.custom_fields.get(field=field).value == [linked.pk]
+
+
+def test_metadata_preserves_native_language(sample_doc, rich):
+    """Legacy worker proposals cannot replace an existing native language."""
+    sample_doc.language = "fr"
+    sample_doc.save()
+    job, _, _ = stage_result(sample_doc, rich)
+    enrichment_jobs.run_enrichment(str(job.pk))
+    sample_doc.refresh_from_db()
+    assert sample_doc.language == "fr"
+    assert not Tag.objects.filter(name="language:en").exists()
+
+
+@pytest.mark.parametrize(
+    ("legacy", "canonical"),
+    [("ar", "arb"), ("fa", "pes"), ("zh-cn", "cmn"), ("zh-tw", "cmn")],
+)
+def test_legacy_language_alias_normalized(sample_doc, rich, legacy, canonical):
+    """Deployed workers' detector aliases become canonical native values."""
+    job, _, _ = stage_result(
+        sample_doc,
+        rich,
+        change=lambda result: result.update(language={"create": f"language:{legacy}"}),
+    )
+    enrichment_jobs.run_enrichment(str(job.pk))
+    sample_doc.refresh_from_db()
+    assert sample_doc.language == canonical
+    assert not sample_doc.tags.exists()

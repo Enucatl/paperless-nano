@@ -255,7 +255,7 @@ flake8-tidy-imports.banned-api."documents.tests".msg = "Shared test infrastructu
 isort.force-single-line = true
 
 [tool.codespell]
-ignore-words-list = "criterias,afterall,valeu,ureue,equest,ure,assertIn,Oktober,commitish,NIN,nin,reprot"
+ignore-words-list = "criterias,afterall,valeu,ureue,equest,ure,assertIn,Oktober,commitish,NIN,nin,reprot,te"
 skip = """\
   src-ui/src/locale/*,src-ui/pnpm-lock.yaml,src-ui/e2e/*,src/paperless/tests/samples/mail/*,src/documents/tests/samples\
   /*,src/paperless_testing/sample_files/*,*.po,*.json\

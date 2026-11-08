@@ -33,6 +33,7 @@ export type DocumentBulkEditMethod =
   | 'set_correspondent'
   | 'set_document_type'
   | 'set_storage_path'
+  | 'set_language'
   | 'add_tag'
   | 'remove_tag'
   | 'modify_tags'
@@ -406,6 +407,15 @@ export class DocumentService extends AbstractPaperlessService<Document> {
       documents: ids,
       ...request,
     })
+  }
+
+  getLanguages(
+    filterRules: FilterRule[] = []
+  ): Observable<{ language: string; document_count: number }[]> {
+    return this.http.get<{ language: string; document_count: number }[]>(
+      this.getResourceUrl(null, 'languages'),
+      { params: queryParamsFromFilterRules(filterRules) }
+    )
   }
 
   getSelectionData(

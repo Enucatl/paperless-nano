@@ -16,6 +16,7 @@ from documents.classification_operations import snapshot_document
 from documents.enrichment import InvalidEnrichmentResult
 from documents.enrichment import validate_result
 from documents.job_state import RejectedResult
+from documents.language import normalize_language
 from documents.models import Correspondent
 from documents.models import CustomField
 from documents.models import CustomFieldInstance
@@ -130,6 +131,7 @@ def make_request(
                 "document_id": document.pk,
                 "root_document_id": document.root_document_id,
                 "title": document.title,
+                "language": document.language,
                 "document_date": document.created,
                 "filename": document.original_filename,
                 "owner_id": document.owner_id,
@@ -177,7 +179,7 @@ def validate(
             "Rich metadata input, fields or relation permissions changed"
         )
     actor = User.objects.get(pk=actor_id) if actor_id is not None else None
-    for key, model in (("correspondent", Correspondent), ("language", Tag)):
+    for key, model in (("correspondent", Correspondent),):
         if (
             "create" in result.get(key, {})
             and actor is not None
@@ -223,18 +225,19 @@ def apply(
             document, actor_id, Correspondent, result["correspondent"]
         )
         outcome["correspondent_id"] = values["correspondent"].pk
-    if "language" in result:
-        language = resolve_relation(document, actor_id, Tag, result["language"])
-        managed = {
-            item["id"]
-            for item in request["candidates"]["tags"]
-            if item["name"].startswith("language:")
-        }
-        retained = list(document.tags.exclude(pk__in=managed))
-        # Removing an ancestor would also remove an unrelated descendant.
-        ancestors = {parent for tag in retained for parent in tag.get_ancestors()}
-        values["tags"] = [*retained, *ancestors, language]
-        outcome["language_tag_id"] = language.pk
+    if "language" in result and not document.language:
+        proposal = result["language"]
+        name = (
+            next(
+                item["name"]
+                for item in request["candidates"]["tags"]
+                if item["id"] == proposal["id"]
+            )
+            if "id" in proposal
+            else proposal["create"]
+        )
+        values["language"] = normalize_language(name.removeprefix("language:"))
+        outcome["language"] = values["language"]
     fields = []
     proposed = {
         item["field"]: item["value"] for item in result.get("custom_fields", [])

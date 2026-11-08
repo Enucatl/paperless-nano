@@ -1200,6 +1200,31 @@ class DocumentViewSet(
             queryset = annotate_effective_content(queryset)
         return queryset
 
+    @extend_schema(
+        responses=inline_serializer(
+            name="DocumentLanguageCount",
+            fields={
+                "language": serializers.CharField(allow_blank=True),
+                "document_count": serializers.IntegerField(),
+            },
+            many=True,
+        )
+    )
+    @action(methods=["get"], detail=False)
+    def languages(self, request: Request) -> Response:
+        """Count languages in the current accessible, non-trashed selection."""
+        queryset = self.filter_queryset(self.get_queryset()).filter(
+            deleted_at__isnull=True
+        )
+        return Response(
+            list(
+                queryset.order_by()
+                .values("language")
+                .annotate(document_count=Count("pk", distinct=True))
+                .order_by("language")
+            )
+        )
+
     def get_serializer(self, *args, **kwargs):
         truncate_content = self.request.query_params.get("truncate_content", "False")
         kwargs.setdefault("context", self.get_serializer_context())

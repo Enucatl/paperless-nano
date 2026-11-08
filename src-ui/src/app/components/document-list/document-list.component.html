@@ -257,6 +257,9 @@
                   (sort)="onSort($event)"
                   i18n>Storage path</th>
               }
+              @if (activeDisplayFields.includes(DisplayField.LANGUAGE)) {
+                <th i18n>Language</th>
+              }
               @if (activeDisplayFields.includes(DisplayField.CREATED)) {
                 <th class="cursor-pointer"
                   pngxSortable="created"
@@ -370,6 +373,9 @@
                       <a (click)="clickStoragePath(d.storage_path);$event.stopPropagation()" title="Filter by storage path" i18n-title>{{d.storage_path | storagePathName | async}}</a>
                     }
                   </td>
+                }
+                @if (activeDisplayFields.includes(DisplayField.LANGUAGE)) {
+                  <td>{{d.language}}</td>
                 }
                 @if (activeDisplayFields.includes(DisplayField.CREATED)) {
                   <td>

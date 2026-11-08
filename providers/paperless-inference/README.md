@@ -61,7 +61,7 @@ the structured `ai_ocr_output` record.
 
 Metadata defaults retain the baseline fields with strict JSON schema
 response format, 1000 max tokens, temperature zero, minimal reasoning effort,
-first valid language or `und`, and correspondent similarity threshold 0.80. Optional settings are
+and correspondent similarity threshold 0.80. Optional settings are
 `INFERENCE_METADATA_RESPONSE_FORMAT` (`auto`, `json_schema`, `json_object`,
 `none`), `INFERENCE_METADATA_MAX_TOKENS`, `INFERENCE_METADATA_TEMPERATURE`,
 `INFERENCE_METADATA_REASONING_EFFORT`, `INFERENCE_METADATA_EXTRA_KWARGS`, and
@@ -84,6 +84,10 @@ only when the request does not require an archive. Core supplies thumbnails
 separately.
 Metadata extraction returns proposals only. Empty content yields no changes;
 endpoint failure propagates to durable operation recovery.
+Document language is detected locally by core from extracted text for both local
+and external OCR. The metadata model no longer requests or publishes language;
+no language tags or worker-side language detector are needed. The metadata
+implementation and prompt identities advance to revision 2 for this change.
 
 A pending unclaimed request can be executed by any authorized worker implementing
 its contract; model and prompt changes do not require a server rebuild. An

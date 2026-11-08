@@ -171,9 +171,10 @@ export function queryParamsFromFilterRules(filterRules: FilterRule[]): Params {
       ) {
         params[ruleType.isnull_filtervar] = 0
       } else if (ruleType.multi) {
-        params[ruleType.filtervar] = params[ruleType.filtervar]
-          ? params[ruleType.filtervar] + ',' + rule.value
-          : rule.value
+        params[ruleType.filtervar] =
+          params[ruleType.filtervar] !== undefined
+            ? params[ruleType.filtervar] + ',' + rule.value
+            : rule.value
       } else {
         params[ruleType.filtervar] = rule.value
         if (ruleType.datatype == 'boolean')

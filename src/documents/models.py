@@ -27,6 +27,7 @@ from django.db.models.functions import Substr
 from django_softdelete.models import SoftDeleteModel
 
 from documents.data_models import DocumentSource
+from documents.language import LANGUAGE_CHOICES
 from documents.parsers import get_default_file_extension
 
 
@@ -242,6 +243,16 @@ class Document(SoftDeleteModel, ModelWithOwner):  # type: ignore[django-manager-
             "The raw, text-only data of the document. This field is "
             "primarily used for searching.",
         ),
+    )
+
+    language = models.CharField(
+        _("language"),
+        max_length=3,
+        blank=True,
+        default="",
+        db_index=True,
+        choices=LANGUAGE_CHOICES,
+        help_text=_("Empty means unset; und means unknown or indeterminate."),
     )
 
     content_job = models.UUIDField(null=True, editable=False)
@@ -799,6 +810,8 @@ class SavedViewFilterRule(models.Model):
         (48, _("simple title search")),
         (49, _("simple text search")),
         (50, _("has duplicates")),
+        (51, _("language is")),
+        (52, _("language is in")),
     ]
 
     saved_view = models.ForeignKey(

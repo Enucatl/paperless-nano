@@ -15,7 +15,7 @@ entities, persists, publishes, and recovers through the existing durable jobs an
 operation journal. No extra stage queue or listener is required.
 
 The maintained sanitized [invoice fixture](../src/documents/tests/fixtures/enrichment/invoice.json)
-is a complete request/result example with an existing correspondent, new language,
+is a complete request/result example with an existing correspondent, legacy language proposal,
 all bundled metadata outputs, one additional typed field, and unrelated values to
 preserve. IDs, text, endpoint and identities are synthetic. Tests load this same
 fixture, so documentation and wire checks share an example.
@@ -54,16 +54,16 @@ preserving its existing value. Null remains invalid in the core result contract.
 
 A result repeats `version`, `revision` and `identity`. Every other key is optional:
 
-| Key               | Meaning                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| `title`           | Replacement string, 1–128 characters; adapter truncates before submission.                        |
-| `document_date`   | Replacement ISO date, from 1900-01-01 through retained `document_date_max`.                       |
-| `summary`         | Replacement string in the managed summary field; empty string clears.                             |
-| `processing_date` | Retained request date in the managed processing-date field.                                       |
-| `audit`           | JSON object, serialized by core into the managed audit field.                                     |
-| `correspondent`   | Exactly `{id: permitted_id}` or `{create: observed_name}`.                                        |
-| `language`        | Exactly `{id: permitted_language_tag_id}` or `{create: "language:en"}`.                           |
-| `custom_fields`   | List of `{field: id, data_type: retained_type, value: typed_value}` for additional managed roles. |
+| Key                 | Meaning                                                                                                                                                                 |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`             | Replacement string, 1–128 characters; adapter truncates before submission.                                                                                              |
+| `document_date`     | Replacement ISO date, from 1900-01-01 through retained `document_date_max`.                                                                                             |
+| `summary`           | Replacement string in the managed summary field; empty string clears.                                                                                                   |
+| `processing_date`   | Retained request date in the managed processing-date field.                                                                                                             |
+| `audit`             | JSON object, serialized by core into the managed audit field.                                                                                                           |
+| `correspondent`     | Exactly `{id: permitted_id}` or `{create: observed_name}`.                                                                                                              |
+| `language` (legacy) | Exactly `{id: permitted_language_tag_id}` or `{create: "language:en"}`; validated and translated into the native field only when unset. New workers omit this proposal. |
+| `custom_fields`     | List of `{field: id, data_type: retained_type, value: typed_value}` for additional managed roles.                                                                       |
 
 Omission always preserves. Null is rejected, including for relations and dates;
 it never implicitly clears an existing value. Empty title is invalid. Empty
@@ -71,8 +71,9 @@ summary/string custom values explicitly replace with blank; an empty
 `custom_fields` list changes nothing. The three reserved roles cannot also appear
 in `custom_fields`; duplicate field IDs are rejected. If a reserved-name field
 does not exist, its output is unused without rejecting other valid metadata.
-Supplied scalar values replace, never append. A language proposal replaces managed `language:` tags
-with one selected tag, preserving unrelated tags and fields. Stage-selection tags
+Supplied scalar values replace, never append, except legacy language proposals,
+which only fill an unset native `Document.language`. Language proposals never
+create, replace or remove tags. Stage-selection tags
 from the old runner are not part of this new orchestration. No result can change
 owner, permissions, content, document type, storage path or arbitrary tags.
 
@@ -81,8 +82,10 @@ existing relation access, field names/types and add permissions at commit.
 It resolves concurrent same-name creations within its transaction and records the
 actual chosen ID in its audit; a provider's diagnostic ID is not authoritative.
 Core must preserve inaccessible/unrelated tags, not infer deletion authority from
-the candidate list alone. Language syntax is `language:` followed by 2–3 lowercase
-letters; the adapter's supported-language vocabulary supplies semantic validation.
+the candidate list alone. Legacy language proposals require the `language:`
+prefix and a supported code; detector aliases are normalized to canonical codes
+by core. The existing version 1 relation shape remains unchanged; a string is
+not accepted in its place.
 
 ## Baseline and explicit differences
 
@@ -102,8 +105,8 @@ The fixture represents the observed behavior, not a captured private document.
 | Ambiguous correspondent         | Highest score wins; equal scores sort by ascending ID then name; second-best score is audit-only, no ambiguity veto.                              | Preserve deterministic ordering and audit diagnostics.                                                                                                                                                 |
 | No correspondent match          | Below threshold, no valid candidates, or noise-only observed name requests creation; blank observed name preserves.                               | Explicit creation proposal; core owns permission check and creation.                                                                                                                                   |
 | Correspondent lookup failure    | Warning; remaining metadata still patches, correspondent omitted.                                                                                 | Pure resolver on retained candidates removes network lookup; inference/resolution failure may omit correspondent and record diagnostics. A submitted unauthorized creation rejects the whole proposal. |
-| Language list                   | Inference model chooses first valid normalized code, otherwise `und`; runner takes first code or `und`.                                           | Adapter preserves normalization/vocabulary and proposes one language tag.                                                                                                                              |
-| Language replacement            | All known `language:` tags replaced; new tag has matching algorithm 0 and color `#166534`.                                                        | Core replaces authorized managed language tags, preserves unrelated/inaccessible tags, owns creation defaults.                                                                                         |
+| Language list                   | Inference model chooses first valid normalized code, otherwise `und`; runner takes first code or `und`.                                           | Core runs deterministic local `langdetect` on extracted text after local or external OCR; metadata models no longer classify language.                                                                 |
+| Language replacement            | All known `language:` tags replaced; new tag has matching algorithm 0 and color `#166534`.                                                        | Core stores one native language when unset, preserves existing values and all tags; legacy proposals fill only unset native values.                                                                    |
 | Processing date                 | UTC execution day, updated on retries.                                                                                                            | Retained UTC admission day; retry must not change an already retained result.                                                                                                                          |
 | Metadata audit                  | JSON timestamp/model/endpoint/Paperless version/raw extracted metadata and optional resolution diagnostics.                                       | Preserve available diagnostic content, remove credentials, include immutable identities; core records actual creation/application outcome.                                                             |
 | Unrelated fields/tags           | Re-read before PATCH; retain fields outside three managed roles and tags outside language/stage tags.                                             | Transactionally preserve unrelated values; concurrent relevant changes reject stale proposals.                                                                                                         |
@@ -202,13 +205,15 @@ that should receive new values.
 
 Core rechecks requester edit access and processor capability at application,
 including after a restart that retained an already accepted proposal. New
-correspondents and language tags require the requester's respective add
+correspondents require the requester's add-correspondent
 permission; their owner is the requester, or the document owner for trusted
 actorless jobs. Exact same-name/owner creations use the existing database unique
 constraints, including the partial constraint for ownerless entities. A hidden
-same-name entity belonging to another owner is never reused. Created language
-tags retain the baseline color `#166534` and matching algorithm `0`. Audit output
-records the actual applied relation IDs under `application`.
+same-name entity belonging to another owner is never reused. Legacy language
+proposals are validated against retained authorized tag candidates and supported
+codes, then translated to the native field without creating a tag or requiring
+add-tag permission. Audit output records the actual applied correspondent ID
+and language code under `application`.
 
 Metadata, relation creation and the committed checkpoint share one database
 transaction. File moves are deferred until after that commit. A process exit
@@ -229,8 +234,43 @@ after a completed follow-up retain the committed checkpoint and can resume
 normally. Search admission is still queued work: completion of the enrichment
 job does not itself prove that a separately queued search update has finished.
 
-Language replacement respects the existing tag hierarchy: if an unrelated or
-inaccessible retained tag needs an old language tag as an ancestor, that ancestor
-is preserved alongside the newly selected language. This intentional exception
-prevents removal of unrelated descendants; flatten that hierarchy explicitly if
-exactly one attached language tag is required.
+## Native document language
+
+`Document.language` is one indexed, validated canonical code, independent of tags
+and metadata inference. `""` means unset or not yet processed; `und` means detection
+ran but the language was unknown or indeterminate. The canonical vocabulary
+includes supported detector languages and the former worker vocabulary. Core
+normalizes detector/legacy aliases `ar` to `arb`, `fa` to `pes`, and `zh-cn`/`zh-tw`
+to `cmn`; document API writes require canonical codes.
+
+After local or external OCR/text extraction, core detects an unset language with
+local `langdetect`, seeded with zero. Empty, insufficient, noisy, unsupported or
+failed detection produces `und`. Detection requires at least 20 letters, five
+distinct letters, and a 30% letter share.
+This conservative input check does not make short text reliable or detector
+probabilities calibrated confidence. Mixed-language text receives one detector
+primary language. OCR recognition settings do not determine document language.
+The existing preview detector retains its separate fallback behavior.
+
+Any nonblank stored value, including a manual edit or `und`, survives reprocessing
+and legacy metadata proposals. Clear the native field to `""`, then request OCR
+reprocessing to detect it again. New bundled workers omit language from metadata
+prompts, schemas and results; the core detector needs no worker-side dependency
+and works without AI metadata extraction.
+
+Migrations backfill existing `language:<code>` tags, then remove all legacy
+language tags. One normalized code supplies the language; conflicting valid
+claims become `und`. Cleanup also maps unsupported claims to `und` when the
+native field is still unset. Existing nonblank native values survive cleanup. Documents
+without language tags remain unset until processing. Ordinary language-only saved
+filters become native language filters. Other references to deleted language tags
+are removed from saved views, workflows, and mail rules; unrelated references and
+child tags survive. Removing a workflow condition can broaden its matching.
+The cleanup cannot restore removed tags when reversing migrations; old bookmarks
+using tag IDs need updating. The search index revision changes so the normal
+startup check rebuilds old tag search terms.
+
+Before upgrading, drain pending OCR and metadata jobs, or cancel and requeue them
+after upgrade. Native language becomes part of the retained document revision,
+and the bundled metadata implementation/prompt identity advances to revision 2;
+pre-upgrade snapshots must not be silently reinterpreted.

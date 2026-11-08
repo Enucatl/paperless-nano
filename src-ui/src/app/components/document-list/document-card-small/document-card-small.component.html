@@ -66,6 +66,9 @@
               <small>{{document().document_type | documentTypeName | async}}</small>
             </button>
           }
+          @if (displayFields().includes(DisplayField.LANGUAGE) && document().language) {
+            <div class="list-group-item bg-transparent p-1 border-0"><small><span i18n>Language:</span> {{document().language}}</small></div>
+          }
           @if (displayFields().includes(DisplayField.STORAGE_PATH) && document().storage_path) {
             <button type="button" class="list-group-item list-group-item-action bg-transparent ps-0 p-1 border-0 d-flex align-items-start" title="Toggle storage path filter" i18n-title
               (click)="clickStoragePath.emit(document().storage_path);$event.stopPropagation()">

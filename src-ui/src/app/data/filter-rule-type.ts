@@ -67,12 +67,27 @@ export const FILTER_HAS_ANY_CUSTOM_FIELDS = 41
 
 export const FILTER_CUSTOM_FIELDS_QUERY = 42
 
+export const FILTER_LANGUAGE = 51
+export const FILTER_LANGUAGE_ANY = 52
+
 export const FILTER_MIME_TYPE = 47
 
 export const SIMPLE_TEXT_PARAMETER = 'text'
 export const SIMPLE_TITLE_PARAMETER = 'title_search'
 
 export const FILTER_RULE_TYPES: FilterRuleType[] = [
+  {
+    id: FILTER_LANGUAGE,
+    filtervar: 'language',
+    datatype: 'string',
+    multi: false,
+  },
+  {
+    id: FILTER_LANGUAGE_ANY,
+    filtervar: 'language__in',
+    datatype: 'string',
+    multi: true,
+  },
   {
     id: FILTER_TITLE,
     filtervar: 'title__icontains',

@@ -56,6 +56,8 @@ import {
   FILTER_HAS_STORAGE_PATH_ANY,
   FILTER_HAS_TAGS_ALL,
   FILTER_HAS_TAGS_ANY,
+  FILTER_LANGUAGE,
+  FILTER_LANGUAGE_ANY,
   FILTER_MIME_TYPE,
   FILTER_OWNER,
   FILTER_OWNER_ANY,
@@ -412,6 +414,48 @@ describe('FilterEditorComponent', () => {
     ]
     expect(component.textFilterTarget).toEqual('asn') // TEXT_FILTER_TARGET_ASN
     expect(component.textFilterModifier).toEqual('less') // TEXT_FILTER_MODIFIER_LT
+  })
+
+  it('loads languages and counts using the current document filters', () => {
+    component.filterRules = [
+      { rule_type: FILTER_MIME_TYPE, value: 'pdf' },
+      { rule_type: FILTER_LANGUAGE, value: 'en' },
+    ]
+    component.loadLanguages()
+    const request = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}documents/languages/?mime_type=pdf`
+    )
+    request.flush([
+      { language: 'de', document_count: 2 },
+      { language: '', document_count: 1 },
+    ])
+    expect(component.languageValues).toEqual([
+      { language: 'de', document_count: 2 },
+      { language: '', document_count: 1 },
+    ])
+  })
+
+  it('preserves languages independently of the text filter when editing saved views', () => {
+    component.filterRules = [
+      { rule_type: FILTER_LANGUAGE_ANY, value: 'en' },
+      { rule_type: FILTER_LANGUAGE_ANY, value: 'de' },
+      { rule_type: FILTER_MIME_TYPE, value: 'pdf' },
+    ]
+    expect(component.selectedLanguages).toEqual(['en', 'de'])
+    expect(component.filterRules).toEqual(
+      expect.arrayContaining([
+        { rule_type: FILTER_LANGUAGE_ANY, value: 'en' },
+        { rule_type: FILTER_LANGUAGE_ANY, value: 'de' },
+        { rule_type: FILTER_MIME_TYPE, value: 'pdf' },
+      ])
+    )
+    component.toggleLanguage('en')
+    expect(component.filterRules).toContainEqual({
+      rule_type: FILTER_LANGUAGE,
+      value: 'de',
+    })
+    component.filterRules = []
+    expect(component.selectedLanguages).toEqual([])
   })
 
   it('should ingest text filter rules for mime type', () => {

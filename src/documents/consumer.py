@@ -31,6 +31,7 @@ from documents.file_handling import generate_filename
 from documents.file_handling import generate_unique_filename
 from documents.file_handling import validate_path_in_root
 from documents.job_state import PendingOperation
+from documents.language import detect_document_language
 from documents.loggers import LoggingMixin
 from documents.models import Correspondent
 from documents.models import CustomField
@@ -291,6 +292,7 @@ class ConsumerPlugin(
             version_index=next_version_index + 1,
             checksum=compute_checksum(file_for_checksum),
             content=text or "",
+            language=root_doc_frozen.language or detect_document_language(text or ""),
             page_count=page_count,
             mime_type=mime_type,
             original_filename=self.filename,
@@ -694,6 +696,9 @@ class ConsumerPlugin(
             self._store_barcodes(original_document)
 
             # Adding a version changes the effective document, so update root modified
+            Document.objects.filter(pk=root_doc.pk, language="").update(
+                language=original_document.language,
+            )
             Document.objects.filter(pk=root_doc.pk).update(
                 modified=timezone.now(),
             )
@@ -928,6 +933,7 @@ class ConsumerPlugin(
         document = Document.objects.create(
             title=title[:127],
             content=text,
+            language=detect_document_language(text),
             mime_type=mime_type,
             checksum=compute_checksum(file_for_checksum),
             created=create_date,

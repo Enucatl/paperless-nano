@@ -49,6 +49,7 @@ def test_sanitized_example_roundtrips(example):
         ("correspondent", {"create": " "}),
         ("language", {"id": 5}),
         ("language", {"create": "language:EN"}),
+        ("language", {"create": "language:zz"}),
         ("language", {"create": "inbox"}),
         ("custom_fields", [{"field": 90, "data_type": "longtext", "value": "bad"}]),
         ("custom_fields", [{"field": 10, "data_type": "longtext", "value": "bad"}]),
@@ -115,7 +116,17 @@ def test_missing_field_definition_is_ignored(example, role):
     )
 
 
-@pytest.mark.parametrize("relation", [{"id": 8}, {"create": "language:und"}])
+@pytest.mark.parametrize(
+    "relation",
+    [
+        {"id": 8},
+        {"create": "language:und"},
+        {"create": "language:ar"},
+        {"create": "language:fa"},
+        {"create": "language:zh-cn"},
+        {"create": "language:zh-tw"},
+    ],
+)
 def test_existing_and_fallback_language(example, relation):
     """Permit one existing language or explicit undefined-language creation."""
     example["result"]["language"] = relation

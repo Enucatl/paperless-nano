@@ -15,6 +15,7 @@ from documents.caching import clear_document_caches
 from documents.file_handling import create_source_path_directory
 from documents.file_handling import generate_unique_filename
 from documents.file_handling import validate_path_in_root
+from documents.language import detect_document_language
 from documents.models import Document
 from documents.utils import compute_checksum
 
@@ -82,13 +83,23 @@ def attach_external_archive(
                         created_path = new_path
                         while chunk := staged.read(65536):
                             destination.write(chunk)
+                    root = document.root_document or document
+                    language = (
+                        document.language
+                        or root.language
+                        or detect_document_language(content)
+                    )
                     Document.objects.filter(pk=document.pk).update(
                         archive_filename=str(filename),
                         archive_checksum=checksum,
                         content=content,
+                        language=language,
                         modified=timezone.now(),
                     )
                     if document.root_document_id:
+                        Document.objects.filter(
+                            pk=document.root_document_id, language=""
+                        ).update(language=language)
                         Document.objects.filter(pk=document.root_document_id).update(
                             modified=timezone.now(),
                         )
@@ -100,6 +111,7 @@ def attach_external_archive(
                             action=LogEntry.Action.UPDATE,
                             changes={
                                 "content": [document.content, content],
+                                "language": [document.language, language],
                                 "archive_checksum": [
                                     document.archive_checksum,
                                     checksum,

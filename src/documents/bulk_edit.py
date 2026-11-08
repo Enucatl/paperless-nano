@@ -176,6 +176,19 @@ def set_correspondent(
     return "OK"
 
 
+def set_language(doc_ids: list[int], language: str) -> Literal["OK"]:
+    """Set a validated language using normal document update handling."""
+    from documents.updates import document_update
+
+    field = Document._meta.get_field("language")
+    language = field.clean(language, None)
+    for document in Document.objects.filter(id__in=doc_ids).exclude(language=language):
+        with document_update(document):
+            document.language = language
+            document.save(update_fields=["language", "modified"])
+    return "OK"
+
+
 def set_storage_path(doc_ids: list[int], storage_path: StoragePath) -> Literal["OK"]:
     if storage_path:
         storage_path = StoragePath.objects.only("pk").get(id=storage_path)

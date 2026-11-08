@@ -22,9 +22,11 @@ export enum DisplayField {
   SHARED = 'shared',
   ASN = 'asn',
   PAGE_COUNT = 'pagecount',
+  LANGUAGE = 'language',
 }
 
 export const DEFAULT_DISPLAY_FIELDS = [
+  { id: DisplayField.LANGUAGE, name: $localize`Language` },
   {
     id: DisplayField.TITLE,
     name: $localize`Title`,
@@ -120,6 +122,8 @@ export interface Document extends ObjectWithPermissions {
   storage_path?: number
 
   title?: string
+
+  language?: string
 
   content?: string
 

@@ -31,6 +31,7 @@ import {
 import { BootstrapIconComponent } from 'src/app/components/common/bootstrap-icon/bootstrap-icon.component'
 import { ConfirmDialogComponent } from 'src/app/components/common/confirm-dialog/confirm-dialog.component'
 import { CustomField } from 'src/app/data/custom-field'
+import { DOCUMENT_LANGUAGES } from 'src/app/data/document-language'
 import { MatchingModel } from 'src/app/data/matching-model'
 import { SelectionDataItem } from 'src/app/data/results'
 import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
@@ -77,6 +78,7 @@ import {
   FilterableDropdownSelectionModel,
 } from '../../common/filterable-dropdown/filterable-dropdown.component'
 import { ToggleableItemState } from '../../common/filterable-dropdown/toggleable-dropdown-button/toggleable-dropdown-button.component'
+import { SelectComponent } from '../../common/input/select/select.component'
 import { PermissionsDialogComponent } from '../../common/permissions-dialog/permissions-dialog.component'
 import { ShareLinkBundleDialogComponent } from '../../common/share-link-bundle-dialog/share-link-bundle-dialog.component'
 import { ComponentWithPermissions } from '../../with-permissions/with-permissions.component'
@@ -88,6 +90,7 @@ import { CustomFieldsBulkEditDialogComponent } from './custom-fields-bulk-edit-d
   styleUrls: ['./bulk-editor.component.scss'],
   imports: [
     FilterableDropdownComponent,
+    SelectComponent,
     IfPermissionsDirective,
     FormsModule,
     ReactiveFormsModule,
@@ -115,6 +118,32 @@ export class BulkEditorComponent
   private savedViewService = inject(SavedViewService)
   private readonly shareLinkBundleService = inject(ShareLinkBundleService)
   private readonly router = inject(Router)
+
+  readonly documentLanguages = DOCUMENT_LANGUAGES
+  language = ''
+
+  setLanguage() {
+    if (this.showConfirmationDialogs) {
+      const modal = this.modalService.open(ConfirmDialogComponent, {
+        backdrop: 'static',
+      })
+      modal.componentInstance.title = $localize`Confirm language assignment`
+      modal.componentInstance.message = $localize`This operation will assign the language "${this.language || 'Unset'}" to ${this.getSelectionSize()} selected document(s).`
+      modal.componentInstance.btnClass = 'btn-warning'
+      modal.componentInstance.btnCaption = $localize`Confirm`
+      modal.componentInstance.confirmClicked
+        .pipe(takeUntil(this.unsubscribeNotifier))
+        .subscribe(() => {
+          this.executeBulkEditMethod(modal, 'set_language', {
+            language: this.language,
+          })
+        })
+    } else {
+      this.executeBulkEditMethod(null, 'set_language', {
+        language: this.language,
+      })
+    }
+  }
 
   tagSelectionModel = new FilterableDropdownSelectionModel(true)
   correspondentSelectionModel = new FilterableDropdownSelectionModel()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import date
 from typing import TYPE_CHECKING
 from typing import Literal
@@ -134,6 +133,7 @@ def validate_result(
     """
     from documents.external_workers import is_metadata_contract
     from documents.external_workers import validate_worker
+    from documents.language import normalize_language
 
     external = is_metadata_contract(identity)
     if (
@@ -238,8 +238,15 @@ def validate_result(
             name = proposal["create"]
             if not isinstance(name, str) or not name.strip() or len(name) > 128:
                 _reject("Creation name must contain 1 to 128 characters")
-        if key == "language" and not re.fullmatch(r"language:[a-z]{2,3}", name):
-            _reject("Language must name one language tag")
+        if key == "language":
+            if not name.startswith("language:"):
+                _reject("Language must name one language tag")
+            try:
+                normalize_language(name.removeprefix("language:"))
+            except ValueError as error:
+                raise InvalidEnrichmentResult(
+                    "Language must name one supported language tag"
+                ) from error
     fields = result.get("custom_fields", [])
     if not isinstance(fields, list):
         _reject("Custom fields must be a list")

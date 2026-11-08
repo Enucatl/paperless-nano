@@ -71,6 +71,7 @@ class TestExternalArchive(DirectoriesMixin, APITestCase):
         self.assertEqual(self.document.source_path.read_bytes(), self.original)
         self.assertEqual(self.document.archive_path.read_bytes(), self.pdf)
         self.assertEqual(self.document.content, "  external OCR text\n")
+        self.assertEqual(self.document.language, "und")
         self.assertEqual(self.document.archive_checksum, sha256(self.pdf).hexdigest())
         self.assertFalse(self.old_archive.exists())
         update.assert_called_once_with(document_ids=[self.document.pk])
@@ -99,11 +100,25 @@ class TestExternalArchive(DirectoriesMixin, APITestCase):
         version.refresh_from_db()
         self.document.refresh_from_db()
         self.assertEqual(version.content, "  external OCR text\n")
+        self.assertEqual(version.language, "und")
+        self.assertEqual(self.document.language, version.language)
         self.assertEqual(version.archive_path.read_bytes(), self.pdf)
         self.assertEqual(version.source_path.read_bytes(), version_bytes)
         self.assertEqual(self.document.content, "old text")
         self.assertEqual(self.old_archive.read_bytes(), b"previous archive")
         update.assert_called_once_with(document_ids=[self.document.pk])
+
+    @patch("documents.tasks.bulk_update_documents.delay")
+    @patch("documents.external_archive.detect_document_language")
+    def test_archive_preserves_manual_language(self, detector, update) -> None:
+        """External OCR must not replace a reviewed native language."""
+        self.document.language = "fr"
+        self.document.save()
+        response = self.upload()
+        self.assertEqual(response.status_code, 200, response.data)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.language, "fr")
+        detector.assert_not_called()
 
     def test_stale_checksum_preserves_existing_archive_and_text(self) -> None:
         """Results tied to a previous source cannot overwrite current output."""

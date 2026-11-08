@@ -839,7 +839,18 @@ class CustomFieldQueryFilter(Filter):
         return qs.filter(pk__in=matching_ids)
 
 
+class DocumentLanguageFilter(CharFilter):
+    """Treat an explicit empty language as unset, rather than no filter."""
+
+    def filter(self, qs, value):
+        if value == "" and self.field_name in self.parent.data:
+            return qs.filter(**{self.field_name: ""})
+        return super().filter(qs, value)
+
+
 class DocumentFilterSet(FilterSet):
+    language = DocumentLanguageFilter(field_name="language")
+
     has_duplicates = BooleanFilter(method="filter_has_duplicates")
 
     def __init__(self, *args: Any, user: Any = None, **kwargs: Any) -> None:
@@ -947,6 +958,7 @@ class DocumentFilterSet(FilterSet):
         model = Document
         fields = {
             "id": ID_KWARGS,
+            "language": ["exact", "in"],
             "title": CHAR_KWARGS,
             "archive_serial_number": INT_KWARGS,
             "created": DATE_KWARGS,

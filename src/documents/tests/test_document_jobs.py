@@ -695,3 +695,35 @@ def local_processors(monkeypatch):
     monkeypatch.setattr(
         jobs, "run_reprocess", drive_processors(jobs.run_reprocess, processor)
     )
+
+
+@pytest.mark.parametrize("language", ["", "fr", "und"])
+def test_reprocess_detects_only_unset_language(sample_doc, parser, mocker, language):
+    """OCR fills an unset value while preserving reviewed and unknown languages."""
+    sample_doc.language = language
+    sample_doc.save()
+    detector = mocker.patch(
+        "documents.jobs.detect_document_language", return_value="de"
+    )
+    job = jobs.stage_reprocess(sample_doc.pk)
+    jobs.run_reprocess(job.pk)
+    sample_doc.refresh_from_db()
+    assert sample_doc.language == (language or "de")
+    assert detector.call_count == (0 if language else 1)
+
+
+@pytest.mark.parametrize("root_language", ["", "fr"])
+def test_reprocess_version_populates_unset_root_language(
+    sample_doc, parser, mocker, root_language
+):
+    """Version OCR publishes language on its root while keeping manual metadata."""
+    root = DocumentFactory(language=root_language)
+    sample_doc.root_document = root
+    sample_doc.version_index = 1
+    sample_doc.save()
+    mocker.patch("documents.jobs.detect_document_language", return_value="de")
+    job = jobs.stage_reprocess(sample_doc.pk)
+    jobs.run_reprocess(job.pk)
+    sample_doc.refresh_from_db()
+    root.refresh_from_db()
+    assert sample_doc.language == root.language == (root_language or "de")

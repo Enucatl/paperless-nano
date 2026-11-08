@@ -3,16 +3,15 @@
 import json
 import logging
 import re
-from typing import Literal, Optional
+from typing import Optional
 
 import datetime as _dt
 
 from json_repair import repair_json
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paperless_inference.config import ProviderConfig as AgentConfig
 from paperless_inference.inference import complete
-from paperless_inference.languages import LANGUAGES
 
 log = logging.getLogger(__name__)
 
@@ -93,29 +92,6 @@ class _ExtractedMetadata(BaseModel):
             "or other meta framing. Be specific, factual, and useful for matching documents."
         ),
     )
-    languages: list[Literal[*LANGUAGES]] = Field(
-        default_factory=lambda: ["und"],
-        min_length=1,
-        max_length=1,
-        description=(
-            "Exactly one code for the document's primary substantive language, as a "
-            "listed lowercase ISO 639-1 or ISO 639-3 code, exactly as given below. Ignore "
-            "incidental foreign names and isolated words. Return a one-item list; "
-            "use 'und' when the language is undefined or unclear or outside this list. "
-            "Choose only from: "
-            + "; ".join(f"{code}: {name}" for code, name in LANGUAGES.items())
-        ),
-    )
-
-    @field_validator("languages", mode="before")
-    @classmethod
-    def normalize_languages(cls, value: object) -> list[str]:
-        """Keep only the primary language, using the ISO undefined code as fallback."""
-        candidates = value if isinstance(value, list) else [value]
-        for candidate in candidates:
-            if isinstance(candidate, str) and candidate.strip().lower() in LANGUAGES:
-                return [candidate.strip().lower()]
-        return ["und"]
 
 
 def _field_instructions_from_schema() -> str:

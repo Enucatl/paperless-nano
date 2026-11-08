@@ -44,9 +44,9 @@ class MetadataProvider:
         """Pin implementation, model and the complete schema/prompt revision."""
         config = self.configuration
         return {
-            "provider": "paperless-inference.metadata:1",
+            "provider": "paperless-inference.metadata:2",
             "model": config["metadata_model"],
-            "prompt": "structured-metadata:1:" + digest(config["metadata_prompt"]),
+            "prompt": "structured-metadata:2:" + digest(config["metadata_prompt"]),
         }
 
     def enrich(self, request: dict) -> dict:
@@ -99,14 +99,6 @@ class MetadataProvider:
                 if resolution.action == "existing"
                 else {"create": extracted.correspondent.strip()}
             )
-        language = "language:" + (extracted.languages or ["und"])[0]
-        existing = next(
-            (tag for tag in request["candidates"]["tags"] if tag["name"] == language),
-            None,
-        )
-        result["language"] = (
-            {"id": existing["id"]} if existing else {"create": language}
-        )
         result["audit"] = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "metadata_model": config.metadata_model,
@@ -117,7 +109,6 @@ class MetadataProvider:
                 "document_date": extracted.date.isoformat() if extracted.date else None,
                 "correspondent": extracted.correspondent,
                 "summary": extracted.summary,
-                "languages": extracted.languages,
             },
             **(
                 {"correspondent_resolution": resolution.to_audit_dict()}

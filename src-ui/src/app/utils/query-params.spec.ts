@@ -9,6 +9,8 @@ import {
   FILTER_HAS_CUSTOM_FIELDS_ANY,
   FILTER_HAS_DUPLICATES,
   FILTER_HAS_TAGS_ALL,
+  FILTER_LANGUAGE,
+  FILTER_LANGUAGE_ANY,
   FILTER_SIMPLE_TEXT,
   FILTER_SIMPLE_TITLE,
   FILTER_TITLE,
@@ -32,6 +34,27 @@ const filterRules: FilterRule[] = [
 ]
 
 describe('QueryParams Utils', () => {
+  it('round trips exact and set-based language filters for saved views', () => {
+    for (const rules of [
+      [{ rule_type: FILTER_LANGUAGE, value: 'und' }],
+      [
+        { rule_type: FILTER_LANGUAGE_ANY, value: 'en' },
+        { rule_type: FILTER_LANGUAGE_ANY, value: 'de' },
+      ],
+      [{ rule_type: FILTER_LANGUAGE, value: '' }],
+      [
+        { rule_type: FILTER_LANGUAGE_ANY, value: '' },
+        { rule_type: FILTER_LANGUAGE_ANY, value: 'en' },
+      ],
+    ]) {
+      expect(
+        filterRulesFromQueryParams(
+          convertToParamMap(queryParamsFromFilterRules(rules))
+        )
+      ).toEqual(rules)
+    }
+  })
+
   it('should convert view state to params', () => {
     let params = paramsFromViewState({
       sortField: 'added',

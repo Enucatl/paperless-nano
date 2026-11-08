@@ -12,6 +12,7 @@ from documents.permissions import permitted_document_ids
 
 REVISION_FIELDS = (
     "content",
+    "language",
     "checksum",
     "archive_checksum",
     "archive_filename",

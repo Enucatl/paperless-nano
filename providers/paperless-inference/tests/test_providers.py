@@ -70,7 +70,9 @@ def test_metadata_preserves_full_baseline(monkeypatch, metadata_request):
     assert result["summary"] == ""
     assert result["processing_date"] == "2026-11-05"
     assert result["correspondent"] == {"id": 4}
-    assert result["language"] == {"id": 3}
+    assert "language" not in result
+    assert "languages" not in result["audit"]["ai_metadata"]
+    assert "languages" not in complete.call_args.kwargs["messages"][0]["content"]
     assert result["audit"]["correspondent_resolution"]["action"] == "existing"
     assert metadata_request == retained
     assert complete.call_args.kwargs["response_format"]["type"] == "json_schema"
@@ -96,7 +98,7 @@ def test_metadata_reasoning_default_and_override(monkeypatch, metadata_request, 
 def test_invalid_dates_preserve_other_metadata(
     monkeypatch, metadata_request, invalid_date
 ):
-    """Invalid optional dates never discard valid summary or language proposals."""
+    """Invalid optional dates never discard valid title proposals."""
     response(
         monkeypatch,
         json.dumps({"title": "Invoice", "date": invalid_date, "languages": []}),
@@ -104,7 +106,7 @@ def test_invalid_dates_preserve_other_metadata(
     result = MetadataProvider().enrich(metadata_request)
     assert "document_date" not in result
     assert result["title"] == "Invoice"
-    assert result["language"] == {"create": "language:und"}
+    assert "language" not in result
 
 
 def test_empty_content_does_not_call_endpoint(monkeypatch, metadata_request):
@@ -171,6 +173,7 @@ def test_metadata_requests_existing_custom_fields(
     if policy == "json_schema":
         schema = kwargs["response_format"]["json_schema"]["schema"]
         assert schema["additionalProperties"] is False
+        assert "languages" not in schema["properties"]
         assert schema["properties"]["invoice_number"]["anyOf"] == [
             {"type": "string"},
             {"type": "null"},

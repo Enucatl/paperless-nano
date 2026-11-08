@@ -905,6 +905,25 @@ describe('BulkEditorComponent', () => {
     )
   })
 
+  it('publishes one native language for the selected documents', () => {
+    jest
+      .spyOn(documentListViewService, 'selected', 'get')
+      .mockReturnValue(new Set([3, 4]))
+    component.showConfirmationDialogs = false
+    component.language = 'und'
+    component.setLanguage()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}documents/bulk_edit/`
+    )
+    expect(req.request.body).toEqual({
+      documents: [3, 4],
+      method: 'set_language',
+      parameters: { language: 'und' },
+    })
+    req.flush(true)
+    httpTestingController.match(() => true)
+  })
+
   it('should execute modify storage path bulk operation', () => {
     jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
     jest

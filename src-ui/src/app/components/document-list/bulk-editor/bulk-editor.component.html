@@ -73,6 +73,13 @@
         (apply)="setCustomFields($event)">
       </pngx-filterable-dropdown>
     }
+    <div ngbDropdown>
+      <button class="btn btn-sm btn-outline-primary" ngbDropdownToggle [disabled]="!userCanEditAll || disabled" i18n>Language</button>
+      <div ngbDropdownMenu class="shadow p-3">
+        <pngx-input-select [items]="documentLanguages" [(ngModel)]="language" i18n-title title="Language"></pngx-input-select>
+        <button ngbDropdownItem (click)="setLanguage()" i18n>Apply to selected documents</button>
+      </div>
+    </div>
     <div class="btn-group">
       <button type="button" class="btn btn-sm btn-outline-primary me-2" (click)="setPermissions()" [disabled]="!userOwnsAll || !userCanEditAll" aria-label="Permissions" i18n-aria-label>
         <pngx-bs-icon name="person-fill-lock"></pngx-bs-icon><div class="d-none d-sm-inline ms-1"><ng-container i18n>Permissions</ng-container></div>

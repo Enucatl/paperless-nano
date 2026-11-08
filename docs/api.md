@@ -60,6 +60,28 @@ The REST api provides five different forms of authentication.
     [here](advanced_usage.md#openid-connect-and-social-authentication) for more
     information on social accounts.
 
+## Document language
+
+Documents expose a writable single `language` code. `""` means unset; `und` means
+unknown or indeterminate. Canonical codes and labels are defined by the document
+API schema. Normal document edit permissions apply to detail edits and
+`POST /api/documents/bulk_edit/` with `method: "set_language"` and
+`parameters: {"language": "de"}`. Export/import preserves the native field.
+
+Filter documents with `?language=de` or `?language__in=de,en`; an empty exact value
+selects unset documents, and `?language__in=,en` selects unset or English.
+`GET /api/documents/languages/` returns distinct used values and document counts,
+for example `[{"language":"de","document_count":2}]`. It applies the current
+document filters and permissions, excludes trash and version children, and
+includes unset/unknown values when present. These are values in accessible
+documents, rather than the full configured choice list.
+
+Saved views support native language exact/set rules. Migration converts ordinary
+language-only saved filters, removes legacy language tags, and removes their other
+rule references. See the
+[native language policy](rich-metadata-contract.md#native-document-language) for
+detection, manual override, migration and upgrade behavior.
+
 ## Searching for documents
 
 Full text searching is available on the `/api/documents/` endpoint. The

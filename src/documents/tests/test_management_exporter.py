@@ -211,6 +211,14 @@ class TestExportImport(
         return manifest
 
     def test_exporter(self, *, use_filename_format=False) -> None:
+        languages = {
+            self.d1.pk: "en",
+            self.d2.pk: "de",
+            self.d3.pk: "und",
+            self.d4.pk: "",
+        }
+        for document_id, language in languages.items():
+            Document.objects.filter(pk=document_id).update(language=language)
         shutil.rmtree(Path(self.dirs.media_dir) / "documents")
         self._install_document_samples()
 
@@ -303,6 +311,10 @@ class TestExportImport(
             self.assertEqual(Correspondent.objects.count(), 1)
             self.assertEqual(DocumentType.objects.count(), 1)
             self.assertEqual(StoragePath.objects.count(), 1)
+            for document_id, language in languages.items():
+                self.assertEqual(
+                    Document.objects.get(pk=document_id).language, language
+                )
             self.assertEqual(Document.objects.get(id=self.d1.id).title, "wow1")
             self.assertEqual(Document.objects.get(id=self.d2.id).title, "wow2")
             self.assertEqual(Document.objects.get(id=self.d3.id).title, "wow2")

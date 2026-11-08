@@ -122,3 +122,32 @@ The tested script was installed on Proxmox and in the currently served Puppet
 production module. Ten focused tests and a real zero-window startup/worker/cleanup
 cycle passed. The weekly implementation and regression tests are maintained in
 the Puppet control repository alongside its production deployment.
+
+## Native language rollout (2026-11-08)
+
+Atlas now runs `paperless-nano:native-language-20261108-689d979b1c8d`, image ID
+`sha256:9653aebd4fcf13ce7d871a8676371784d62617e52dd93f7ec4b295a587cbce5f`.
+This local layer uses the previous core digest
+`sha256:d6f71b4df95358ffd0bee4361773ce7ffae220f7379366c8a358da80966b8d31`,
+with the tested native-language backend changes and all 37 compiled UI locales.
+The independent worker's version-1 language relation proposals remain compatible;
+core publishes native language and does not recreate language tags.
+
+Migrations `0033_document_language` and `0034_remove_language_tags` are applied.
+All 2,361 documents were verified against the pre-upgrade baseline: Italian 1,345,
+German 687, English 306, French 10, Thai 6, Portuguese 1, unknown 2, unset 4.
+All seven legacy language tags were removed. The 17 unrelated tags and their 273
+document memberships were preserved. No saved-view, workflow, or mail-rule
+references to language tags existed in this installation. The indexed distinct
+endpoint and its filtered variant returned HTTP 200 with correct counts; the
+service is healthy and the version-5 search index is up to date.
+
+Private rollback and reproduction files are in
+`/opt/docker/paperless-ai/tmp/native-language-20261108/`: the original Compose
+file, verified preflight and maintenance PostgreSQL dumps, source checksums,
+backend/frontend archives, Dockerfile, build context, and verification logs.
+`database-maintenance.dump` was captured after stopping the old service.
+The backup was rehearsed with disposable PostgreSQL 18 and Redis 8 before rollout.
+Restore the maintenance database and old image together for rollback; switching
+only the old image back does not undo the schema/data migration. Keep document
+and data volumes intact, and rebuild the search index after a paired restore.

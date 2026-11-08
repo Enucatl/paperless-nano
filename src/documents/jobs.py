@@ -35,6 +35,7 @@ from documents.job_storage import file_result as _file_result
 from documents.job_storage import job_directory
 from documents.job_storage import sync_directory as _sync_directory
 from documents.job_storage import validate_file as _validate_file
+from documents.language import detect_document_language
 from documents.models import Document
 from documents.models import DocumentBarcode
 from documents.models import DocumentJob
@@ -343,7 +344,9 @@ def _apply(job: DocumentJob) -> None:
     media_lock = FileLock(settings.MEDIA_LOCK, timeout=0)
     try:
         with transaction.atomic():
-            Document.objects.select_for_update().get(pk=job.input["root_id"])
+            root_document = Document.objects.select_for_update().get(
+                pk=job.input["root_id"]
+            )
             # Conditional UPDATE is also a write lock on SQLite, where FOR UPDATE
             # alone cannot prevent another writer from changing the input revision.
             if not Document.objects.filter(
@@ -355,6 +358,11 @@ def _apply(job: DocumentJob) -> None:
             changes = {"content_job": job.pk}
             if not job.input.get("thumbnail_only"):
                 changes["content"] = job.result["content"]
+                if not document.language:
+                    changes["language"] = (
+                        root_document.language
+                        or detect_document_language(job.result["content"])
+                    )
             if archive:
                 destination = settings.ARCHIVE_DIR / job.result["archive_filename"]
                 validate_path_in_root(destination, settings.ARCHIVE_DIR)
@@ -384,6 +392,11 @@ def _apply(job: DocumentJob) -> None:
             if not job.input.get("thumbnail_only"):
                 changes["modified"] = timezone.now()
             Document.objects.filter(pk=document.pk).update(**changes)
+            if document.root_document_id and not job.input.get("thumbnail_only"):
+                Document.objects.filter(pk=root_document.pk, language="").update(
+                    language=changes.get("language", document.language),
+                    modified=timezone.now(),
+                )
             if settings.AUDIT_LOG_ENABLED and not job.input.get("thumbnail_only"):
                 from auditlog.models import LogEntry
 

@@ -46,6 +46,7 @@ import { CustomField, CustomFieldDataType } from 'src/app/data/custom-field'
 import { CustomFieldInstance } from 'src/app/data/custom-field-instance'
 import { DataType } from 'src/app/data/datatype'
 import { Document, DocumentVersionInfo } from 'src/app/data/document'
+import { DOCUMENT_LANGUAGES } from 'src/app/data/document-language'
 import { DocumentMetadata } from 'src/app/data/document-metadata'
 import { DocumentNote } from 'src/app/data/document-note'
 import {
@@ -296,9 +297,12 @@ export class DocumentDetailComponent
   readonly documentTypes = signal<DocumentType[]>(undefined)
   readonly storagePaths = signal<StoragePath[]>(undefined)
 
+  readonly documentLanguages = DOCUMENT_LANGUAGES
+
   documentForm: FormGroup = new FormGroup({
     title: new FormControl(''),
     content: new FormControl(''),
+    language: new FormControl(''),
     created: new FormControl(),
     correspondent: new FormControl(),
     document_type: new FormControl(),
@@ -516,6 +520,7 @@ export class DocumentDetailComponent
     this.store = new BehaviorSubject({
       title: originalDocument.title,
       content: originalDocument.content,
+      language: originalDocument.language,
       created: originalDocument.created,
       correspondent: originalDocument.correspondent,
       document_type: originalDocument.document_type,

@@ -86,6 +86,19 @@
           (selectionModelChange)="updateRules()"
           ></pngx-custom-fields-query-dropdown>
         }
+        <div ngbDropdown (openChange)="$event && loadLanguages()">
+          <button class="btn btn-sm btn-outline-primary" ngbDropdownToggle [disabled]="disabled" i18n>Language</button>
+          <div ngbDropdownMenu class="shadow">
+            @for (item of languageValues; track item.language) {
+              <button ngbDropdownItem [class.active]="selectedLanguages.includes(item.language)" (click)="toggleLanguage(item.language)">
+                @if (item.language) { {{item.language}} } @else { <span i18n>Unset</span> } ({{item.document_count}})
+              </button>
+            }
+            @for (language of selectedLanguages; track language) {
+              <button ngbDropdownItem (click)="toggleLanguage(language)" i18n>Remove {{language || 'Unset'}}</button>
+            }
+          </div>
+        </div>
         <pngx-dates-dropdown class="flex-fill fade" [class.show]="show()"
           title="Dates" i18n-title
           placement="bottom-end"

@@ -117,15 +117,25 @@ that an external worker must match.
 Return `version`, the unchanged `revision` and `identity`, and `worker`.
 The following proposal fields are optional; omissions preserve existing values:
 
-| Field                       | Constraint                                                                                                                                                |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `title`                     | String of 1–128 characters.                                                                                                                               |
-| `document_date`             | ISO date from 1900-01-01 through the retained `document_date_max`.                                                                                        |
-| `summary`                   | String; an explicit empty string clears its managed field.                                                                                                |
-| `processing_date`           | Exactly the request's retained `date`.                                                                                                                    |
-| `audit`                     | JSON object.                                                                                                                                              |
-| `correspondent`, `language` | Exactly `{"id": permitted_id}` or `{"create": "name"}`; creation requires the requester's current permission. Language names match `language:[a-z]{2,3}`. |
-| `custom_fields`             | List of unique `{"field": id, "data_type": type, "value": value}` entries for the request's permitted fields and types.                                   |
+| Field               | Constraint                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `title`             | String of 1–128 characters.                                                                                                                                              |
+| `document_date`     | ISO date from 1900-01-01 through the retained `document_date_max`.                                                                                                       |
+| `summary`           | String; an explicit empty string clears its managed field.                                                                                                               |
+| `processing_date`   | Exactly the request's retained `date`.                                                                                                                                   |
+| `audit`             | JSON object.                                                                                                                                                             |
+| `correspondent`     | Exactly `{"id": permitted_id}` or `{"create": "name"}`; creation requires the requester's current permission.                                                            |
+| `language` (legacy) | Version 1 relation proposals remain accepted for deployed workers and are validated and translated into the native document field. New metadata workers omit this field. |
+| `custom_fields`     | List of unique `{"field": id, "data_type": type, "value": value}` entries for the request's permitted fields and types.                                                  |
+
+Core detects document language locally from extracted text for both local and
+external OCR, independently of metadata extraction. Existing nonblank native
+language values, including manual edits and `und`, survive reprocessing; unset
+values are eligible for detection. Metadata models are no longer
+asked to classify language or create language tags. The bundled standalone worker
+uses metadata implementation/prompt revision 2 and needs no language-detection
+dependency. Its wire envelope remains version 1; the legacy relation type has not
+been reinterpreted as a string.
 
 Unknown fields, malformed values, unsupported custom-field types and unauthorized
 relations are rejected. Empty source content cannot produce metadata changes.

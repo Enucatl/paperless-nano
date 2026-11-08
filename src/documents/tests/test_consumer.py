@@ -241,6 +241,7 @@ class TestConsumer(
         self.assertIsNotNone(document)
 
         self.assertEqual(document.content, "The Text")
+        self.assertEqual(document.language, "und")
         self.assertEqual(
             document.title,
             Path(filename).stem,
@@ -814,6 +815,7 @@ class TestConsumer(
         )
         root_doc.storage_path = root_storage_path
         root_doc.archive_serial_number = 42
+        root_doc.language = "fr"
         root_doc.save()
 
         original_modified = timezone.now() - datetime.timedelta(days=1)
@@ -866,6 +868,7 @@ class TestConsumer(
         assert version.original_filename is not None
         self.assertEqual(version.version_index, 1)
         self.assertEqual(version.version_label, "v2")
+        self.assertEqual(version.language, "fr")
         self.assertIsNone(version.archive_serial_number)
         self.assertEqual(version.original_filename, version_file.name)
         self.assertTrue(bool(version.content))
@@ -886,6 +889,8 @@ class TestConsumer(
         root_doc = Document.objects.first()
         self.assertIsNotNone(root_doc)
         assert root_doc is not None
+        root_doc.language = ""
+        root_doc.save()
 
         version_file = self.get_test_file2()
         status = FakeProgressManager(version_file.name, None)
@@ -931,6 +936,9 @@ class TestConsumer(
         self.assertEqual(version.version_index, 1)
         self.assertEqual(version.original_filename, "valid_pdf_version-upload")
         self.assertTrue(bool(version.content))
+        root_doc.refresh_from_db()
+        self.assertEqual(version.language, "und")
+        self.assertEqual(root_doc.language, version.language)
 
     @override_settings(AUDIT_LOG_ENABLED=True)
     @mock.patch("documents.consumer.load_classifier")

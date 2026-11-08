@@ -185,7 +185,8 @@ Use `metadata` to retry enrichment alone after successful OCR; use `ocr` when on
 OCR is intended. Keep the same request UUID only for retrying that same admission;
 a changed document/configuration or intentionally new operation needs a fresh
 UUID. A `202` response means accepted, not finished. Reprocessing existing
-metadata can replace the managed title/date/summary/correspondent/language values;
+metadata can replace the managed title/date/summary/correspondent values;
+OCR fills unset native language, preserving manual or previously detected values;
 review the [overwrite and preservation contract](rich-metadata-contract.md).
 
 Verify all of the following against the source and prior document state:
@@ -195,7 +196,8 @@ Verify all of the following against the source and prior document state:
 - Text and searchable archive correspond to the PDF; OCR provenance records the
   expected source hash, models, page count, and structured page data.
 - Title/date, summary (including intentional blank), processing date,
-  correspondent matching/creation, first language or `und`, and audit are correct.
+  correspondent matching/creation, native primary language or `und`, and audit
+  are correct. Language publication also works without metadata inference.
 - Unrelated tags/custom fields and concurrent user edits survive. A stale result
   is rejected instead of overwriting an edit.
 - A distinctive extracted term is found through ordinary search after its write

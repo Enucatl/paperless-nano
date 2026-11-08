@@ -1151,6 +1151,7 @@ class DocumentSerializer(
             "storage_path",
             "title",
             "content",
+            "language",
             "tags",
             "created",
             "created_date",
@@ -1711,6 +1712,7 @@ class BulkEditSerializer(
             "set_correspondent",
             "set_document_type",
             "set_storage_path",
+            "set_language",
             "add_tag",
             "remove_tag",
             "modify_tags",
@@ -1789,6 +1791,8 @@ class BulkEditSerializer(
             return bulk_edit.set_correspondent
         elif method == "set_document_type":
             return bulk_edit.set_document_type
+        elif method == "set_language":
+            return bulk_edit.set_language
         elif method == "set_storage_path":
             return bulk_edit.set_storage_path
         elif method == "add_tag":
@@ -2078,6 +2082,18 @@ class BulkEditSerializer(
             self._validate_parameters_tags(parameters)
         elif method == bulk_edit.modify_tags:
             self._validate_parameters_modify_tags(parameters)
+        elif method == bulk_edit.set_language:
+            if set(parameters) != {"language"}:
+                raise serializers.ValidationError(
+                    "Specify exactly one language parameter"
+                )
+            parameters["language"] = (
+                DocumentSerializer()
+                .fields["language"]
+                .run_validation(
+                    parameters.get("language", serializers.empty),
+                )
+            )
         elif method == bulk_edit.set_storage_path:
             self._validate_storage_path(parameters)
         elif method == bulk_edit.modify_custom_fields:

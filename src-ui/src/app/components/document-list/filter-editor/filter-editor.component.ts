@@ -69,6 +69,8 @@ import {
   FILTER_HAS_STORAGE_PATH_ANY,
   FILTER_HAS_TAGS_ALL,
   FILTER_HAS_TAGS_ANY,
+  FILTER_LANGUAGE,
+  FILTER_LANGUAGE_ANY,
   FILTER_MIME_TYPE,
   FILTER_OWNER,
   FILTER_OWNER_ANY,
@@ -354,6 +356,10 @@ export class FilterEditorComponent
         case FILTER_SIMPLE_TEXT:
           return $localize`Title & content: ${rule.value}`
 
+        case FILTER_LANGUAGE:
+        case FILTER_LANGUAGE_ANY:
+          return $localize`Language: ${rule.value}`
+
         case FILTER_ASN:
           return $localize`ASN: ${rule.value}`
 
@@ -384,6 +390,29 @@ export class FilterEditorComponent
   documentTypeDocumentCounts: SelectionDataItem[]
   storagePathDocumentCounts: SelectionDataItem[]
   customFieldDocumentCounts: SelectionDataItem[]
+
+  selectedLanguages: string[] = []
+  languageValues: { language: string; document_count: number }[] = []
+
+  loadLanguages() {
+    this.documentService
+      .getLanguages(
+        this.filterRules.filter(
+          (rule) =>
+            ![FILTER_LANGUAGE, FILTER_LANGUAGE_ANY].includes(rule.rule_type)
+        )
+      )
+      .subscribe((values) => {
+        this.languageValues = values
+      })
+  }
+
+  toggleLanguage(language: string) {
+    this.selectedLanguages = this.selectedLanguages.includes(language)
+      ? this.selectedLanguages.filter((value) => value !== language)
+      : [...this.selectedLanguages, language]
+    this.updateRules()
+  }
 
   _textFilter = ''
   _moreLikeId: number
@@ -467,6 +496,7 @@ export class FilterEditorComponent
       return
     }
     this._filterRules = value
+    this.selectedLanguages = []
 
     this.documentTypeSelectionModel.clear(false)
     this.storagePathSelectionModel.clear(false)
@@ -487,6 +517,10 @@ export class FilterEditorComponent
 
     value.forEach((rule) => {
       switch (rule.rule_type) {
+        case FILTER_LANGUAGE:
+        case FILTER_LANGUAGE_ANY:
+          this.selectedLanguages.push(rule.value)
+          break
         case FILTER_TITLE:
         case FILTER_SIMPLE_TITLE:
           this._textFilter = rule.value
@@ -829,7 +863,13 @@ export class FilterEditorComponent
   }
 
   get filterRules(): FilterRule[] {
-    let filterRules: FilterRule[] = []
+    let filterRules: FilterRule[] = this.selectedLanguages.map((language) => ({
+      rule_type:
+        this.selectedLanguages.length === 1
+          ? FILTER_LANGUAGE
+          : FILTER_LANGUAGE_ANY,
+      value: language,
+    }))
     if (
       this._textFilter &&
       this.textFilterTarget == TEXT_FILTER_TARGET_TITLE_CONTENT
