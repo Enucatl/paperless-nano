@@ -3,6 +3,10 @@
 # Can be used locally or by the CI to start the necessary containers with the
 # correct networking for the tests
 services:
+  redis:
+    image: docker.io/library/redis:8
+    ports:
+      - "127.0.0.1:6379:6379"
   gotenberg:
     image: docker.io/gotenberg/gotenberg:8.38
     hostname: gotenberg
