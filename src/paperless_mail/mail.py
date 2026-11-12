@@ -20,6 +20,7 @@ from celery import shared_task
 from celery.canvas import Signature
 from django.conf import settings
 from django.db import DatabaseError
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.timezone import is_naive
@@ -322,28 +323,35 @@ def _apply_mail_action(
                 )
                 raise
 
-        ProcessedMail.objects.create(
-            owner=rule.owner,
+        ProcessedMail.objects.update_or_create(
             rule=rule,
             folder=rule.folder,
             uid=message_uid,
             uid_validity=uid_validity,
-            subject=message_subject[:256],
-            received=message_date,
-            status="SUCCESS",
+            defaults={
+                "owner": rule.owner,
+                "subject": message_subject[:256],
+                "received": message_date,
+                "status": "SUCCESS",
+                "error": None,
+                "processed": timezone.now(),
+            },
         )
 
     except Exception:
-        ProcessedMail.objects.create(
-            owner=rule.owner,
+        ProcessedMail.objects.update_or_create(
             rule=rule,
             folder=rule.folder,
             uid=message_uid,
             uid_validity=uid_validity,
-            subject=message_subject[:256],
-            received=message_date,
-            status="FAILED",
-            error=traceback.format_exc(),
+            defaults={
+                "owner": rule.owner,
+                "subject": message_subject[:256],
+                "received": message_date,
+                "status": "FAILED",
+                "error": traceback.format_exc(),
+                "processed": timezone.now(),
+            },
         )
         raise
 
@@ -369,7 +377,7 @@ def error_callback(
     rule = MailRule.objects.get(pk=rule_id)
     received = make_aware(message_date) if is_naive(message_date) else message_date
 
-    ProcessedMail.objects.get_or_create(
+    ProcessedMail.objects.update_or_create(
         rule=rule,
         folder=rule.folder,
         uid=message_uid,
@@ -886,21 +894,36 @@ class MailAccountHandler(LoggingMixin):
                 )
                 continue
 
-            already_processed = ProcessedMail.objects.filter(
-                rule=rule,
-                uid=message.uid,
-                folder=rule.folder,
-            )
-            if self._current_uid_validity is not None:
-                already_processed = already_processed.filter(
-                    Q(uid_validity=self._current_uid_validity)
-                    | Q(uid_validity__isnull=True),
+            with transaction.atomic():
+                # Reserve the mail before publishing any attachment tasks.
+                MailRule.objects.select_for_update().get(pk=rule.pk)
+                already_processed = ProcessedMail.objects.filter(
+                    rule=rule,
+                    uid=message.uid,
+                    folder=rule.folder,
                 )
-            if already_processed.exists():
-                self.log.debug(
-                    f"Skipping mail '{message.uid}' subject '{message.subject}' from '{message.from_}', already processed.",
+                if self._current_uid_validity is not None:
+                    already_processed = already_processed.filter(
+                        Q(uid_validity=self._current_uid_validity)
+                        | Q(uid_validity__isnull=True),
+                    )
+                if already_processed.exists():
+                    self.log.debug(
+                        f"Skipping mail '{message.uid}' subject '{message.subject}' from '{message.from_}', already processed or queued.",
+                    )
+                    continue
+                receipt = ProcessedMail.objects.create(
+                    owner=rule.owner,
+                    rule=rule,
+                    folder=rule.folder,
+                    uid=message.uid,
+                    uid_validity=self._current_uid_validity,
+                    subject=message.subject[:256],
+                    received=make_aware(message.date)
+                    if is_naive(message.date)
+                    else message.date,
+                    status="PENDING",
                 )
-                continue
 
             try:
                 processed_files = self._handle_message(message, rule)
@@ -910,6 +933,11 @@ class MailAccountHandler(LoggingMixin):
                 total_processed_files += processed_files
                 mails_processed += 1
             except Exception as e:
+                # Publication may have partially succeeded; retain the admission.
+                ProcessedMail.objects.filter(pk=receipt.pk, status="PENDING").update(
+                    status="FAILED",
+                    error=traceback.format_exc(),
+                )
                 self.log.exception(
                     f"Rule {rule}: Error while processing mail {message.uid}: {e}",
                 )
@@ -970,7 +998,7 @@ class MailAccountHandler(LoggingMixin):
         message: MailMessage,
         rule: MailRule,
     ) -> None:
-        ProcessedMail.objects.get_or_create(
+        ProcessedMail.objects.update_or_create(
             rule=rule,
             uid=message.uid,
             folder=rule.folder,

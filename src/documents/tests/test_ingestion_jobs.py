@@ -6,6 +6,7 @@ import datetime
 import shutil
 from typing import TYPE_CHECKING
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 from celery import signature
@@ -411,6 +412,75 @@ def test_celery_admission_sends_only_identifier_and_retains_canvas(
     assert job.dispatch_options["root_id"] == "root-task-id"
     assert job.dispatch_options["parent_id"] == "parent-task-id"
     assert _retained_bytes(job, incoming.original_file.read_bytes())
+
+
+def test_resuming_chord_restores_size_and_retains_partial_results(
+    mocker: MockerFixture,
+) -> None:
+    """An offline processor can resume after Redis's normal result expiry."""
+    group_id = str(uuid4())
+    job = DocumentJob.objects.create(
+        kind="consume",
+        timeout=60,
+        dispatch_options={
+            "group_id": group_id,
+            "chord": signature("paperless_mail.tasks.test_chord_completion"),
+        },
+    )
+    DocumentJob.objects.create(
+        kind="consume",
+        timeout=60,
+        status=DocumentJob.Status.SUCCEEDED,
+        dispatch_options={
+            "group_id": group_id,
+            "chord": signature("paperless_mail.tasks.test_chord_completion"),
+        },
+    )
+    backend = tasks.consume_file.backend
+    size_key = backend.get_key_for_group(group_id, ".s")
+    results_key = backend.get_key_for_group(group_id, ".j")
+    backend.client.set(results_key, b"earlier attachment result", ex=60)
+    send = mocker.patch.object(tasks.consume_file, "apply_async")
+    try:
+        ingestion_jobs.dispatch_consumption(job)
+
+        assert backend.client.get(size_key) == b"2"
+        assert backend.client.get(results_key) == b"earlier attachment result"
+        assert backend.client.ttl(size_key) == -1
+        assert backend.client.ttl(results_key) == -1
+        send.assert_called_once()
+    finally:
+        backend.client.delete(size_key, results_key)
+
+
+def test_chord_return_preserves_state_without_recreating_completed_chord(
+    paperless_dirs: PaperlessDirs,
+) -> None:
+    """A partial result remains until its siblings complete, across long waits."""
+    group_id = str(uuid4())
+    job = DocumentJob.objects.create(
+        kind="consume",
+        timeout=60,
+        dispatch_options={
+            "group_id": group_id,
+            "chord": signature("paperless_mail.tasks.test_chord_completion"),
+        },
+    )
+    backend = tasks.consume_file.backend
+    keys = [
+        backend.get_key_for_group(group_id, suffix) for suffix in (".s", ".j", ".t")
+    ]
+    try:
+        for key in keys:
+            backend.client.set(key, b"retained state", ex=60)
+        tasks.consume_file.after_return("SUCCESS", None, str(job.pk), (), {}, None)
+        assert [backend.client.ttl(key) for key in keys] == [-1, -1, -1]
+
+        backend.client.delete(*keys)
+        tasks.consume_file.after_return("SUCCESS", None, str(job.pk), (), {}, None)
+        assert not backend.client.exists(*keys)
+    finally:
+        backend.client.delete(*keys)
 
 
 def test_uncertain_callback_dispatch_cannot_repeat_native_callbacks(

@@ -10,6 +10,7 @@ from uuid import UUID
 from uuid import uuid4
 
 from celery import signature
+from celery.backends.redis import RedisBackend
 from celery.contrib.django.task import DjangoTask
 from celery.exceptions import Ignore
 from django.conf import settings
@@ -579,7 +580,18 @@ class DurableConsumeTask(DjangoTask):
                 ):
                     job.result["delivery"] = "failure-done"
                     job.save(update_fields=["result"])
+        if job and job.dispatch_options.get("chord"):
+            _persist_chord(self.backend, job.dispatch_options.get("group_id"))
         return super().after_return(status, retval, task_id, args, kwargs, einfo)
+
+
+def _persist_chord(backend, group_id: str | None) -> None:
+    """Keep incomplete Redis chord state across offline processor windows."""
+    if group_id and isinstance(backend, RedisBackend):
+        with backend.client.pipeline() as pipeline:
+            for suffix in (".s", ".j", ".t"):
+                pipeline.persist(backend.get_key_for_group(group_id, suffix))
+            pipeline.execute()
 
 
 def dispatch_consumption(job: DocumentJob) -> None:
@@ -587,6 +599,20 @@ def dispatch_consumption(job: DocumentJob) -> None:
     from documents.tasks import consume_file
 
     options = transport_loads(json.dumps(job.dispatch_options))
+    group_id = options.get("group_id")
+    if (
+        group_id
+        and options.get("chord")
+        and isinstance(consume_file.backend, RedisBackend)
+    ):
+        # Result expiry can elapse before an external processor first claims work.
+        consume_file.backend.set_chord_size(
+            group_id,
+            DocumentJob.objects.filter(
+                kind="consume", dispatch_options__group_id=group_id
+            ).count(),
+        )
+        _persist_chord(consume_file.backend, group_id)
     consume_file.apply_async(
         kwargs={"job_id": str(job.pk)},
         task_id=str(job.pk),

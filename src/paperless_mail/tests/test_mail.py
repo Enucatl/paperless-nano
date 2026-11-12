@@ -16,6 +16,7 @@ from imap_tools import NOT
 from imap_tools import EmailAddress
 from imap_tools import FolderInfo
 from imap_tools import MailboxFolderSelectError
+from imap_tools import MailMessageFlags
 from imap_tools import errors
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -160,7 +161,14 @@ class MailMocker(DirectoriesMixin, FileSystemAssertsMixin, TestCase):
         for args, kwargs in self._queue_consumption_tasks_mock.call_args_list:
             message = kwargs["message"]
             rule = kwargs["rule"]
-            apply_mail_action([], rule.pk, message.uid, message.subject, message.date)
+            apply_mail_action(
+                [],
+                rule.pk,
+                message.uid,
+                message.subject,
+                message.date,
+                kwargs["uid_validity"],
+            )
 
 
 def assert_eventually_equals(
@@ -195,6 +203,90 @@ class TestMail(
         self.mail_account_handler = MailAccountHandler()
 
         super().setUp()
+
+    def test_pending_mail_is_not_queued_again_before_consumption_finishes(
+        self,
+    ) -> None:
+        """Keep one admission across mail polls while a processor is offline."""
+        account = MailAccountFactory(
+            username=BogusMailBox.USERNAME,
+            password=BogusMailBox.ASCII_PASSWORD,
+        )
+        rule = MailRuleFactory(account=account)
+        message = self.mailMocker.messageBuilder.create_message()
+        self.mailMocker.bogus_mailbox.messages = [message]
+        self.mailMocker.bogus_mailbox.updateClient()
+
+        self.mail_account_handler.handle_mail_account(account)
+        receipt = ProcessedMail.objects.get(rule=rule, uid=message.uid)
+        self.assertEqual(receipt.status, "PENDING")
+        self.assertEqual(receipt.uid_validity, "1")
+        self.assertNotIn(MailMessageFlags.SEEN, message.flags)
+
+        MailAccountHandler().handle_mail_account(account)
+
+        self.mailMocker._queue_consumption_tasks_mock.assert_called_once()
+        self.mailMocker.apply_mail_actions()
+        receipt.refresh_from_db()
+        self.assertEqual(receipt.status, "SUCCESS")
+        self.assertEqual(ProcessedMail.objects.filter(rule=rule).count(), 1)
+
+    def test_partial_publication_failure_keeps_mail_reserved(self) -> None:
+        """Do not resubmit mail after an uncertain attachment publication."""
+        account = MailAccountFactory(
+            username=BogusMailBox.USERNAME,
+            password=BogusMailBox.ASCII_PASSWORD,
+        )
+        rule = MailRuleFactory(account=account)
+        message = self.mailMocker.messageBuilder.create_message()
+        self.mailMocker.bogus_mailbox.messages = [message]
+        self.mailMocker.bogus_mailbox.updateClient()
+        self.mailMocker._queue_consumption_tasks_mock.side_effect = RuntimeError(
+            "Publication interrupted",
+        )
+
+        with self.assertLogs("paperless_mail", level="ERROR"):
+            self.mail_account_handler.handle_mail_account(account)
+        MailAccountHandler().handle_mail_account(account)
+
+        self.mailMocker._queue_consumption_tasks_mock.assert_called_once()
+        receipt = ProcessedMail.objects.get(rule=rule, uid=message.uid)
+        self.assertEqual(receipt.status, "FAILED")
+        self.assertIn("Publication interrupted", receipt.error)
+
+    def test_pending_mail_includes_eml_and_attachments_and_respects_uidvalidity(
+        self,
+    ) -> None:
+        """Reserve all parts together without suppressing a new mailbox epoch."""
+        account = MailAccountFactory(
+            username=BogusMailBox.USERNAME,
+            password=BogusMailBox.ASCII_PASSWORD,
+        )
+        rule = MailRuleFactory(
+            account=account,
+            consumption_scope=MailRule.ConsumptionScope.EVERYTHING,
+        )
+        message = self.mailMocker.messageBuilder.create_message()
+        self.mailMocker.bogus_mailbox.messages = [message]
+        self.mailMocker.bogus_mailbox.updateClient()
+
+        self.mail_account_handler.handle_mail_account(account)
+        MailAccountHandler().handle_mail_account(account)
+        self.assertEqual(self.mailMocker._queue_consumption_tasks_mock.call_count, 2)
+        self.assertEqual(ProcessedMail.objects.filter(rule=rule).count(), 1)
+
+        self.mailMocker.bogus_mailbox.folder.uidvalidity = "2"
+        MailAccountHandler().handle_mail_account(account)
+        self.assertEqual(self.mailMocker._queue_consumption_tasks_mock.call_count, 4)
+        self.assertSetEqual(
+            set(
+                ProcessedMail.objects.filter(rule=rule).values_list(
+                    "uid_validity",
+                    flat=True,
+                ),
+            ),
+            {"1", "2"},
+        )
 
     @mock.patch("paperless_mail.mail.MAIL_FETCH_BATCH_SIZE", 5)
     def test_handle_mail_account_batches_body_fetch_for_large_backlog(self) -> None:
@@ -1764,6 +1856,14 @@ class TestPostConsumeAction(TestCase):
         self.message_uid = "12345"
         self.message_subject = "Test Subject"
         self.message_date = timezone.make_aware(timezone.datetime(2023, 1, 1, 12, 0, 0))
+        ProcessedMail.objects.create(
+            rule=self.rule,
+            folder=self.rule.folder,
+            uid=self.message_uid,
+            subject=self.message_subject,
+            received=self.message_date,
+            status="PENDING",
+        )
 
     @mock.patch("paperless_mail.mail.get_mailbox")
     @mock.patch("paperless_mail.mail.mailbox_login")
@@ -1850,6 +1950,14 @@ class TestErrorCallback:
         owner = UserFactory()
         rule = MailRuleFactory(owner=owner)
         message_uid = "12345"
+        ProcessedMail.objects.create(
+            rule=rule,
+            folder=rule.folder,
+            uid=message_uid,
+            subject="Test Subject",
+            received=timezone.now(),
+            status="PENDING",
+        )
 
         for _ in range(2):
             error_callback(

@@ -152,3 +152,24 @@ The backup was rehearsed with disposable PostgreSQL 18 and Redis 8 before rollou
 Restore the maintenance database and old image together for rollback; switching
 only the old image back does not undo the schema/data migration. Keep document
 and data volumes intact, and rebuild the search index after a paired restore.
+
+## Mail admission repair (2026-11-12)
+
+Atlas runs `paperless-nano:mail-admission-fix-20261112`, image ID
+`sha256:37051666f392b6bebdd2c813f25546245c60227fd3afb06b7222e23f9bea384b`,
+layered over the native-language image. Mail admission now reserves each message
+before publishing its imports and updates that receipt on completion. Redis chord
+state is restored on ingestion continuation and retained across offline windows.
+
+Cleanup removed 1,481 identical, unclaimed email-import jobs and their task records,
+retaining the earliest complete submission for each of four emails: six attachments.
+All four manual uploads and all staged/source files were preserved. Four pending
+mail receipts prevent subsequent polls from submitting those emails again.
+Private database dumps, the cleanup manifest/script, previous Compose configuration,
+and the image build context are in
+`/opt/docker/paperless-ai/backups/mail-dedup-20261112/`.
+
+All 290 mail, ingestion, callback and task-signal tests passed in disposable
+PostgreSQL 18/Redis 8 containers (31.40 seconds). Ruff checks passed and no schema
+migration was needed. Two live mail polls added no imports; the waiting count
+remained ten. End-to-end OCR awaits Cerebrum's next processing window.
