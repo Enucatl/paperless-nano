@@ -4,6 +4,7 @@ import hashlib
 import html
 import math
 import os
+import re
 import subprocess
 import tempfile
 from html.parser import HTMLParser
@@ -12,8 +13,24 @@ from xml.etree import ElementTree
 
 from paperless_inference.font_mapping import (
     recover_embedded_font_unicode,
+    restore_identity_font_unicode,
     set_font_unicode,
 )
+
+
+class ArchiveError(ValueError):
+    """Describe an archive failure without retaining document or command output."""
+
+    def __init__(
+        self,
+        stage: str,
+        exit_code: int | None,
+        validation_rules: list[str] | None = None,
+    ) -> None:
+        self.stage = stage
+        self.exit_code = exit_code
+        self.validation_rules = validation_rules or []
+        super().__init__(f"Archive failed at {stage} (exit code {exit_code})")
 
 
 class _BlockText(HTMLParser):
@@ -56,7 +73,7 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
 
     Raises:
         ValueError: Source identity, page coverage or converted output is invalid.
-        subprocess.CalledProcessError: Ghostscript cannot produce compliant PDF/A.
+        ArchiveError: Conversion or PDF/A validation failed.
     """
     import pymupdf
 
@@ -94,6 +111,7 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
                     raise ValueError(
                         "Archive conversion did not produce a complete PDF/A-2"
                     )
+                restore_identity_font_unicode(original, checked)
                 # Ghostscript can corrupt ToUnicode maps; add embedded OCR fonts afterward.
                 for index, page in enumerate(checked):
                     if original[index].get_text().strip():
@@ -222,15 +240,35 @@ def _add_ocr_layer(page, result: dict) -> None:
 
 def _validate_pdfa_2u(source: Path) -> None:
     """Publish only PDFs that pass veraPDF's Unicode conformance profile."""
-    result = subprocess.run(
-        ["verapdf", "--flavour", "2u", "--format", "xml", str(source)],
-        check=True,
-        capture_output=True,
-        timeout=120,
-    )
-    reports = ElementTree.fromstring(result.stdout).findall(".//validationReport")
-    if len(reports) != 1 or reports[0].get("isCompliant") != "true":
-        raise ValueError("Archive failed PDF/A-2u validation")
+    try:
+        result = subprocess.run(
+            ["verapdf", "--flavour", "2u", "--format", "xml", str(source)],
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired, OSError:
+        raise ArchiveError("pdfa_validation", None) from None
+    try:
+        report = ElementTree.fromstring(result.stdout)
+    except ElementTree.ParseError:
+        raise ArchiveError("pdfa_validation", result.returncode) from None
+    rules = set()
+    for rule in report.findall(".//rule"):
+        clause, test = rule.get("clause", ""), rule.get("testNumber", "")
+        if (
+            rule.get("status") == "failed"
+            and re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", clause)
+            and re.fullmatch(r"[0-9]+", test)
+        ):
+            rules.add(f"{clause}:{test}")
+    reports = report.findall(".//validationReport")
+    if (
+        result.returncode != 0
+        or len(reports) != 1
+        or reports[0].get("isCompliant") != "true"
+    ):
+        raise ArchiveError("pdfa_validation", result.returncode, sorted(rules))
 
 
 def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:
@@ -247,27 +285,32 @@ def _convert_to_pdfa(source: Path, destination: Path, temporary: Path) -> None:
         "/DestOutputProfile {icc_PDFA} /OutputConditionIdentifier (sRGB) >> /PUT pdfmark\n"
         "[{Catalog} << /OutputIntents [{OutputIntent_PDFA}] >> /PUT pdfmark\n"
     )
-    subprocess.run(
-        [
-            "gs",
-            "-dSAFER",
-            "-dBATCH",
-            "-dNOPAUSE",
-            "-dPDFA=2",
-            "-dPDFACompatibilityPolicy=1",
-            "-dPDFSTOPONERROR",
-            "-sDEVICE=pdfwrite",
-            "-sColorConversionStrategy=RGB",
-            "-dAutoRotatePages=/None",
-            "-dDownsampleColorImages=false",
-            "-dDownsampleGrayImages=false",
-            "-dDownsampleMonoImages=false",
-            f"--permit-file-read={profile}",
-            f"-sOutputFile={destination}",
-            str(definition),
-            str(source),
-        ],
-        check=True,
-        capture_output=True,
-        timeout=300,
-    )
+    try:
+        subprocess.run(
+            [
+                "gs",
+                "-dSAFER",
+                "-dBATCH",
+                "-dNOPAUSE",
+                "-dPDFA=2",
+                "-dPDFACompatibilityPolicy=1",
+                "-dPDFSTOPONERROR",
+                "-sDEVICE=pdfwrite",
+                "-sColorConversionStrategy=RGB",
+                "-dAutoRotatePages=/None",
+                "-dDownsampleColorImages=false",
+                "-dDownsampleGrayImages=false",
+                "-dDownsampleMonoImages=false",
+                f"--permit-file-read={profile}",
+                f"-sOutputFile={destination}",
+                str(definition),
+                str(source),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=300,
+        )
+    except subprocess.CalledProcessError as error:
+        raise ArchiveError("pdfa_conversion", error.returncode) from None
+    except subprocess.TimeoutExpired, OSError:
+        raise ArchiveError("pdfa_conversion", None) from None

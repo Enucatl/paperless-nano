@@ -1,8 +1,10 @@
 """Recover character semantics only when embedded font data is unambiguous."""
 
 import io
+import re
 import struct
 import unicodedata
+import uuid
 
 from fontTools.agl import toUnicode
 from fontTools.ttLib import TTFont, TTLibError
@@ -139,3 +141,194 @@ def recover_embedded_font_unicode(document) -> bool:
             set_font_unicode(document, xref, mapping)
             changed = True
     return changed
+
+
+def _font_programs(document, xref: int):
+    """Read GID-indexed programs, metrics and composite dependencies from TrueType."""
+    if document.xref_get_key(xref, "Type") != ("name", "/Font"):
+        return None
+    data = document.extract_font(xref)[3]
+    if not data:
+        return None
+    try:
+        with TTFont(io.BytesIO(data)) as font:
+            glyf = font["glyf"]
+            names = font.getGlyphOrder()
+            programs = tuple(
+                (glyf[name].compile(glyf, recalcBBoxes=False), font["hmtx"][name])
+                for name in names
+            )
+            required = {
+                font.getGlyphID(component.glyphName)
+                for name in names
+                if glyf[name].isComposite()
+                for component in glyf[name].components
+            }
+            return font["head"].unitsPerEm, programs, required
+    except KeyError, ValueError, TTLibError, struct.error:
+        return None
+
+
+def _has_identity_codes(document, xref: int) -> bool:
+    """Require explicitly unchanged two-byte character-to-glyph identifiers."""
+    if document.xref_get_key(xref, "Subtype") != ("name", "/Type0") or (
+        document.xref_get_key(xref, "Encoding") != ("name", "/Identity-H")
+    ):
+        return False
+    kind, descendants = document.xref_get_key(xref, "DescendantFonts")
+    if kind == "xref":
+        descendants = document.xref_object(int(descendants.split()[0]))
+    elif kind != "array":
+        return False
+    match = re.fullmatch(r"\[\s*(\d+) 0 R\s*\]", descendants)
+    if not match:
+        return False
+    descendant = int(match[1])
+    return document.xref_get_key(descendant, "Subtype") == (
+        "name",
+        "/CIDFontType2",
+    ) and document.xref_get_key(descendant, "CIDToGIDMap") == ("name", "/Identity")
+
+
+def _winansi_glyphs(document, xref: int) -> set[int] | None:
+    """Bound reachable GIDs only for explicit nonsymbolic WinAnsi TrueType fonts."""
+    if document.xref_get_key(xref, "Subtype") != ("name", "/TrueType") or (
+        document.xref_get_key(xref, "Encoding") != ("name", "/WinAnsiEncoding")
+    ):
+        return None
+    kind, flags = document.xref_get_key(xref, "FontDescriptor/Flags")
+    if kind != "int" or not int(flags) & 32 or int(flags) & 4:
+        return None
+    try:
+        with TTFont(io.BytesIO(document.extract_font(xref)[3])) as font:
+            tables = font["cmap"].tables
+            if not any(
+                table.platformID == 3 and table.platEncID == 1 for table in tables
+            ) or any(
+                table.platformID == 3 and table.platEncID == 0 for table in tables
+            ):
+                return None
+            unicode_values = {
+                ord(bytes([code]).decode("cp1252", errors="replace"))
+                for code in range(256)
+            } | {0x2022, 0x20, 0x2D}
+            names = {font.getGlyphOrder()[0]}
+            names.update(
+                name
+                for table in tables
+                if table.isUnicode()
+                for code, name in table.cmap.items()
+                if code in unicode_values
+            )
+            # Composite components can be retained without a directly encoded code.
+            pending = list(names)
+            while pending:
+                glyph = font["glyf"][pending.pop()]
+                if glyph.isComposite():
+                    for component in glyph.components:
+                        if component.glyphName not in names:
+                            names.add(component.glyphName)
+                            pending.append(component.glyphName)
+            return {font.getGlyphID(name) for name in names}
+    except KeyError, ValueError, TTLibError, struct.error:
+        return None
+
+
+def _used_identity_glyphs(document) -> dict[int, set[int]]:
+    """Attribute rendered GIDs using unique font names in an isolated PDF copy."""
+    import pymupdf
+
+    parents = {}
+    for xref in range(1, document.xref_length()):
+        kind, descendants = document.xref_get_key(xref, "DescendantFonts")
+        if kind == "xref":
+            descendants = document.xref_object(int(descendants.split()[0]))
+        elif kind != "array":
+            continue
+        match = re.fullmatch(r"\[\s*(\d+) 0 R\s*\]", descendants)
+        if match:
+            parents.setdefault(int(match[1]), set()).add(xref)
+    used = {}
+    prefix = f"Probe{uuid.uuid4().hex[:16]}_"
+    with pymupdf.open(stream=document.tobytes(), filetype="pdf") as probe:
+        for xref in range(1, probe.xref_length()):
+            if probe.xref_get_key(xref, "Type") != ("name", "/Font"):
+                continue
+            name = f"/{prefix}{xref}"
+            probe.xref_set_key(xref, "BaseFont", name)
+            kind, descriptor = probe.xref_get_key(xref, "FontDescriptor")
+            if kind == "xref":
+                copy = probe.get_new_xref()
+                probe.update_object(copy, probe.xref_object(int(descriptor.split()[0])))
+                probe.xref_set_key(copy, "FontName", name)
+                probe.xref_set_key(xref, "FontDescriptor", f"{copy} 0 R")
+        with pymupdf.open(stream=probe.tobytes(), filetype="pdf") as traced:
+            for page in traced:
+                for span in page.get_texttrace():
+                    match = re.fullmatch(prefix + r"(\d+)", span["font"])
+                    candidates = parents.get(int(match[1]), set()) if match else set()
+                    if len(candidates) == 1:
+                        xref = next(iter(candidates))
+                        used.setdefault(xref, set()).update(
+                            glyph for _, glyph, _, _ in span["chars"] if glyph >= 0
+                        )
+    return used
+
+
+def restore_identity_font_unicode(original, converted) -> None:
+    """Restore explicit Unicode only for unambiguous, unchanged Identity-H glyphs.
+
+    Compare every retained program and composite dependency at its original GID.
+    Removed subset glyphs do not change the source meaning of their unused codes.
+    A matching source with unknown encoding or Unicode prevents restoration.
+    """
+    sources = []
+    for xref in range(1, original.xref_length()):
+        identity = _font_programs(original, xref)
+        if identity is None:
+            continue
+        cmap = None
+        kind, reference = original.xref_get_key(xref, "ToUnicode")
+        if _has_identity_codes(original, xref) and kind == "xref":
+            cmap_xref = int(reference.split()[0])
+            candidate = original.xref_stream(cmap_xref)
+            if (
+                candidate
+                and original.xref_get_key(cmap_xref, "UseCMap")[0] == "null"
+                and not re.search(rb"\busecmap\b", candidate)
+            ):
+                cmap = candidate
+        sources.append((identity, cmap, _winansi_glyphs(original, xref)))
+    used = (
+        _used_identity_glyphs(converted)
+        if any(reachable is not None for _, _, reachable in sources)
+        else {}
+    )
+    for xref in range(1, converted.xref_length()):
+        if not _has_identity_codes(converted, xref):
+            continue
+        identity = _font_programs(converted, xref)
+        if identity is None:
+            continue
+        units, programs, required = identity
+        retained = {gid for gid, (program, _) in enumerate(programs) if program}
+        if not retained:
+            continue
+        mappings = {
+            cmap
+            for (source_units, source_programs, _), cmap, reachable in sources
+            if units == source_units
+            and (reachable is None or used.get(xref, set()) <= reachable)
+            and all(
+                gid < len(source_programs)
+                and gid < len(programs)
+                and programs[gid] == source_programs[gid]
+                for gid in retained | required
+            )
+        }
+        if len(mappings) != 1 or None in mappings:
+            continue
+        stream = converted.get_new_xref()
+        converted.update_object(stream, "<<>>")
+        converted.update_stream(stream, mappings.pop())
+        converted.xref_set_key(xref, "ToUnicode", f"{stream} 0 R")

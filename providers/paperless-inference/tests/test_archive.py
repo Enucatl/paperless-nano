@@ -9,7 +9,11 @@ import pymupdf
 import pytest
 from PIL import Image
 
-from paperless_inference.archive import _validate_pdfa_2u, create_searchable_archive
+from paperless_inference.archive import (
+    ArchiveError,
+    _validate_pdfa_2u,
+    create_searchable_archive,
+)
 
 
 @pytest.fixture
@@ -111,7 +115,7 @@ def test_converter_failure_preserves_existing_archive(archive_input, monkeypatch
         raise subprocess.CalledProcessError(1, "gs")
 
     monkeypatch.setattr("paperless_inference.archive.subprocess.run", fail)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ArchiveError):
         create_searchable_archive(source, output, destination)
     assert destination.read_bytes() == b"existing archive"
 
@@ -279,7 +283,7 @@ def test_pdf_errors_do_not_publish_partial_conversion(tmp_path):
         "page_count": 1,
         "pages": [{"page_index": 0}],
     }
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(ArchiveError):
         create_searchable_archive(source, output, destination)
     assert destination.read_bytes() == b"existing archive"
 

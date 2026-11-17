@@ -352,3 +352,89 @@ def test_metadata_rejects_boolean_version(worker, monkeypatch, field):
     target[field] = True
     with pytest.raises(ValueError, match="Unsupported metadata contract"):
         instance.compute(claim, "/unused/")
+
+
+def test_archive_failure_retains_input_and_reports_safe_context(worker, monkeypatch):
+    """An archive failure identifies the lease without logging private exception text."""
+    from paperless_inference.archive import ArchiveError
+
+    instance, replies, calls = worker
+    claim, data = parser_claim(monkeypatch)
+    operation = pending(claim)
+    base = instance.base(operation["job_id"], operation["key"])
+    replies[("GET", "/api/operations/?status=pending")] = (200, [operation])
+    replies[("POST", base + "claim/")] = (200, claim)
+    replies[("GET", base + "files/?path=input%2Foriginal.pdf")] = (200, data)
+    failure = ArchiveError("pdfa_validation", 1, ["6.2.11.7.2:1"])
+    monkeypatch.setattr(PaddleOCRProvider, "process", Mock(side_effect=failure))
+    with pytest.raises(ArchiveError):
+        instance.run_once()
+    assert instance.error_summary(failure) == {
+        "error_type": "ArchiveError",
+        "stage": "pdfa_validation",
+        "exit_code": 1,
+        "validation_rules": ["6.2.11.7.2:1"],
+        "job_id": operation["job_id"],
+        "invocation_id": claim["id"],
+        "operation": "parser.process",
+    }
+    assert (instance.state / "files/input/original.pdf").read_bytes() == data
+    assert not instance.pending.exists()
+    assert not any(c[1].endswith("result/") for c in calls)
+    assert "private" not in json.dumps(instance.error_summary(ValueError("private")))
+
+
+def test_failed_pending_delivery_preserves_state_and_prevents_claim(worker):
+    """An undelivered archive and its record survive a failed restart unchanged."""
+    instance, replies, calls = worker
+    root = instance.state / "files"
+    root.mkdir()
+    archive = root / "archive.pdf"
+    archive.write_bytes(b"existing archive")
+    record = {
+        "url": instance.url,
+        "job_id": str(uuid4()),
+        "key": "parser.process",
+        "token": "private-token",
+        "result": {"archive": file_reference(root, archive)},
+    }
+    instance.save(record)
+    before = instance.pending.read_bytes()
+    base = instance.base(record["job_id"], record["key"])
+    replies[("POST", base + "files/")] = (503, {"secret": "private"})
+    with pytest.raises(APIError) as caught:
+        instance.run_once()
+    assert instance.pending.read_bytes() == before
+    assert archive.read_bytes() == b"existing archive"
+    assert len(calls) == 1
+    assert instance.error_summary(caught.value) == {
+        "error_type": "APIError",
+        "stage": "result_delivery",
+        "http_status": 503,
+        "job_id": record["job_id"],
+    }
+
+
+def test_main_logs_safe_failure_and_exits(worker, monkeypatch, capsys):
+    """The actual CLI failure path emits context instead of exception contents."""
+    from paperless_inference import workstation
+
+    instance, _, _ = worker
+    instance.stage = "parser_inference"
+    instance.context = {"job_id": str(uuid4()), "operation": "parser.process"}
+    monkeypatch.setenv("PAPERLESS_URL", instance.url)
+    monkeypatch.setenv("PAPERLESS_API_TOKEN_FILE", str(instance.token_file))
+    monkeypatch.setenv("PAPERLESS_WORKSTATION_STATE_DIR", str(instance.state))
+    monkeypatch.setattr("sys.argv", ["worker", "--once"])
+    monkeypatch.setattr(workstation, "Workstation", Mock(return_value=instance))
+    monkeypatch.setattr(instance, "run_once", Mock(side_effect=ValueError("secret")))
+    with pytest.raises(SystemExit) as caught:
+        workstation.main()
+    assert caught.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        **instance.context,
+        "stage": "parser_inference",
+        "error_type": "ValueError",
+    }

@@ -9,8 +9,11 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
+from uuid import UUID
 
 import niquests
+
+from paperless_inference.archive import ArchiveError
 
 from paperless_inference.config import endpoint
 from paperless_inference.files import relative_path
@@ -37,6 +40,28 @@ class Workstation:
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.pending = self.state / "pending.json"
         self.session = niquests.Session()
+        self.context: dict = {}
+        self.stage = "startup"
+
+    def error_summary(self, error: Exception) -> dict:
+        """Expose only known stages, identifiers and sanitized archive diagnostics."""
+        summary = {"error_type": type(error).__name__, "stage": self.stage}
+        for key in ("job_id", "invocation_id"):
+            try:
+                summary[key] = str(UUID(str(self.context.get(key))))
+            except ValueError:
+                pass
+        if self.context.get("operation") in {"parser.process", "metadata.enrich"}:
+            summary["operation"] = self.context["operation"]
+        if isinstance(error, ArchiveError):
+            summary.update(
+                stage=error.stage,
+                exit_code=error.exit_code,
+                validation_rules=error.validation_rules,
+            )
+        elif isinstance(error, APIError):
+            summary["http_status"] = error.status
+        return summary
 
     def request(self, method: str, path: str, **kwargs):
         """Make one authenticated request; redirects must not forward credentials."""
@@ -102,6 +127,7 @@ class Workstation:
                 raise ValueError("Unsupported metadata contract")
             provider = MetadataProvider()
             local_identity = provider.identity
+            self.stage = "metadata_inference"
             result = provider.enrich({**request, "identity": local_identity})
             return {
                 **result,
@@ -146,6 +172,7 @@ class Workstation:
             raise ValueError("Invalid immutable OCR input")
         target = relative_path(root, source["path"])
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.stage = "input_download"
         with (
             self.request(
                 "GET",
@@ -164,6 +191,7 @@ class Workstation:
                 output.write(chunk)
         resolve_reference(root, source)
         request = {**request, "invocation_id": claim["id"]}
+        self.stage = "parser_inference"
         result = provider.process(request, root)
         return {
             **result,
@@ -177,6 +205,8 @@ class Workstation:
 
     def deliver(self, record: dict) -> None:
         """Retry private output uploads and idempotent result submission only."""
+        self.context = record
+        self.stage = "result_delivery"
         if record["url"] != self.url:
             raise ValueError("Pending result belongs to another Paperless instance")
         base = self.base(record["job_id"], record["key"])
@@ -211,9 +241,13 @@ class Workstation:
 
     def run_once(self) -> int:
         """Resume uncertain delivery, then execute the supported pending operations."""
+        self.context = {}
+        self.stage = "pending_delivery"
         if self.pending.exists():
             self.deliver(json.loads(self.pending.read_text()))
         count = 0
+        self.context = {}
+        self.stage = "operation_discovery"
         operations = self.request("GET", "/api/operations/?status=pending").json()
         for operation in operations:
             if (
@@ -225,6 +259,8 @@ class Workstation:
                 in {"cancelled", "failed", "rejected", "attention"}
             ):
                 continue
+            self.context = operation
+            self.stage = "operation_claim"
             base = self.base(operation["job_id"], operation["key"])
             try:
                 claim = self.request("POST", base + "claim/").json()
@@ -234,14 +270,19 @@ class Workstation:
                 raise
             if claim.get("status") != "leased":
                 continue
+            self.context = {**operation, "invocation_id": claim.get("id")}
+            self.stage = "operation_compute"
             result = self.compute(claim, base)
             record = {
                 "job_id": operation["job_id"],
+                "invocation_id": claim.get("id"),
+                "operation": operation["operation"],
                 "key": operation["key"],
                 "token": claim["token"],
                 "result": result,
                 "url": self.url,
             }
+            self.stage = "result_persistence"
             self.save(record)
             self.deliver(record)
             count += 1
@@ -260,7 +301,11 @@ def main() -> None:
     with (state / "worker.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         while True:
-            completed = worker.run_once()
+            try:
+                completed = worker.run_once()
+            except Exception as error:
+                print(json.dumps(worker.error_summary(error)), file=sys.stderr)
+                raise SystemExit(1) from None
             print(json.dumps({"completed_operations": completed}), flush=True)
             if args.once:
                 return
@@ -271,5 +316,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(json.dumps({"error_type": type(error).__name__}), file=sys.stderr)
+        print(
+            json.dumps({"error_type": type(error).__name__, "stage": "startup"}),
+            file=sys.stderr,
+        )
         sys.exit(1)
