@@ -12,6 +12,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 import niquests
+from shared_inference.errors import InferenceError
 
 from paperless_inference.archive import ArchiveError
 
@@ -61,6 +62,12 @@ class Workstation:
             )
         elif isinstance(error, APIError):
             summary["http_status"] = error.status
+        elif (
+            isinstance(error, InferenceError)
+            and type(error.status_code) is int
+            and 100 <= error.status_code <= 599
+        ):
+            summary["http_status"] = error.status_code
         return summary
 
     def request(self, method: str, path: str, **kwargs):

@@ -438,3 +438,26 @@ def test_main_logs_safe_failure_and_exits(worker, monkeypatch, capsys):
         "stage": "parser_inference",
         "error_type": "ValueError",
     }
+
+
+@pytest.mark.parametrize("status", [404, None, "private", True, 99, 600])
+def test_inference_failure_reports_only_valid_http_status(worker, status):
+    """Inference errors expose HTTP status without message or raw response data."""
+    from shared_inference.errors import InferenceHTTPError
+
+    instance, _, _ = worker
+    instance.stage = "metadata_inference"
+    instance.context = {"job_id": str(uuid4()), "operation": "metadata.enrich"}
+    error = InferenceHTTPError(
+        "private document and credentials",
+        status_code=status,
+        raw={"secret": "response"},
+    )
+    expected = {
+        **instance.context,
+        "error_type": "InferenceHTTPError",
+        "stage": "metadata_inference",
+    }
+    if status == 404:
+        expected["http_status"] = 404
+    assert instance.error_summary(error) == expected
