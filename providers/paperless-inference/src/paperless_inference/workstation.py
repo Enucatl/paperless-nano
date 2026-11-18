@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -102,7 +103,12 @@ class Workstation:
                 raise ValueError("Unsupported metadata contract")
             provider = MetadataProvider()
             local_identity = provider.identity
-            result = provider.enrich({**request, "identity": local_identity})
+            lease = {}
+            if "lease_until" in claim:
+                lease["lease_until"] = datetime.fromisoformat(
+                    claim["lease_until"]
+                ).timestamp()
+            result = provider.enrich({**request, "identity": local_identity}, **lease)
             return {
                 **result,
                 "identity": identity,

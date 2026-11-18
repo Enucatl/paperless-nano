@@ -74,6 +74,10 @@ def test_metadata_preserves_full_baseline(monkeypatch, metadata_request):
     assert "languages" not in result["audit"]["ai_metadata"]
     assert "languages" not in complete.call_args.kwargs["messages"][0]["content"]
     assert result["audit"]["correspondent_resolution"]["action"] == "existing"
+    assert complete.call_args.kwargs["temperature"] == 0
+    assert complete.call_args.kwargs["max_tokens"] == 1000
+    assert "max_completion_tokens" not in complete.call_args.kwargs
+    assert "service_tier" not in complete.call_args.kwargs
     assert metadata_request == retained
     assert complete.call_args.kwargs["response_format"]["type"] == "json_schema"
 

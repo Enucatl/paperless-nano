@@ -156,11 +156,13 @@ def test_metadata_configuration_belongs_to_worker(worker, monkeypatch):
     """A generic request executes with independently chosen model settings."""
     instance, _, _ = worker
     claim = metadata_claim(monkeypatch)
+    claim["lease_until"] = "2030-01-01T00:00:00+00:00"
     monkeypatch.setenv("INFERENCE_METADATA_MODEL", "changed-model")
     compute = Mock(return_value={"version": 1, "revision": "revision"})
     monkeypatch.setattr(MetadataProvider, "enrich", compute)
     result = instance.compute(claim, "/unused/")
     assert compute.call_args.args[0]["identity"]["model"] == "changed-model"
+    assert compute.call_args.kwargs["lease_until"] == 1893456000
     assert result["worker"]["model"] == "changed-model"
     assert result["identity"] == {
         "provider": "paperless.external.metadata",

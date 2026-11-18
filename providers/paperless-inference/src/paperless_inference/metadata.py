@@ -184,7 +184,12 @@ class StructuredOutputStrategy:
         return parsed
 
     async def extract(
-        self, text: str, config: AgentConfig, managed_fields: dict | None = None
+        self,
+        text: str,
+        config: AgentConfig,
+        managed_fields: dict | None = None,
+        *,
+        lease_until: float | None = None,
     ) -> _ExtractedMetadata:
         """Use standard LLM with response_format tiering."""
         system_prompt, response_format = _metadata_response_format_tier(
@@ -195,23 +200,28 @@ class StructuredOutputStrategy:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text},
         ]
-        kwargs: dict = {
-            "model": config.metadata_model,
-            "messages": messages,
-            **config.get_metadata_kwargs(),
-        }
-        if "temperature" not in kwargs:
-            kwargs["temperature"] = 0
-        if response_format is not None:
-            kwargs["response_format"] = response_format
-
+        kwargs = {"temperature": 0, **config.get_metadata_kwargs()}
+        if kwargs["temperature"] is None:
+            del kwargs["temperature"]
         response = await complete(
-            model=kwargs.pop("model"),
-            messages=kwargs.pop("messages"),
+            model=config.metadata_model,
+            messages=messages,
             endpoint=config.metadata_endpoint,
             domain="metadata_extraction",
+            **({"lease_until": lease_until} if lease_until is not None else {}),
+            **(
+                {"response_format": response_format}
+                if response_format is not None
+                else {}
+            ),
             **kwargs,
         )
+        self.inference_audit = {
+            "settings": kwargs,
+            "response_format": response_format["type"] if response_format else None,
+            "requested_service_tier": kwargs.get("service_tier"),
+            "observed_service_tier": getattr(response, "raw", {}).get("service_tier"),
+        }
         raw = _get_completion_text(response)
         log.info("Smart agent: metadata raw response: %s", raw)
         data = self._fallback_parse(raw)

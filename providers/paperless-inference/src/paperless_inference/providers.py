@@ -49,7 +49,7 @@ class MetadataProvider:
             "prompt": "structured-metadata:2:" + digest(config["metadata_prompt"]),
         }
 
-    def enrich(self, request: dict) -> dict:
+    def enrich(self, request: dict, *, lease_until: float | None = None) -> dict:
         """Compute normalized metadata against the retained authorized candidates."""
         from paperless_inference.metadata import StructuredOutputStrategy
         from paperless_inference.resolver import CorrespondentResolver
@@ -64,9 +64,13 @@ class MetadataProvider:
         if not request["content"].strip():
             return result
         config = ProviderConfig.metadata()
+        strategy = StructuredOutputStrategy()
         extracted = asyncio.run(
-            StructuredOutputStrategy().extract(
-                request["content"], config, request["managed_fields"]
+            strategy.extract(
+                request["content"],
+                config,
+                request["managed_fields"],
+                lease_until=lease_until,
             )
         )
         result.update(
@@ -103,6 +107,7 @@ class MetadataProvider:
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "metadata_model": config.metadata_model,
             "metadata_endpoint": config.metadata_endpoint,
+            "inference": strategy.inference_audit,
             "paperless_version": request["metadata"].get("paperless_version"),
             "ai_metadata": {
                 "title": extracted.title,

@@ -39,11 +39,18 @@ class ProviderConfig:
         policy = os.environ.get("INFERENCE_METADATA_RESPONSE_FORMAT", "auto")
         if policy not in {"auto", "json_schema", "json_object", "none"}:
             raise ValueError("Invalid INFERENCE_METADATA_RESPONSE_FORMAT")
-        kwargs = {
-            "max_tokens": int(os.environ.get("INFERENCE_METADATA_MAX_TOKENS", "1000"))
-        }
-        if "INFERENCE_METADATA_TEMPERATURE" in os.environ:
-            kwargs["temperature"] = float(os.environ["INFERENCE_METADATA_TEMPERATURE"])
+        temperature = os.environ.get("INFERENCE_METADATA_TEMPERATURE", "0")
+        kwargs = {"temperature": None if temperature == "omit" else float(temperature)}
+        cap = os.environ.get("INFERENCE_METADATA_MAX_COMPLETION_TOKENS")
+        if cap:
+            kwargs["max_completion_tokens"] = int(cap)
+        else:
+            kwargs["max_tokens"] = int(
+                os.environ.get("INFERENCE_METADATA_MAX_TOKENS", "1000")
+            )
+        tier = os.environ.get("INFERENCE_METADATA_SERVICE_TIER")
+        if tier:
+            kwargs["service_tier"] = tier
         effort = os.environ.get("INFERENCE_METADATA_REASONING_EFFORT", "minimal")
         if effort:
             kwargs["reasoning_effort"] = effort
@@ -53,6 +60,8 @@ class ProviderConfig:
             "top_p",
             "top_k",
             "max_tokens",
+            "max_completion_tokens",
+            "service_tier",
             "seed",
             "stop",
             "frequency_penalty",
@@ -63,6 +72,8 @@ class ProviderConfig:
                 "Unsupported metadata extra kwargs; credentials stay in environment"
             )
         kwargs.update(extra)
+        if "max_completion_tokens" in kwargs:
+            kwargs.pop("max_tokens", None)
         json.dumps(kwargs, allow_nan=False)
         return cls(
             metadata_endpoint=endpoint("INFERENCE_METADATA_ENDPOINT"),

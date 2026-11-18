@@ -18,17 +18,22 @@ services:
       INFERENCE_OCR_TIMEOUT: "600"
       INFERENCE_METADATA_ENDPOINT: ${INFERENCE_METADATA_ENDPOINT:-https://openrouter.ai/api/v1}
       INFERENCE_METADATA_MODEL: ${INFERENCE_METADATA_MODEL:?Set this worker's metadata model}
-      INFERENCE_METADATA_TEMPERATURE: "0"
+      INFERENCE_METADATA_TEMPERATURE: ${INFERENCE_METADATA_TEMPERATURE:-0}
+      INFERENCE_METADATA_REASONING_EFFORT: ${INFERENCE_METADATA_REASONING_EFFORT-minimal}
+      INFERENCE_METADATA_SERVICE_TIER: ${INFERENCE_METADATA_SERVICE_TIER:-}
+      INFERENCE_METADATA_MAX_COMPLETION_TOKENS: ${INFERENCE_METADATA_MAX_COMPLETION_TOKENS:-}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
     secrets:
       - paperless_api_token
-      - openrouter_api_key
+      - source: model_api_key
+        target: ${INFERENCE_MODEL_SECRET_TARGET:-openrouter_api_key}
     volumes:
       - workstation_state:/workstation
 secrets:
   paperless_api_token:
     file: ${PAPERLESS_API_TOKEN_SECRET_FILE:?Set the private API token file}
-  openrouter_api_key:
-    file: ${OPENROUTER_SECRET_FILE:?Set the private model credential file}
+  model_api_key:
+    file: ${OPENAI_SECRET_FILE:-${OPENROUTER_SECRET_FILE:?Set the private model credential file}}
 volumes:
   workstation_state:

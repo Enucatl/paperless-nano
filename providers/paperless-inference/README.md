@@ -62,17 +62,53 @@ the structured `ai_ocr_output` record.
 Metadata defaults retain the baseline fields with strict JSON schema
 response format, 1000 max tokens, temperature zero, minimal reasoning effort,
 and correspondent similarity threshold 0.80. Optional settings are
+`INFERENCE_METADATA_SERVICE_TIER`, `INFERENCE_METADATA_MAX_COMPLETION_TOKENS`,
 `INFERENCE_METADATA_RESPONSE_FORMAT` (`auto`, `json_schema`, `json_object`,
 `none`), `INFERENCE_METADATA_MAX_TOKENS`, `INFERENCE_METADATA_TEMPERATURE`,
 `INFERENCE_METADATA_REASONING_EFFORT`, `INFERENCE_METADATA_EXTRA_KWARGS`, and
-`INFERENCE_CORRESPONDENT_MATCH_THRESHOLD`. Extra kwargs permit ordinary sampling
-parameters only; credentials and routing overrides cannot enter retained jobs.
+`INFERENCE_CORRESPONDENT_MATCH_THRESHOLD`. Set temperature to `omit` (or set `temperature` to JSON `null` in extra
+kwargs) to leave it out of the request. A configured `max_completion_tokens`
+takes precedence over `max_tokens`. Extra kwargs allow sampling and the
+documented completion options. Credentials are read separately.
 API keys use `OPENAI_API_KEY_FILE` or `OPENROUTER_API_KEY_FILE` when a readable
 secret file is configured, falling back to `OPENAI_API_KEY` or
 `OPENROUTER_API_KEY` as in the previous runner. Mount the secret read-only and
 set the corresponding `_FILE` path in the container. Keys are read only during
 inference and never enter configuration snapshots.
 Endpoint URLs cannot contain embedded credentials or query parameters.
+
+### Direct OpenAI Flex with Compose
+
+After the worker release, use the released image and remove the Cerebrum
+adapter overlay from the worker definition, including its code mount and any
+startup override used to load it. Keep the Paperless URL, token, OCR settings
+and workstation state volume. Set these values in the Compose environment
+for [compose.workstation.yml](compose.workstation.yml):
+
+```dotenv
+PAPERLESS_WORKSTATION_IMAGE=ghcr.io/enucatl/paperless-nano-worker@sha256:<release-digest>
+INFERENCE_METADATA_ENDPOINT=https://api.openai.com/v1
+INFERENCE_METADATA_MODEL=gpt-6-luna
+INFERENCE_METADATA_SERVICE_TIER=flex
+INFERENCE_METADATA_REASONING_EFFORT=none
+INFERENCE_METADATA_TEMPERATURE=omit
+INFERENCE_METADATA_MAX_COMPLETION_TOKENS=1000
+INFERENCE_MODEL_SECRET_TARGET=openai_api_key
+OPENAI_SECRET_FILE=/absolute/path/to/private/openai_api_key
+```
+
+Compose mounts the key read-only at `/run/secrets/openai_api_key` and sets
+`OPENAI_API_KEY_FILE` to that path. Direct OpenAI requires an OpenAI key.
+Clear any overlay-era model kwargs overrides when applying these settings.
+Flex requires a response confirming the `flex` tier. The worker makes up to
+three Flex attempts, with a 180-second limit per attempt and 2- and 4-second
+backoffs on transient failures. The request budget is at most 550 seconds and
+reserves 60 seconds on the actual operation lease for processing and delivery.
+Set `PAPERLESS_WORKER_TIMEOUT=660` on the Paperless server for this
+configuration. The server uses that setting when it creates jobs, so leases
+for previously created jobs can still be shorter. A 300-second lease gives
+the worker less than 240 seconds for inference and can cut retries short.
+The server setting also applies to other jobs created with the worker timeout.
 
 OCR accepts PDF input and the generic `output_type=pdfa` requirement, validates every page,
 removes image payloads from stored provenance, preserves original pages in
