@@ -30,9 +30,10 @@ docker build -t paperless-nano:release .
 Copy `docker/compose/docker-compose.inference.yml` to a deployment directory as
 `compose.yml`, and copy `docker/compose/inference.env` beside it. Create `.env`
 with a strong `PAPERLESS_DBPASS` and an immutable `PAPERLESS_IMAGE` tag or digest.
-Create empty `consume` and `export` directories and set a random secret key in
-`inference.env`. Keep worker endpoint/model settings and credentials on the
-worker host.
+Generate a signing key with `python3 -c "import secrets; print(secrets.token_urlsafe(64))"`
+and set `PAPERLESS_SECRET_KEY` in `inference.env` to the output. Keep this key
+across restarts. Create empty `consume` and `export` directories and keep worker
+endpoint/model settings and credentials on the worker host.
 
 The Compose example selects `documents.external_workers.ExternalParser` and
 `documents.external_workers.ExternalMetadata`, enables remote processing, and

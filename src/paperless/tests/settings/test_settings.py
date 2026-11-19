@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest import TestCase
 from unittest import mock
 
@@ -10,6 +13,30 @@ from paperless.settings import _get_classifier_language_setting
 from paperless.settings import _get_search_language_setting
 from paperless.settings import _parse_paperless_url
 from paperless.settings import default_threads_per_worker
+
+
+@pytest.mark.parametrize(
+    "key",
+    [None, "", "  ", "change-me", "replace-with-a-random-secret"],
+)
+def test_startup_rejects_missing_or_public_secret(key: str | None) -> None:
+    """Require an operator-supplied signing key when Django loads settings."""
+    env = os.environ.copy()
+    env.pop("PAPERLESS_SECRET_KEY")
+    env["PAPERLESS_CONFIGURATION_PATH"] = os.devnull
+    if key is not None:
+        env["PAPERLESS_SECRET_KEY"] = key
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import paperless.settings"],
+        cwd=Path(__file__).resolve().parents[3],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Set PAPERLESS_SECRET_KEY to a unique random value" in result.stderr
 
 
 class TestThreadCalculation(TestCase):

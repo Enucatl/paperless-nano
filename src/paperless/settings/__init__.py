@@ -505,10 +505,9 @@ SECURE_PROXY_SSL_HEADER = (
 )
 
 SECRET_KEY = os.getenv("PAPERLESS_SECRET_KEY")
-if not (SECRET_KEY or "").strip() or SECRET_KEY == "change-me":  # pragma: no cover
+if (SECRET_KEY or "").strip() in {"", "change-me", "replace-with-a-random-secret"}:
     raise ImproperlyConfigured(
-        "PAPERLESS_SECRET_KEY is not set or is the default 'change-me' value. "
-        "A unique, secret key is required for secure operation. "
+        "Set PAPERLESS_SECRET_KEY to a unique random value. "
         'Generate one with: python3 -c "import secrets; print(secrets.token_urlsafe(64))"',
     )
 
