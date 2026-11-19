@@ -130,6 +130,19 @@ def test_invalid_conversion_preserves_existing_archive(archive_input, monkeypatc
     assert destination.read_bytes() == b"existing archive"
 
 
+def test_changed_source_cannot_publish_archive(archive_input, monkeypatch):
+    """Keep the previous archive if the file-backed original changes mid-job."""
+    source, output, destination = archive_input
+    destination.write_bytes(b"existing archive")
+    monkeypatch.setattr(
+        "paperless_inference.archive._validate_pdfa_2u",
+        lambda archive: source.write_bytes(b"replacement PDF"),
+    )
+    with pytest.raises(ValueError, match="changed during archive conversion"):
+        create_searchable_archive(source, output, destination)
+    assert destination.read_bytes() == b"existing archive"
+
+
 def test_scan_unicode_overlay_is_invisible(archive_input, monkeypatch):
     """Searchable multilingual text does not alter the visible scan pixels."""
     monkeypatch.setattr(

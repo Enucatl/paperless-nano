@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import fitz
 import niquests
 import pytest
+from pypdf.errors import DependencyError, FileNotDecryptedError, PdfReadError
 
 from paperless_inference.paddle_ocr import (
     _parse_response,
+    _prepare_pdf,
     _without_images,
     fetch_ocr_metadata,
     run_paddle_ocr,
@@ -157,6 +159,40 @@ def test_reject_incomplete_or_malformed_pages(mutation: str) -> None:
         pages[0] = None
     with pytest.raises(ValueError):
         _parse_response(payload, 2)
+
+
+@pytest.mark.parametrize(
+    ("encryption", "password", "error"),
+    [
+        (fitz.PDF_ENCRYPT_RC4_128, "", None),
+        (fitz.PDF_ENCRYPT_RC4_128, "secret", FileNotDecryptedError),
+        (fitz.PDF_ENCRYPT_AES_256, "", DependencyError),
+    ],
+)
+def test_encrypted_pdf_handling(tmp_path, encryption, password, error):
+    """Keep the worker's existing empty-password and protected PDF behavior."""
+    source = tmp_path / "encrypted.pdf"
+    with fitz.open() as document:
+        document.new_page()
+        document.save(source, encryption=encryption, owner_pw="owner", user_pw=password)
+    if error:
+        with pytest.raises(error):
+            _prepare_pdf(source)
+    else:
+        count, checksum, encoded = _prepare_pdf(source)
+        assert count == 1
+        assert base64.b64decode(encoded) == source.read_bytes()
+        assert checksum == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+def test_truncated_pdf_is_rejected(tmp_path):
+    """Reject a PDF whose missing trailer can be silently repaired by MuPDF."""
+    source = tmp_path / "truncated.pdf"
+    with fitz.open() as document:
+        document.new_page()
+        source.write_bytes(document.tobytes().split(b"startxref")[0])
+    with pytest.raises(PdfReadError):
+        _prepare_pdf(source)
 
 
 async def test_complete_pdf_request_and_metadata(tmp_path: Path) -> None:

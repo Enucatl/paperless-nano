@@ -60,13 +60,16 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
     """
     import pymupdf
 
-    source_bytes = source.read_bytes()
-    if output.get("source_sha256") != hashlib.sha256(source_bytes).hexdigest():
+    source = source.resolve()
+    with source.open("rb") as stream:
+        original_stat = os.fstat(stream.fileno())
+        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    if output.get("source_sha256") != checksum:
         raise ValueError("OCR output does not identify this original PDF")
-    if source.resolve() == destination.resolve():
+    if source == destination.resolve():
         raise ValueError("The archive must not replace the original PDF")
 
-    with pymupdf.open(stream=source_bytes, filetype="pdf") as original:
+    with pymupdf.open(source, filetype="pdf") as original:
         pages = output.get("pages")
         if (
             not isinstance(pages, list)
@@ -78,15 +81,14 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
             raise ValueError("OCR archive pages must be in source order")
         with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
             temporary = Path(temporary)
-            original_copy = temporary / "original.pdf"
+            conversion_source = source
             changed = _add_known_font_unicode(original)
             changed = recover_embedded_font_unicode(original) or changed
             if changed:
-                original.save(original_copy)
-            else:
-                original_copy.write_bytes(source_bytes)
+                conversion_source = temporary / "original.pdf"
+                original.save(conversion_source)
             converted = temporary / "archive.pdf"
-            _convert_to_pdfa(original_copy, converted, temporary)
+            _convert_to_pdfa(conversion_source, converted, temporary)
             with pymupdf.open(converted) as checked:
                 if len(checked) != len(original) or "pdfaid:part='2'" not in (
                     checked.get_xml_metadata().replace('"', "'")
@@ -123,6 +125,12 @@ def create_searchable_archive(source: Path, output: dict, destination: Path) -> 
                 finished = temporary / "finished.pdf"
                 checked.save(finished, garbage=4, deflate=True)
             _validate_pdfa_2u(finished)
+            current_stat = source.stat()
+            if (
+                not os.path.samestat(original_stat, current_stat)
+                or original_stat.st_ctime_ns != current_stat.st_ctime_ns
+            ):
+                raise ValueError("Original PDF changed during archive conversion")
             os.replace(finished, destination)
 
 

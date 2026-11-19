@@ -7,7 +7,7 @@ import html
 import re
 import time
 from datetime import datetime, timezone
-from io import BytesIO
+from mmap import ACCESS_READ, mmap
 from pathlib import Path
 from typing import Any
 
@@ -160,6 +160,18 @@ def _parse_response(payload: Any, page_count: int) -> tuple[str, dict, list[dict
     return text, _prune_images(info), pages
 
 
+def _prepare_pdf(path: Path) -> tuple[int, str, str]:
+    """Count pages and encode the private source file for the Paddle JSON request."""
+    with path.open("rb") as stream:
+        page_count = len(PdfReader(stream).pages)
+        if page_count == 0:
+            raise ValueError("Cannot OCR a PDF without pages")
+        with mmap(stream.fileno(), 0, access=ACCESS_READ) as source:
+            checksum = hashlib.sha256(source).hexdigest()
+            encoded = base64.b64encode(source)
+    return page_count, checksum, encoded.decode("ascii")
+
+
 async def run_paddle_ocr(
     file_path: str,
     config: AgentConfig,
@@ -187,15 +199,14 @@ async def run_paddle_ocr(
     if metadata is None:
         metadata = await fetch_ocr_metadata(config)
     started = time.monotonic()
-    source = await asyncio.to_thread(Path(file_path).read_bytes)
-    page_count = len(PdfReader(BytesIO(source)).pages)
-    if page_count == 0:
-        raise ValueError("Cannot OCR a PDF without pages")
+    page_count, checksum, encoded = await asyncio.to_thread(
+        _prepare_pdf, Path(file_path)
+    )
     async with niquests.AsyncSession() as session:
         response = await session.post(
             config.ocr_endpoint.rstrip("/") + "/layout-parsing",
             json={
-                "file": base64.b64encode(source).decode("ascii"),
+                "file": encoded,
                 "fileType": 0,
                 "useDocUnwarping": False,
                 "useLayoutDetection": True,
@@ -208,12 +219,13 @@ async def run_paddle_ocr(
         )
         response.raise_for_status()
         payload = response.json()
+        del response, encoded
         text, info, pages = _parse_response(payload, page_count)
     elapsed = time.monotonic() - started
     output = {
         "schema_version": 1,
         **metadata,
-        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "source_sha256": checksum,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "page_count": page_count,
         "elapsed_seconds": elapsed,
