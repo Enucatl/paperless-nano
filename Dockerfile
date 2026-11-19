@@ -25,6 +25,7 @@ esac
 
 RUN set -eux \
   && ./node_modules/.bin/ng build --configuration production
+RUN hardlink --ignore-time /src/src/documents/static/frontend/
 
 # Stage: s6-overlay-base
 # Purpose: Installs s6-overlay and rootfs
