@@ -65,6 +65,9 @@ class DocumentJob(models.Model):
     cleaned = models.BooleanField(default=False)
 
     class Meta:
+        indexes = [
+            models.Index(fields=["status", "id"], name="documentjob_status_id_idx")
+        ]
         permissions = [
             ("process_parser", "Can process external parser work"),
             ("process_metadata", "Can process external metadata work"),

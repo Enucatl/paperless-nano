@@ -19,7 +19,10 @@ dedicated account granted `documents.process_parser` and/or
 original requester still needs permission for the resulting document changes.
 
 `GET /api/operations/?status=pending` returns authorized, remotely claimable
-operations. Each item includes `job_id`, `key`, `id`, `operation`, `contract`,
+operations. Workers should request `&cursor=start`, then follow each
+`X-Next-Cursor` response header as a URL-encoded `cursor` query value on the
+same endpoint, including after empty pages. A missing header ends discovery.
+Each item includes `job_id`, `key`, `id`, `operation`, `contract`,
 `status`, `job_status` and `error`. Supported external operations are:
 
 | Operation         | Discovery `contract`           | Result identity                                                       |

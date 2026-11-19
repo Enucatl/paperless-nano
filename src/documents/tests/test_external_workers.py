@@ -298,3 +298,39 @@ def test_external_parser_rejects_unsafe_result(sample_doc, external, settings, c
             jobs.run_reprocess(job.pk)
     sample_doc.refresh_from_db()
     assert sample_doc.content == "test content"
+
+
+def test_paged_discovery_filters_each_bounded_batch(mocker):
+    """Denied batches advance and sibling invocations share one grant lookup."""
+    from uuid import UUID
+
+    from documents import operations_api
+
+    mocker.patch.object(operations_api, "DISCOVERY_PAGE_JOBS", 1)
+    user = UserFactory()
+    user.user_permissions.add(Permission.objects.get(codename="process_parser"))
+    client = APIClient()
+    client.force_authenticate(user)
+    url = "/api/operations/"
+    entry = {"id": "one", "operation": "parser.process", "status": "pending"}
+    for i, permission in enumerate(["process_metadata", "process_parser"], start=1):
+        proposal = {**entry, "policy": {"permission": f"documents.{permission}"}}
+        DocumentJob.objects.create(
+            pk=UUID(int=i),
+            status=DocumentJob.Status.WAITING,
+            timeout=60,
+            result={"invocations": {"a": proposal, "b": {**proposal, "id": "two"}}},
+        )
+
+    first = client.get(url, {"status": "pending", "cursor": "start"})
+    assert first.json() == []
+    cursor = first["X-Next-Cursor"]
+    assert str(UUID(int=1)) not in cursor
+
+    load = mocker.spy(operations_api.operations, "active_processor")
+    second = client.get(url, {"status": "pending", "cursor": cursor})
+    load.assert_called_once_with(user)
+    assert {row["key"] for row in second.json()} == {"a", "b"}
+    assert "X-Next-Cursor" not in second
+    assert client.get(url, {"status": "pending"}).json() == second.json()
+    assert client.get(url, {"status": "pending", "cursor": "bad"}).status_code == 400

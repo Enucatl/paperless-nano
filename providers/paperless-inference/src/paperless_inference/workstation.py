@@ -215,13 +215,23 @@ class Workstation:
         self.pending.unlink()
         shutil.rmtree(self.state / "files", ignore_errors=True)
 
+    def pending_operations(self):
+        """Walk discovery pages, including pages with no authorized operations."""
+        cursor = "start"
+        while cursor:
+            response = self.request(
+                "GET",
+                "/api/operations/?status=pending&cursor=" + quote(cursor, safe=""),
+            )
+            yield from response.json()
+            cursor = response.headers.get("X-Next-Cursor")
+
     def run_once(self) -> int:
         """Resume uncertain delivery, then execute the supported pending operations."""
         if self.pending.exists():
             self.deliver(json.loads(self.pending.read_text()))
         count = 0
-        operations = self.request("GET", "/api/operations/?status=pending").json()
-        for operation in operations:
+        for operation in self.pending_operations():
             if (
                 operation.get("contract")
                 not in {"paperless.external.parser:v1", "paperless.external.metadata"}

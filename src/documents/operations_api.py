@@ -1,11 +1,16 @@
 """Authenticated processor claims and core-owned operation admission."""
 
 import os
+from base64 import urlsafe_b64encode
 from hashlib import sha256
+from uuid import UUID
 
+from cryptography.fernet import Fernet
+from cryptography.fernet import InvalidToken
 from django.core.exceptions import PermissionDenied
 from django.http import FileResponse
 from django.http import Http404
+from django.utils.crypto import salted_hmac
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from filelock import FileLock
@@ -26,6 +31,7 @@ from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import relative_path
 
 MAX_CLAIM_OUTPUT_BYTES = 256 * 1024 * 1024
+DISCOVERY_PAGE_JOBS = 50
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
@@ -69,8 +75,40 @@ class OperationsView(OperationAPIView):
         jobs = DocumentJob.objects.all()
         if status == "pending":
             jobs = jobs.filter(status=DocumentJob.Status.WAITING)
+        cursor = request.query_params.get("cursor")
+        next_cursor = None
+        if cursor is not None:
+            if status != "pending":
+                raise serializers.ValidationError(
+                    {"cursor": "Requires pending status."}
+                )
+            # A page can end on a job the processor has no permission to see.
+            cipher = Fernet(
+                urlsafe_b64encode(
+                    salted_hmac(
+                        "documents.pending.cursor", b"", algorithm="sha256"
+                    ).digest()
+                )
+            )
+            if cursor != "start":
+                try:
+                    after = UUID(bytes=cipher.decrypt(cursor.encode()))
+                except (InvalidToken, ValueError) as exc:
+                    raise serializers.ValidationError(
+                        {"cursor": "Invalid cursor."}
+                    ) from exc
+                jobs = jobs.filter(pk__gt=after)
+            jobs = jobs.only("status", "result", "error").order_by("pk")
+            page = list(jobs[: DISCOVERY_PAGE_JOBS + 1])
+            if len(page) > DISCOVERY_PAGE_JOBS:
+                page.pop()
+                next_cursor = cipher.encrypt(page[-1].pk.bytes).decode()
+            jobs = page
+        else:
+            jobs = jobs.iterator()
+        actor = operations.active_processor(request.user)
         results = []
-        for job in jobs.iterator():
+        for job in jobs:
             for key, entry in job.result.get("invocations", {}).items():
                 if "policy" not in entry:
                     continue
@@ -79,14 +117,11 @@ class OperationsView(OperationAPIView):
                     or not entry.get("remote_allowed", True)
                 ):
                     continue
-                try:
-                    operations.authorize(entry, request.user)
-                except PermissionDenied:
-                    if (
-                        status == "pending"
-                        or operations.requester_id(job) != request.user.pk
-                    ):
-                        continue
+                if not operations.may_process(entry, actor) and (
+                    status == "pending"
+                    or operations.requester_id(job) != request.user.pk
+                ):
+                    continue
                 results.append(
                     {
                         "job_id": str(job.pk),
@@ -101,7 +136,8 @@ class OperationsView(OperationAPIView):
                         "error": entry.get("error") or job.error,
                     }
                 )
-        return Response(results)
+        headers = {"X-Next-Cursor": next_cursor} if next_cursor else {}
+        return Response(results, headers=headers)
 
     @extend_schema(request=SubmissionSerializer, responses={202: OpenApiTypes.OBJECT})
     def post(self, request):

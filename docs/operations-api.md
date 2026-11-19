@@ -96,8 +96,16 @@ job.
 
 Only remotely permitted, capability-authorized operations are discoverable with
 `GET /api/operations/?status=pending`. The response is a bare array, not a
-paginated object. An empty array means no currently eligible pending operation;
-it is not an error. Discovery grants no lease and consumes no attempt.
+paginated object. Existing clients that omit `cursor` receive the full listing.
+
+Workers should add `&cursor=start` to bound each request. When a response
+includes the `X-Next-Cursor` header, URL-encode its value as the next request's
+`cursor` on the same endpoint. Continue even after an empty page or a page
+containing only unsupported operations. The absence of the header ends the
+pass, including on older servers. Each page examines up to 50 waiting jobs in
+job ID order and returns all their eligible operations. Work that becomes
+eligible behind the cursor is available on the next pass. Discovery grants
+no lease and consumes no attempt.
 
 Without the `status` parameter, `GET /api/operations/` includes authorized
 operations in other states and operations belonging to the original requester.

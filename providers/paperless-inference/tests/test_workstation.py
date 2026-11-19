@@ -18,6 +18,9 @@ from paperless_inference.workstation import APIError
 from paperless_inference.workstation import Workstation
 
 
+DISCOVERY = "/api/operations/?status=pending&cursor=start"
+
+
 @pytest.fixture
 def worker(tmp_path):
     """Serve actual HTTP so headers, paths and file transport are checked."""
@@ -37,13 +40,15 @@ def worker(tmp_path):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             calls.append((self.command, self.path, dict(self.headers), body))
             assert self.headers["Authorization"] == "Token private-api-token"
-            status, result = replies[(self.command, self.path)]
+            status, result, *headers = replies[(self.command, self.path)]
             if isinstance(result, list) and result and isinstance(result[0], tuple):
                 status, result = result.pop(0)
             encoded = (
                 result if isinstance(result, bytes) else json.dumps(result).encode()
             )
             self.send_response(status)
+            for name, value in headers:
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -117,7 +122,7 @@ def test_metadata_delivery_retry_never_repeats_inference(worker, monkeypatch):
     }
     compute = Mock(return_value=proposal)
     monkeypatch.setattr(MetadataProvider, "enrich", compute)
-    replies[("GET", "/api/operations/?status=pending")] = (200, [operation])
+    replies[("GET", DISCOVERY)] = (200, [operation])
     replies[("POST", base + "claim/")] = (200, claim)
     replies[("POST", base + "result/")] = (503, {})
     with pytest.raises(APIError):
@@ -127,7 +132,7 @@ def test_metadata_delivery_retry_never_repeats_inference(worker, monkeypatch):
     assert record["result"]["worker"]["model"] == "retained-model"
     proposal = record["result"]
     assert instance.pending.stat().st_mode & 0o777 == 0o600
-    replies[("GET", "/api/operations/?status=pending")] = (200, [])
+    replies[("GET", DISCOVERY)] = (200, [])
     replies[("POST", base + "result/")] = (202, {"status": "staged"})
     restarted = Workstation(instance.url, instance.token_file, instance.state)
     assert restarted.run_once() == 0
@@ -142,7 +147,7 @@ def test_competing_claim_skips_computation(worker, monkeypatch):
     instance, replies, _ = worker
     claim = metadata_claim(monkeypatch)
     operation = pending(claim)
-    replies[("GET", "/api/operations/?status=pending")] = (200, [operation])
+    replies[("GET", DISCOVERY)] = (200, [operation])
     replies[
         ("POST", instance.base(operation["job_id"], operation["key"]) + "claim/")
     ] = (409, {"error": "private"})
@@ -218,7 +223,7 @@ def test_parser_private_transport_and_archive_reference(worker, monkeypatch):
     operation = pending(claim)
     operation["key"] = "parser.process"
     base = instance.base(operation["job_id"], operation["key"])
-    replies[("GET", "/api/operations/?status=pending")] = (200, [operation])
+    replies[("GET", DISCOVERY)] = (200, [operation])
     replies[("POST", base + "claim/")] = (200, claim)
     replies[("GET", base + "files/?path=input%2Foriginal.pdf")] = (200, data)
     archive = b"%PDF-searchable-output"
@@ -304,7 +309,7 @@ def test_discovery_skips_other_contracts_before_claim(worker, monkeypatch):
     instance, replies, calls = worker
     operation = pending(metadata_claim(monkeypatch))
     operation["contract"] = "another-contract:v4"
-    replies[("GET", "/api/operations/?status=pending")] = (200, [operation])
+    replies[("GET", DISCOVERY)] = (200, [operation])
     assert instance.run_once() == 0
     assert len(calls) == 1
 
@@ -354,3 +359,18 @@ def test_metadata_rejects_boolean_version(worker, monkeypatch, field):
     target[field] = True
     with pytest.raises(ValueError, match="Unsupported metadata contract"):
         instance.compute(claim, "/unused/")
+
+
+def test_discovery_follows_empty_page_on_same_server(worker, monkeypatch):
+    """Even a URL-like cursor is only a query value on the configured server."""
+    instance, replies, calls = worker
+    path = "/api/operations/?status=pending&cursor="
+    replies["GET", path + "start"] = (200, [], ("X-Next-Cursor", "https://other/"))
+    operation = pending(metadata_claim(monkeypatch))
+    replies["GET", path + "https%3A%2F%2Fother%2F"] = (200, [operation])
+    replies["POST", instance.base(operation["job_id"], operation["key"]) + "claim/"] = (
+        409,
+        {},
+    )
+    assert instance.run_once() == 0
+    assert [method for method, *_ in calls] == ["GET", "GET", "POST"]

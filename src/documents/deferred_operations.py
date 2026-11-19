@@ -29,15 +29,23 @@ class OperationConflict(ValueError):
     """An expired, cancelled or changed operation cannot accept this request."""
 
 
-def authorize(entry: dict, user) -> None:
-    """Require an explicit operation grant even for trusted actorless jobs."""
-    # Reload to avoid cached permissions surviving a grant or account revocation.
-    actor = User.objects.filter(pk=user.pk, is_active=True).first()
+def active_processor(user) -> User | None:
+    """Reload the processor so cached grants cannot survive account changes."""
+    return User.objects.filter(pk=user.pk, is_active=True).first()
+
+
+def may_process(entry: dict, actor: User | None) -> bool:
+    """Check an operation against this active processor's current grants."""
     policy = entry.get("policy", {})
-    if actor is None or not (
+    return actor is not None and (
         actor.is_superuser
-        or (actor.has_perm(policy["permission"]) if "permission" in policy else False)
-    ):
+        or ("permission" in policy and actor.has_perm(policy["permission"]))
+    )
+
+
+def authorize(entry: dict, user) -> None:
+    """Require a fresh operation grant even for trusted actorless jobs."""
+    if not may_process(entry, active_processor(user)):
         raise PermissionDenied("This processor is not authorized for the operation")
 
 
