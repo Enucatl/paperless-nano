@@ -60,6 +60,9 @@ SHA-256 before using the bytes.
 - Upload outputs with `POST` to that same `files/` endpoint, the claim header,
   and a multipart `file`. Core returns its stored file reference. Use that
   returned reference in the final proposal, not a worker-local path.
+- Each parser claim accepts one WebP thumbnail and, when the archive
+  policy permits it, one PDF archive, totaling at most 256 MiB. Core identifies the media type from the file contents.
+  Thumbnail-only claims accept only the thumbnail. Metadata claims have no file outputs.
 - Repeating an upload with the same filename and bytes is idempotent. Different
   bytes at an already uploaded name return HTTP 409. Uploaded files remain private
   until core accepts and publishes the result.

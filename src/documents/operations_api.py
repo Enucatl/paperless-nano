@@ -2,14 +2,13 @@
 
 import os
 from hashlib import sha256
-from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 from django.core.exceptions import PermissionDenied
 from django.http import FileResponse
 from django.http import Http404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
+from filelock import FileLock
 from filelock import Timeout
 from rest_framework import serializers
 from rest_framework.exceptions import APIException
@@ -25,6 +24,9 @@ from documents.models import Document
 from documents.models import DocumentJob
 from paperless.parsers.contract import file_reference
 from paperless.parsers.contract import relative_path
+
+MAX_CLAIM_OUTPUT_BYTES = 256 * 1024 * 1024
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
 class Conflict(APIException):
@@ -200,39 +202,93 @@ class OperationFileView(OperationAPIView):
     )
     def post(self, request, job_id, key):
         """Store one output under the claim's private namespace without applying it."""
+        import magic
+
+        token = request.headers.get("X-Operation-Token", "")
+        directory = job_directory(job_id)
         with operations.locked_operation(job_id, key, request.user) as (job, entry):
-            token = request.headers.get("X-Operation-Token", "")
             operations.check_claim(job, entry, request.user, token)
-            upload = request.FILES.get("file")
-            if upload is None:
-                raise serializers.ValidationError("file is required")
-            name = Path(upload.name).name
-            directory = job_directory(job_id)
-            output_dir = entry["input"].get("request", {}).get("output_dir", "remote")
-            destination = relative_path(directory, f"{output_dir}/{token}/{name}")
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists():
-                digest = sha256()
-                for chunk in upload.chunks():
-                    digest.update(chunk)
-                reference = file_reference(directory, destination)
-                if digest.hexdigest() != reference["sha256"]:
-                    raise Conflict("Output already uploaded with different content")
-                return Response(reference)
-            with NamedTemporaryFile(
-                dir=destination.parent, prefix=".upload-", delete=False
-            ) as output:
-                temporary = Path(output.name)
-                try:
+            operation = entry["operation"]
+            if operation not in {"parser.process", "parser.thumbnail"}:
+                raise serializers.ValidationError("This operation has no file outputs")
+            parser_request = entry["input"].get("request", {})
+            allowed_types = {"image/webp"}
+            if (
+                operation == "parser.process"
+                and parser_request.get("archive_policy") != "never"
+            ):
+                allowed_types.add("application/pdf")
+            output_dir = parser_request.get("output_dir", "remote")
+            claim_dir = relative_path(directory, f"{output_dir}/{token}")
+            claim_dir.mkdir(parents=True, exist_ok=True)
+
+        # Serialize only this claim's transfers while the job remains cancellable.
+        with FileLock(directory / f".upload-{token}.lock", timeout=0):
+            if (
+                int(request.META.get("CONTENT_LENGTH") or 0)
+                > MAX_CLAIM_OUTPUT_BYTES + MULTIPART_OVERHEAD_BYTES
+            ):
+                raise serializers.ValidationError("Upload exceeds the claim byte limit")
+            files = request.FILES
+            if set(files) != {"file"} or len(files.getlist("file")) != 1:
+                raise serializers.ValidationError("Exactly one file is required")
+            upload = files["file"]
+            destination = relative_path(claim_dir, upload.name)
+            if destination.parent != claim_dir:
+                raise serializers.ValidationError("Unexpected parser output filename")
+            temporary = directory / f".upload-{token}.part"
+            others = [p for p in claim_dir.iterdir() if p != destination]
+            if len(others) >= len(allowed_types):
+                raise serializers.ValidationError("Claim output count exceeded")
+            available = MAX_CLAIM_OUTPUT_BYTES - sum(p.stat().st_size for p in others)
+            existing = (
+                file_reference(directory, destination) if destination.exists() else None
+            )
+            digest = sha256()
+            size = 0
+            try:
+                with temporary.open("wb") as output:
                     for chunk in upload.chunks():
-                        output.write(chunk)
-                    output.flush()
-                    os.fsync(output.fileno())
-                    temporary.replace(destination)
-                    sync_directory(destination.parent)
-                finally:
-                    temporary.unlink(missing_ok=True)
-            return Response(file_reference(directory, destination), status=201)
+                        size += len(chunk)
+                        if size > available:
+                            raise serializers.ValidationError(
+                                "Upload exceeds the claim byte limit"
+                            )
+                        digest.update(chunk)
+                        if existing is None:
+                            output.write(chunk)
+                    if existing is None:
+                        output.flush()
+                        os.fsync(output.fileno())
+                reference = {
+                    "path": str(destination.relative_to(directory)),
+                    "size": size,
+                    "sha256": digest.hexdigest(),
+                }
+                if existing is not None and existing != reference:
+                    raise Conflict("Output already uploaded with different content")
+                media_type = magic.from_file(
+                    destination if existing else temporary, mime=True
+                )
+                if media_type not in allowed_types:
+                    raise serializers.ValidationError(
+                        "Unexpected parser output media type"
+                    )
+                if any(
+                    magic.from_file(path, mime=True) == media_type for path in others
+                ):
+                    raise serializers.ValidationError("Claim output count exceeded")
+                with operations.locked_operation(job_id, key, request.user) as (
+                    job,
+                    entry,
+                ):
+                    operations.check_claim(job, entry, request.user, token)
+                    if existing is None:
+                        temporary.replace(destination)
+                    sync_directory(claim_dir)
+                return Response(reference, status=201 if existing is None else 200)
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 class OperationCancelView(OperationAPIView):

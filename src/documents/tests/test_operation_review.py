@@ -5,8 +5,13 @@ from unittest.mock import Mock
 
 import pytest
 from django.contrib.auth.models import Permission
+from django.db import connection
+from django.utils.datastructures import MultiValueDict
+from filelock import Timeout
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
+from documents.deferred_operations import OperationConflict
 from documents.deferred_operations import PendingOperation
 from documents.deferred_operations import claim
 from documents.ingestion_state import NeedsAttention
@@ -27,7 +32,9 @@ pytestmark = [
 ]
 
 
-def test_interrupted_upload_can_retry_the_same_filename(settings):
+def test_interrupted_upload_can_retry_the_same_filename(
+    monkeypatch, thumbnail_webp_file, simple_digital_pdf_file
+):
     """Partial streams never publish an immutable but incomplete output."""
     processor = UserFactory()
     processor.user_permissions.add(Permission.objects.get(codename="process_parser"))
@@ -38,14 +45,18 @@ def test_interrupted_upload_can_retry_the_same_filename(settings):
 
     def interrupted_chunks():
         """Fail after writing part of the submitted payload."""
+        assert not connection.in_atomic_block
+        with pytest.raises(Timeout):
+            view.post(request, job.pk, "work")
         yield b"partial"
         raise OSError("upload interrupted")
 
-    upload = SimpleNamespace(name="result.txt", chunks=interrupted_chunks)
+    upload = SimpleNamespace(name="thumbnail.webp", chunks=interrupted_chunks)
     request = SimpleNamespace(
         user=processor,
         headers={"X-Operation-Token": token},
-        FILES={"file": upload},
+        FILES=MultiValueDict({"file": [upload]}),
+        META={},
     )
     view = OperationFileView()
     with pytest.raises(OSError, match="interrupted"):
@@ -53,15 +64,49 @@ def test_interrupted_upload_can_retry_the_same_filename(settings):
     output_directory = job_directory(job.pk) / "remote" / token
     assert list(output_directory.iterdir()) == []
 
-    upload.chunks = lambda: iter([b"complete output"])
+    upload.chunks = lambda: iter([b"unrelated bytes"])
+    with pytest.raises(ValidationError, match="media type"):
+        view.post(request, job.pk, "work")
+    thumbnail = thumbnail_webp_file.read_bytes()
+    archive = simple_digital_pdf_file.read_bytes()
+    upload.name = "rendition"
+    upload.chunks = lambda: iter([thumbnail])
     response = view.post(request, job.pk, "work")
     assert response.status_code == 201
-    assert (output_directory / upload.name).read_bytes() == b"complete output"
+    assert (output_directory / upload.name).read_bytes() == thumbnail
     assert view.post(request, job.pk, "work").data == response.data
     upload.chunks = lambda: iter([b"replacement"])
     with pytest.raises(Conflict):
         view.post(request, job.pk, "work")
-    assert (output_directory / upload.name).read_bytes() == b"complete output"
+    assert (output_directory / upload.name).read_bytes() == thumbnail
+
+    upload.name = "also-a-thumbnail.pdf"
+    upload.chunks = lambda: iter([thumbnail])
+    with pytest.raises(ValidationError, match="count"):
+        view.post(request, job.pk, "work")
+    upload.name = "archive.pdf"
+    upload.chunks = lambda: iter([archive])
+    monkeypatch.setattr(
+        "documents.operations_api.MAX_CLAIM_OUTPUT_BYTES",
+        len(thumbnail) + len(archive) - 1,
+    )
+    with pytest.raises(ValidationError, match="byte limit"):
+        view.post(request, job.pk, "work")
+
+    monkeypatch.undo()
+
+    def cancelled_chunks():
+        """Cancel while the payload is being received."""
+        DocumentJob.objects.filter(pk=job.pk).update(
+            status=DocumentJob.Status.CANCELLED
+        )
+        yield archive
+
+    upload.chunks = cancelled_chunks
+    with pytest.raises(OperationConflict, match="no longer current"):
+        view.post(request, job.pk, "work")
+    assert not (output_directory / "archive.pdf").exists()
+    assert not list(job_directory(job.pk).glob("*.part"))
 
 
 def test_ingestion_requester_can_observe_and_cancel(settings):

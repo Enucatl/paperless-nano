@@ -118,6 +118,18 @@ def test_plain_worker_files_results_and_publication(
         HTTP_X_OPERATION_TOKEN=claim["token"],
     )
     assert response.status_code == 201
+    assert (
+        client.post(
+            base + "files/",
+            {
+                "file": SimpleUploadedFile(
+                    "archive.pdf", sample_doc.source_path.read_bytes()
+                )
+            },
+            HTTP_X_OPERATION_TOKEN=claim["token"],
+        ).status_code
+        == 400
+    )
     result = parser_result(claim)
     result["thumbnail"] = response.json()
     body = {"token": claim["token"], "result": result}
@@ -202,6 +214,14 @@ def test_metadata_workers_are_interchangeable(sample_doc, external, implementati
     base = f"/api/operations/{job.pk}/metadata/"
     claim = client.post(base + "claim/").json()
     request = claim["input"]
+    assert (
+        client.post(
+            base + "files/",
+            {"file": SimpleUploadedFile("thumbnail.webp", b"thumbnail")},
+            HTTP_X_OPERATION_TOKEN=claim["token"],
+        ).status_code
+        == 400
+    )
     assert request["identity"] == METADATA_CONTRACT
     assert request["configuration"]["configuration"] == {}
     assert not {"model", "prompt", "endpoint", "credentials"} & request.keys()

@@ -227,8 +227,9 @@ hashes from these placeholders.
    declared output directory. Replace the local result reference with this
    server reference after checking its size/hash. Repeating the same filename
    with identical bytes returns `200` and the same reference; different bytes
-   conflict (`409`). Distinct outputs must have distinct upload names. The
-   shipped client derives names from content hashes to avoid basename collisions.
+   conflict (`409`). A parser claim accepts one WebP thumbnail and one PDF archive totaling
+   at most 256 MiB. Thumbnail-only claims and requests with `archive_policy: never`
+   accept only the thumbnail. Other operations have no file outputs.
 
 6. Submit the actual complete provider result, using the claim token in the
    **JSON body**, and the account token in `Authorization`:
