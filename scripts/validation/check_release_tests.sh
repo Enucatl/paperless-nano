@@ -71,14 +71,18 @@ docker run --rm --userns=host --network "$network" --entrypoint /bin/sh \
         python src/manage.py makemigrations --check --dry-run
         uv pip check --system
     '
-docker run --rm --userns=host --user 0:0 --entrypoint /bin/sh \
+# Supply uv from the core image only for this disposable test run.
+docker run --rm --userns=host --entrypoint /bin/sh "$1" -c 'cat "$(command -v uv)"' | \
+	docker run --rm --userns=host -i --user 0:0 --entrypoint /bin/sh \
 	-v "$checkout/providers/paperless-inference:/source:ro" \
 -e PYTHONDONTWRITEBYTECODE=1 -e UV_CACHE_DIR=/tmp/uv-cache "$2" -c '
         set -eu
-        cp -a /source /tmp/worker
-        uv sync --project /tmp/worker --frozen --group dev
-        cd /tmp/worker
-        uv run --frozen python -c "import importlib.util; assert importlib.util.find_spec(\"paperless\") is None; assert importlib.util.find_spec(\"documents\") is None"
-        uv run --frozen pytest -o addopts=""
-        uv pip check --python /tmp/worker/.venv/bin/python
+        cat > /tmp/uv
+        chmod +x /tmp/uv
+        export UV_PROJECT_ENVIRONMENT=/opt/paperless-inference/.venv
+        cd /source
+        /tmp/uv sync --frozen --only-group dev --inexact
+        python -c "import importlib.util; assert importlib.util.find_spec(\"paperless\") is None; assert importlib.util.find_spec(\"documents\") is None"
+        python -m pytest -p no:cacheprovider -o addopts=""
+        /tmp/uv pip check --python "$UV_PROJECT_ENVIRONMENT/bin/python"
     '
