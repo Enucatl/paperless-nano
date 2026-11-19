@@ -160,15 +160,24 @@ ARG RUNTIME_PACKAGES="\
 
 # Install basic runtime packages.
 # These change very infrequently
-RUN set -eux \
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) JBIG2ENC_SHA256=993507c43d128393d22d14a8646492336aca6b6327f227d75df8a1009f1f364f ;; \
+      arm64) JBIG2ENC_SHA256=27e21c875cb2f3b6a6cfc9d19a2331c2bc4d52ecfa1f61fea2e64b74cc989e2e ;; \
+      *) exit 1 ;; \
+    esac; \
+    jbig2enc_deb="jbig2enc_${JBIG2ENC_VERSION}-1_${TARGETARCH}.deb"; \
   echo "Installing system packages" \
     && apt-get update \
     && apt-get install --yes --quiet --no-install-recommends apt libapt-pkg7.0 ${RUNTIME_PACKAGES} \
     && echo "Installing pre-built updates" \
       && curl --fail --silent --no-progress-meter --show-error --location --remote-name-all \
-        https://github.com/paperless-ngx/builder/releases/download/jbig2enc-trixie-v${JBIG2ENC_VERSION}/jbig2enc_${JBIG2ENC_VERSION}-1_${TARGETARCH}.deb \
+        "https://github.com/paperless-ngx/builder/releases/download/jbig2enc-trixie-v${JBIG2ENC_VERSION}/${jbig2enc_deb}" \
+      && echo "${JBIG2ENC_SHA256}  ${jbig2enc_deb}" > /tmp/jbig2enc.sha256 \
+      && sha256sum --check /tmp/jbig2enc.sha256 \
+      && rm /tmp/jbig2enc.sha256 \
       && echo "Installing jbig2enc" \
-        && dpkg --install ./jbig2enc_${JBIG2ENC_VERSION}-1_${TARGETARCH}.deb \
+        && dpkg --install "./${jbig2enc_deb}" \
       && echo "Cleaning up image layer" \
         && rm --force --verbose *.deb \
     && rm --recursive --force --verbose /var/lib/apt/lists/* \

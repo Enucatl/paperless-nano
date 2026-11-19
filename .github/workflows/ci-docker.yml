@@ -44,7 +44,7 @@ jobs:
         run: git fetch --tags https://github.com/paperless-ngx/paperless-ngx.git main
       - name: Read upstream version and fork revision
         id: version
-        uses: Enucatl/docker-compose-security-baseline/.github/actions/git-version@main
+        uses: Enucatl/docker-compose-security-baseline/.github/actions/git-version@cb856ab2d543c350e1e3ec6723d587a53a007a70
   publish:
     if: github.repository == 'Enucatl/paperless-nano' && github.ref == 'refs/heads/main'
     needs: [backend, frontend, worker-tests, lint, codeql, static-analysis, version]
@@ -53,7 +53,7 @@ jobs:
       packages: write
       id-token: write
       security-events: write
-    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
+    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@cb856ab2d543c350e1e3ec6723d587a53a007a70
     secrets:
       registry_token: ${{ secrets.GITHUB_TOKEN }}
     with:
@@ -74,7 +74,7 @@ jobs:
       packages: write
       id-token: write
       security-events: write
-    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@main
+    uses: Enucatl/docker-compose-security-baseline/.github/workflows/docker-ci.yml@cb856ab2d543c350e1e3ec6723d587a53a007a70
     secrets:
       registry_token: ${{ secrets.GITHUB_TOKEN }}
     with:
