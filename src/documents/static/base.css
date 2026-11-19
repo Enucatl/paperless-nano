@@ -11,11 +11,6 @@ body {
   height: auto;
 }
 
-.byline {
-  font-size: 0.6rem;
-  letter-spacing: 0.1rem;
-}
-
 .text-primary {
   color: var(--pngx-primary) !important;
 }
@@ -87,9 +82,5 @@ body {
 
   svg.logo .text {
     fill: #abb2bf !important;
-  }
-
-  .byline {
-    color: #abb2bf;
   }
 }

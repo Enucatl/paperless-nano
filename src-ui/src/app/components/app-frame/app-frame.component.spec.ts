@@ -211,6 +211,15 @@ describe('AppFrameComponent', () => {
     ).toBe('Reactive title')
   })
 
+  it('shows the wordmark for the configured Paperless Nano title', () => {
+    settingsService.set(SETTINGS_KEYS.APP_TITLE, 'Paperless Nano')
+    fixture.detectChanges()
+
+    const brand = fixture.nativeElement.querySelector('.navbar-brand')
+    expect(brand.querySelector('svg.navbar-official-logo')).toBeTruthy()
+    expect(brand.textContent.trim()).toBe('')
+  })
+
   it('should check for update if enabled', () => {
     const updateCheckSpy = jest.spyOn(remoteVersionService, 'checkForUpdates')
     updateCheckSpy.mockImplementation(() => {

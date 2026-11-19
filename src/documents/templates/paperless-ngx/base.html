@@ -20,23 +20,15 @@
         <div class="position-absolute top-50 start-50 translate-middle">
             <form class="form-accounts" id="form-account" method="post">
                 {% csrf_token %}
-                {% if not APP_LOGO and not APP_TITLE %}
+                {% if APP_LOGO %}
+                    <img src="{{ APP_LOGO }}" alt="{{ APP_TITLE|default:'Paperless Nano' }}" width="300" class="logo mb-4" />
+                {% elif not APP_TITLE or APP_TITLE == "Paperless Nano" %}
                     {% include "paperless-ngx/snippets/svg_logo.html" with extra_attrs="width='300' class='logo mb-4'" %}
                 {% else %}
-                    {% if APP_LOGO %}
-                        <img src="{{APP_LOGO}}" width="300" class="logo mb-1" />
-                        <div class="d-flex flex-column align-items-end mb-4">
-                            <span class="byline text-uppercase font-monospace">by Paperless-ngx</span>
-                        </div>
-                    {% else %}
-                        <h1 class="font-weight-normal text-primary mb-1 d-flex justify-content-center align-items-start">
-                            {% include "paperless-ngx/snippets/svg_leaf.html" with extra_attrs="width='30' class='mt-2'" %}
-                            <div class="d-flex flex-column align-items-end mb-4">
-                                <span class="ms-2">{{ APP_TITLE }}</span>
-                                <span class="byline text-uppercase font-monospace">by Paperless-ngx</span>
-                            </div>
-                        </h1>
-                    {% endif %}
+                    <h1 class="font-weight-normal text-primary mb-4 d-flex justify-content-center align-items-start">
+                        {% include "paperless-ngx/snippets/svg_leaf.html" with extra_attrs="width='30' class='mt-2'" %}
+                        <span class="ms-2">{{ APP_TITLE }}</span>
+                    </h1>
                 {% endif %}
                 {% for message in messages %}
                     <div class="alert alert-{{ message.level_tag }}" role="alert">

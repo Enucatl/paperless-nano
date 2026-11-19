@@ -264,12 +264,9 @@ export class AppFrameComponent
     )
   }
 
-  get customAppTitle(): string {
-    return this.appTitleSetting()
-  }
-
   get hasCustomBranding(): boolean {
-    return !!(this.appTitleSetting()?.length || this.appLogoSetting()?.length)
+    const title = this.appTitleSetting()
+    return !!this.appLogoSetting() || (!!title && title !== 'Paperless Nano')
   }
 
   get customAppLogo(): string {
